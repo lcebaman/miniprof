@@ -49,6 +49,7 @@ ARFLAGS := rcs
 # keeping it separate means plain C builds (mpicc, no Fortran bindings
 # referenced) never need that dependency resolved at all.
 LIB_SRCS := src/profile_store.c    \
+            src/path_store.c       \
             src/sampler.c          \
             src/symbolizer.c       \
             src/aggregator.c       \

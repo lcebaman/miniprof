@@ -58,9 +58,9 @@ extern "C" {
 #define MINIPROF_MAX_PCS        65536   /* unique PCs per rank              */
 #define MINIPROF_MAX_DEPTH      32      /* hard cap on backtrace depth       */
 #define MINIPROF_SYMBOL_LEN     128     /* max symbol/DSO name length        */
-#define MINIPROF_TOP_N          20      /* functions shown in flat profile   */
+#define MINIPROF_TOP_N          40      /* functions shown in flat profile   */
 #define MINIPROF_TOP_PER_RANK    5      /* symbols shown per rank            */
-#define MINIPROF_MAX_SEND_SYMS 256      /* (function,line) entries sent/rank */
+#define MINIPROF_MAX_SEND_SYMS 2048     /* (function,line) entries sent/rank */
 #define MINIPROF_GROUP_LEN       16     /* group label, e.g. "USER","MPI"    */
 #define MINIPROF_MAX_LINES_PER_FUNC 8   /* line rows shown under a function  */
 

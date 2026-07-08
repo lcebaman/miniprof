@@ -70,13 +70,20 @@ static double env_double(const char *var, double def)
 
 /* ── sample-mode scratch buffer ──────────────────────────────────────────── */
 typedef struct { uintptr_t pc; long count; } pc_count_t;
-static pc_count_t g_pcbuf[MINIPROF_TOP_N * 8];
+/* Buffer for collecting PCs from the profile store at finalize.
+ * With leaf-only recording, the number of distinct PCs is bounded
+ * by the number of unique instruction addresses the CPU was
+ * interrupted at — typically a few hundred for a real application,
+ * but can reach a few thousand for heavily-templated C++ or codes
+ * with many small inlined functions. 8192 is generous. */
+#define PCBUF_CAPACITY 8192
+static pc_count_t g_pcbuf[PCBUF_CAPACITY];
 static int        g_pcbuf_n = 0;
 
 static int collect_cb(uintptr_t pc, long count, void *arg)
 {
     (void)arg;
-    if (g_pcbuf_n < (int)(sizeof(g_pcbuf)/sizeof(g_pcbuf[0]))) {
+    if (g_pcbuf_n < PCBUF_CAPACITY) {
         g_pcbuf[g_pcbuf_n].pc    = pc;
         g_pcbuf[g_pcbuf_n].count = count;
         g_pcbuf_n++;
@@ -180,7 +187,13 @@ static void miniprof_finalize_sample(double elapsed)
     g_pcbuf_n = 0;
     profile_store_iterate(collect_cb, NULL);
 
-    int n_pcs = g_pcbuf_n < MINIPROF_TOP_N * 8 ? g_pcbuf_n : MINIPROF_TOP_N * 8;
+    /* With leaf-only recording, g_pcbuf_n is the number of distinct
+     * leaf instruction addresses — typically a few hundred at most,
+     * far less than the old all-frames approach which could generate
+     * thousands. Process them all; the send cap (MAX_SEND_SYMS) is
+     * the only limit, and it's applied after symbolisation merges
+     * distinct PCs into (function, file, line) buckets. */
+    int n_pcs = g_pcbuf_n;
 
     miniprof_sym_t *resolved = calloc(n_pcs, sizeof(miniprof_sym_t));
     for (int i = 0; i < n_pcs; i++) {
@@ -196,6 +209,7 @@ static void miniprof_finalize_sample(double elapsed)
     local.wall_elapsed_s = elapsed;
     local.n_syms         = 0;
 
+    long samples_kept = 0;
     for (int i = 0; i < n_pcs; i++) {
         int found = -1;
         for (int j = 0; j < local.n_syms; j++) {
@@ -207,11 +221,26 @@ static void miniprof_finalize_sample(double elapsed)
         }
         if (found >= 0) {
             local.syms[found].count += resolved[i].count;
+            samples_kept += resolved[i].count;
         } else if (local.n_syms < MINIPROF_MAX_SEND_SYMS) {
             local.syms[local.n_syms] = resolved[i];
             local.n_syms++;
+            samples_kept += resolved[i].count;
         }
+        /* else: entry dropped — samples_kept won't include it */
     }
+
+    long samples_dropped = local.total_samples - samples_kept;
+    if (samples_dropped > 0 && g_verbose) {
+        fprintf(stderr, "[miniprof] rank %d: WARNING — %ld samples (%.1f%%) "
+                "dropped due to MINIPROF_MAX_SEND_SYMS=%d limit; "
+                "increase the cap in miniprof.h if percentages "
+                "don't sum to 100%%\n",
+                local.rank, samples_dropped,
+                100.0 * samples_dropped / local.total_samples,
+                MINIPROF_MAX_SEND_SYMS);
+    }
+
     free(resolved);
 
     if (g_verbose) {
