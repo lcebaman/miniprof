@@ -14,6 +14,7 @@
 #define _GNU_SOURCE
 #include "sampler.h"
 #include "profile_store.h"
+#include "path_store.h"
 #include <signal.h>
 #include <sys/time.h>
 #include <execinfo.h>   /* backtrace()                    */
