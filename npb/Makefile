@@ -27,10 +27,10 @@ MINIPROF_LIB := $(MINIPROF_DIR)/libminiprof.a
 FC ?= mpifort
 CC ?= mpicc
 
-NPB_CFLAGS  := -O2 -g
-NPB_FFLAGS  := -O2 -g
-NPB_LDFLAGS := -L$(CURDIR)/$(MINIPROF_DIR) -lminiprof -ldl -lm
+NPB_CFLAGS     := -O2 -g
+NPB_FFLAGS     := -O2 -g
 NPB_TRACE_FLAGS := -finstrument-functions
+NPB_MINIPROF_LIBS := -L$(CURDIR)/$(MINIPROF_DIR) -lminiprof -ldl -lm
 
 BENCHMARKS  := IS EP CG MG FT BT SP LU
 
@@ -60,10 +60,11 @@ setup: $(NPB_ROOT) $(MINIPROF_LIB)
 	@printf '%s\n' \
 	  "SUF        = .f90" \
 	  "MPIFC      = $(FC)" \
+	  "FLINK      = $(FC)" \
 	  "FFLAGS     = $(NPB_FFLAGS)" \
-	  "FLINKFLAGS = $(NPB_LDFLAGS)" \
+	  "FLINKFLAGS = $(NPB_FFLAGS)" \
 	  "FMPI_INC   =" \
-	  "FMPI_LIB   =" \
+	  "FMPI_LIB   = $(NPB_MINIPROF_LIBS)" \
 	  "CC         = $(CC)" \
 	  "CLINK      = $(CC)" \
 	  "C_LIB      = -lm" \
@@ -96,7 +97,7 @@ build-is-trace: setup
 	@echo "=== IS.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/IS && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/IS.$(CLASS).$(NRANKS).x bin/IS.$(CLASS).$(NRANKS).x+trace
 
 run-is: build-is
@@ -134,7 +135,7 @@ build-ep-trace: setup
 	@echo "=== EP.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/EP && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/EP.$(CLASS).$(NRANKS).x bin/EP.$(CLASS).$(NRANKS).x+trace
 
 run-ep: build-ep
@@ -172,7 +173,7 @@ build-cg-trace: setup
 	@echo "=== CG.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/CG && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/CG.$(CLASS).$(NRANKS).x bin/CG.$(CLASS).$(NRANKS).x+trace
 
 run-cg: build-cg
@@ -210,7 +211,7 @@ build-mg-trace: setup
 	@echo "=== MG.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/MG && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/MG.$(CLASS).$(NRANKS).x bin/MG.$(CLASS).$(NRANKS).x+trace
 
 run-mg: build-mg
@@ -248,7 +249,7 @@ build-ft-trace: setup
 	@echo "=== FT.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/FT && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/FT.$(CLASS).$(NRANKS).x bin/FT.$(CLASS).$(NRANKS).x+trace
 
 run-ft: build-ft
@@ -286,7 +287,7 @@ build-bt-trace: setup
 	@echo "=== BT.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/BT && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/BT.$(CLASS).$(NRANKS).x bin/BT.$(CLASS).$(NRANKS).x+trace
 
 run-bt: build-bt
@@ -324,7 +325,7 @@ build-sp-trace: setup
 	@echo "=== SP.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/SP && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/SP.$(CLASS).$(NRANKS).x bin/SP.$(CLASS).$(NRANKS).x+trace
 
 run-sp: build-sp
@@ -362,7 +363,7 @@ build-lu-trace: setup
 	@echo "=== LU.$(CLASS).$(NRANKS).x+trace (trace) ==="
 	cd $(NPB_MPI_DIR)/LU && $(MAKE) CLASS=$(CLASS) NP=$(NRANKS) \
 	  FFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)" \
-	  FLINKFLAGS="$(NPB_LDFLAGS) $(NPB_TRACE_FLAGS)"
+	  FLINKFLAGS="$(NPB_FFLAGS) $(NPB_TRACE_FLAGS)"
 	mkdir -p bin && cp $(NPB_MPI_DIR)/bin/LU.$(CLASS).$(NRANKS).x bin/LU.$(CLASS).$(NRANKS).x+trace
 
 run-lu: build-lu
