@@ -1,14 +1,15 @@
 # miniprof Makefile
 #
 # Targets:
-#   all            — build libminiprof.a and heat2d (sample mode, default)
+#   all            — build libminiprof.a and the bundled examples
 #   lib            — build libminiprof.a only
-#   example        — build heat2d (sample-mode C example)
-#   example-trace  — build heat2d+trace (instrumented C binary)
-#   example-f      — build heat1d (Fortran sample-mode example)
-#   example-f-trace— build heat1d+trace (Fortran instrumented binary)
-#   example-3d     — build diffusion3d (3D anisotropic diffusion, 2D Cartesian MPI)
-#   example-3d-trace— build diffusion3d+trace (instrumented)
+#   examples       — build the examples via examples/Makefile
+#   example        — build examples/heat2d (sample mode, default)
+#   example-trace  — build examples/heat2d+trace (instrumented C binary)
+#   example-f      — build examples/heat1d (Fortran sample-mode example)
+#   example-f-trace— build examples/heat1d+trace (Fortran instrumented binary)
+#   example-3d     — build examples/diffusion3d (3D anisotropic diffusion, 2D Cartesian MPI)
+#   example-3d-trace— build examples/diffusion3d+trace (instrumented)
 #   mpa-check      — build the standalone .mpa validator (no MPI needed)
 #   run            — sampling run with 4 ranks (heat2d)
 #   run-trace      — validate + trace run (heat2d)
@@ -22,8 +23,26 @@
 # Grid size override for diffusion3d:
 #   make example-3d NX=512 NY=512 NZ=256 NSTEPS_3D=500
 
-CC      ?= mpicc
-FC      ?= mpifort
+ifeq ($(origin CC), default)
+CC := $(shell command -v mpicc 2>/dev/null || true)
+ifeq ($(strip $(CC)),)
+CC := /usr/mpi/gcc/openmpi-4.1.7a1/bin/mpicc
+endif
+ifeq ($(wildcard $(CC)),)
+CC := cc
+endif
+endif
+
+ifeq ($(origin FC), default)
+FC := $(shell command -v mpifort 2>/dev/null || true)
+ifeq ($(strip $(FC)),)
+FC := /usr/mpi/gcc/openmpi-4.1.7a1/bin/mpifort
+endif
+ifeq ($(wildcard $(FC)),)
+FC := gfortran
+endif
+endif
+
 CC_HOST ?= cc
 CFLAGS  := -O2 -g -Wall -Wextra \
            -fno-omit-frame-pointer \
@@ -33,6 +52,8 @@ LDFLAGS := -ldl -lm -Wl,-z,noexecstack
 
 AR      := ar
 ARFLAGS := rcs
+
+EXAMPLE_DIR := examples
 
 # ── sources ──────────────────────────────────────────────────────────────────
 # The library is mode-agnostic: trace-mode-only code (instrument.c,
@@ -64,26 +85,24 @@ LIB_SRCS := src/profile_store.c    \
 LIB_OBJS := $(LIB_SRCS:.c=.o)
 LIB      := libminiprof.a
 
-EXAMPLE_SRC   := examples/heat2d.c
-EXAMPLE       := heat2d
-EXAMPLE_TRACE := heat2d+trace
-
-EXAMPLE_F_SRC   := examples/heat1d.f90
-EXAMPLE_F       := heat1d
-EXAMPLE_F_TRACE := heat1d+trace
-
-EXAMPLE_3D_SRC   := examples/diffusion3d.c
-EXAMPLE_3D       := diffusion3d
-EXAMPLE_3D_TRACE := diffusion3d+trace
+EXAMPLE       := $(EXAMPLE_DIR)/heat2d
+EXAMPLE_TRACE := $(EXAMPLE_DIR)/heat2d+trace
+EXAMPLE_F     := $(EXAMPLE_DIR)/heat1d
+EXAMPLE_F_TRACE := $(EXAMPLE_DIR)/heat1d+trace
+EXAMPLE_3D    := $(EXAMPLE_DIR)/diffusion3d
+EXAMPLE_3D_TRACE := $(EXAMPLE_DIR)/diffusion3d+trace
 
 # ── rules ─────────────────────────────────────────────────────────────────────
-.PHONY: all lib example example-trace example-f example-f-trace \
+.PHONY: all lib examples example example-trace example-f example-f-trace \
         example-3d example-3d-trace mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace mpa clean
 
-all: lib example
+all: lib examples
 
 lib: $(LIB)
+
+examples:
+	$(MAKE) -C $(EXAMPLE_DIR)
 
 $(LIB): $(LIB_OBJS)
 	$(AR) $(ARFLAGS) $@ $^
@@ -95,9 +114,8 @@ $(LIB): $(LIB_OBJS)
 
 example: $(EXAMPLE)
 
-$(EXAMPLE): $(EXAMPLE_SRC) $(LIB)
-	$(CC) $(CFLAGS) $< -L. -lminiprof $(LDFLAGS) -o $@
-	@echo "  LD  $@"
+$(EXAMPLE): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) heat2d
 
 # Tracing build: -finstrument-functions makes the compiler call
 # __cyg_profile_func_enter/exit around every function in this file.
@@ -105,9 +123,8 @@ $(EXAMPLE): $(EXAMPLE_SRC) $(LIB)
 # the functions actually named in the .mpa list, not to total call count.
 example-trace: $(EXAMPLE_TRACE)
 
-$(EXAMPLE_TRACE): $(EXAMPLE_SRC) $(LIB)
-	$(CC) $(CFLAGS) -finstrument-functions $< -L. -lminiprof $(LDFLAGS) -o $@
-	@echo "  LD  $@  (instrumented for tracing)"
+$(EXAMPLE_TRACE): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) heat2d+trace
 
 # Fortran example — heat1d.f90, the same two-pass workflow but for an
 # MPI Fortran code, exercising the Fortran PMPI binding wrappers in
@@ -118,15 +135,13 @@ $(EXAMPLE_TRACE): $(EXAMPLE_SRC) $(LIB)
 # README.md's "Fortran support" section.
 example-f: $(EXAMPLE_F)
 
-$(EXAMPLE_F): $(EXAMPLE_F_SRC) $(LIB)
-	$(FC) $(FFLAGS) $< -L. -lminiprof $(LDFLAGS) -o $@
-	@echo "  LD  $@  (Fortran, sample mode)"
+$(EXAMPLE_F): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) heat1d
 
 example-f-trace: $(EXAMPLE_F_TRACE)
 
-$(EXAMPLE_F_TRACE): $(EXAMPLE_F_SRC) $(LIB)
-	$(FC) $(FFLAGS) -finstrument-functions $< -L. -lminiprof $(LDFLAGS) -o $@
-	@echo "  LD  $@  (Fortran, instrumented for tracing)"
+$(EXAMPLE_F_TRACE): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) heat1d+trace
 
 # ── 3D anisotropic diffusion with 2D Cartesian MPI topology ─────────────────
 # diffusion3d.c is the main scientific benchmark, a physically meaningful
@@ -147,22 +162,13 @@ NY     ?= 256
 NZ     ?= 128
 NSTEPS_3D ?= 200
 
-$(EXAMPLE_3D): $(EXAMPLE_3D_SRC) $(LIB)
-	$(CC) $(CFLAGS) \
-	    -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) \
-	    -DNSTEPS=$(NSTEPS_3D) \
-	    $< -L. -lminiprof $(LDFLAGS) -lm -o $@
-	@echo "  LD  $@  (3D diffusion, $(NX)x$(NY)x$(NZ) grid)"
+$(EXAMPLE_3D): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) diffusion3d NX=$(NX) NY=$(NY) NZ=$(NZ) NSTEPS_3D=$(NSTEPS_3D)
 
 example-3d-trace: $(EXAMPLE_3D_TRACE)
 
-$(EXAMPLE_3D_TRACE): $(EXAMPLE_3D_SRC) $(LIB)
-	$(CC) $(CFLAGS) \
-	    -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) \
-	    -DNSTEPS=$(NSTEPS_3D) \
-	    -finstrument-functions \
-	    $< -L. -lminiprof $(LDFLAGS) -lm -o $@
-	@echo "  LD  $@  (3D diffusion, instrumented for tracing)"
+$(EXAMPLE_3D_TRACE): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) diffusion3d+trace NX=$(NX) NY=$(NY) NZ=$(NZ) NSTEPS_3D=$(NSTEPS_3D)
 
 # Standalone validator — deliberately NOT linked against libminiprof or
 # MPI at all (it just runs `nm` on a binary and cross-checks a .mpa file),

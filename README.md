@@ -18,8 +18,21 @@ Two modes, mirroring CrayPat's own sampling → APA → tracing workflow:
 No GUI. Everything is plain text, designed to be read in a terminal or
 piped into a job log.
 
+This repository contains two distinct parts:
 
-## Requirements
+| Part | Location | Purpose |
+|---|---|---|
+| **Library** | `src/`, `include/`, `libminiprof.a` | The profiler to link into your own MPI application |
+| **Examples** | `examples/` | Small C and Fortran programs plus a larger scientific benchmark |
+
+If you want to profile your own program, start with [Library](#library).
+If you want to try miniprof first, skip to [Examples](#examples).
+
+
+## Library
+
+
+### Requirements
 
 - Linux, x86-64
 - An MPI implementation with development headers (`mpicc`/`mpifort` on
@@ -28,31 +41,26 @@ piped into a job log.
   normal Linux box)
 - GCC or Clang (for `-finstrument-functions` support in trace mode)
 - gfortran, only if profiling Fortran MPI codes (see
-  [Fortran support](#fortran-support))
+  [Fortran applications](#fortran-applications))
 
 
-## Building
-
-```bash
-make            # builds libminiprof.a + heat2d (sample-mode example)
-```
-
-That's the whole library plus a self-contained 2D heat-diffusion MPI
-example used for testing. To also build the instrumented binary needed
-for trace mode and the standalone validator:
+### Build the library
 
 ```bash
-make example-trace   # heat2d+trace — built with -finstrument-functions
-make mpa-check        # standalone .mpa file validator, no MPI needed
+make lib
 ```
 
-Or build everything in one shot:
+This creates `libminiprof.a`. The standalone `.mpa` validator is a
+separate optional tool with no MPI dependency:
 
 ```bash
-make mpa        # clean, build everything, run sampling, run tracing
+make mpa-check
 ```
 
-### Using miniprof in your own MPI code
+The default target, `make`, builds the library and all bundled examples.
+See [Examples](#examples) for example-specific targets.
+
+### Link miniprof into your application
 
 ```bash
 mpicc -O2 -g your_app.c -L/path/to/miniprof -lminiprof -ldl -lm -o your_app
@@ -88,29 +96,28 @@ mpicc -O2 -g -finstrument-functions your_app.c \
 ```
 
 
-## Fortran support
+### Fortran applications
 
 Fortran MPI codes work the same way, automatically — no manual init
 calls, no separate API. Link your Fortran program against
 `libminiprof.a` using `mpifort`:
 
 ```bash
-mpifort -O0 -g examples/heat1d.f90 -L. -lminiprof -ldl -lm -o heat1d
-mpirun -n 4 ./heat1d
+mpifort -O2 -g your_app.f90 -L/path/to/miniprof \
+    -lminiprof -ldl -lm -o your_app
 ```
 
 For trace mode, build a second instrumented binary exactly as with C:
 
 ```bash
-mpifort -O0 -g -finstrument-functions examples/heat1d.f90 \
-    -L. -lminiprof -ldl -lm -o heat1d+trace
+mpifort -O2 -g -finstrument-functions your_app.f90 \
+    -L/path/to/miniprof -lminiprof -ldl -lm -o your_app+trace
 ```
 
-The Makefile has equivalent targets for the bundled Fortran example
-(`examples/heat1d.f90`): `make example-f`, `make example-f-trace`,
-`make run-f`, `make run-f-trace`.
+The bundled `examples/heat1d.f90` program demonstrates this setup; its
+build and run commands are listed in the examples section below.
 
-### Why this needs separate support
+#### Why this needs separate support
 
 Fortran's `mpi`/`mpi_f08` modules do not call the C `MPI_Init` /
 `MPI_Finalize` symbols — they call separately-mangled bindings
@@ -131,18 +138,15 @@ there's no duplicated timing code per language.
 `mpicc` does not link by default. Keeping them separate means plain C
 builds never need that dependency resolved.)
 
-### `-O0` is required for the sampling/trace examples
+#### Optimization note
 
-gfortran inlines small internal `contains` subroutines very
-aggressively — even at the default optimization level, and more
-readily than C's `static` functions — which removes them as separate
-symbols entirely, leaving nothing for the profiler to attribute time
-to. Build Fortran code you want to sample or trace at `-O0` (or extract
-the hot routines into separate module procedures, which inline less
-eagerly than internal ones). This is purely a Fortran-frontend
-behavior, unrelated to miniprof itself.
+gfortran can inline small internal `contains` subroutines aggressively,
+removing them as separate symbols and leaving nothing for the profiler
+to attribute time to. If a function disappears from a report, try
+building at `-O0` or move the hot routine into a separate module
+procedure. The bundled Fortran example uses `-O0` for this reason.
 
-### What's verified working
+#### What's verified working
 
 Both modes were tested end to end against a real Fortran MPI program
 (1D heat diffusion with internal `compute_step`/`exchange_halo`/
@@ -154,8 +158,51 @@ is populated from the Fortran-side `MPI_Sendrecv`/`MPI_Allreduce` calls
 exactly as it is for C, including correct exclusive-time exclusion of
 MPI wait time.
 
+Next, follow the [two-pass profiling workflow](#two-pass-profiling-workflow)
+with your sample and trace binaries.
 
-## diffusion3d — the scientific benchmark example
+
+## Examples
+
+The programs in `examples/` demonstrate and test miniprof; they are not
+part of the library and are not needed when linking miniprof into your own
+application.
+
+| Program | Language | Purpose |
+|---|---|---|
+| `heat2d` | C | Small, fast introduction to sampling and tracing |
+| `heat1d` | Fortran | Exercises the Fortran MPI wrappers |
+| `diffusion3d` | C | Larger workload with computation, halo exchange, and collectives |
+
+Build all three sample and trace variants with `make examples`.
+
+### Build and run targets
+
+| Target | What it does |
+|---|---|
+| `make` / `make all` | Build `libminiprof.a` and all example variants |
+| `make lib` | Build `libminiprof.a` only |
+| `make examples` | Build all sample and trace example variants |
+| `make example` | Build `examples/heat2d` only (requires `lib`) |
+| `make example-trace` | Build `examples/heat2d+trace`, instrumented with `-finstrument-functions` |
+| `make example-f` | Build `examples/heat1d` (Fortran sample-mode example) |
+| `make example-f-trace` | Build `examples/heat1d+trace` (Fortran, instrumented) |
+| `make mpa-check` | Build the standalone `.mpa` validator (no MPI dependency) |
+| `make run` | Run `heat2d` in sample mode, 4 ranks; prints report and writes `miniprof.mpa` |
+| `make run-trace` | Validate `miniprof.mpa` against `heat2d+trace`, then run trace mode, 4 ranks |
+| `make run-f` | Fortran equivalent of `run` |
+| `make run-f-trace` | Fortran equivalent of `run-trace` |
+| `make example-3d` | Build `examples/diffusion3d` (3D anisotropic diffusion, 2D Cartesian MPI) |
+| `make example-3d-trace` | Build `examples/diffusion3d+trace` (instrumented) |
+| `make run-3d` | Sampling run on `diffusion3d`, 4 ranks |
+| `make run-3d-trace` | Validate and trace `diffusion3d` |
+| `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
+| `make clean` | Remove build artifacts and reports |
+
+Override the rank count with `make run NRANKS=16`, or the MPI compiler
+wrapper with `make CC=mpiicc`.
+
+### `diffusion3d`: scientific benchmark
 
 `examples/diffusion3d.c` is the primary profiling benchmark in this
 repository. It solves the 3D anisotropic heat/diffusion equation in a
@@ -213,7 +260,7 @@ echo "halo_exchange_y" >> miniprof_3d.mpa
 echo "advance"         >> miniprof_3d.mpa
 echo "apply_bc"        >> miniprof_3d.mpa
 
-./mpa-check diffusion3d+trace miniprof_3d.mpa  # validate before submitting
+./mpa-check examples/diffusion3d+trace miniprof_3d.mpa  # validate before submitting
 make run-3d-trace  # tracing pass → miniprof_trace_report_3d.txt
 ```
 
@@ -240,12 +287,14 @@ to increase local work per rank (larger NX/NY/NZ) or rethink
 communication overlap.
 
 
-## Quick start: the two-pass workflow
+## Library workflow and reference
+
+### Two-pass profiling workflow
 
 This is the recommended way to use miniprof, and matches CrayPat's own
 sampling → APA → tracing pattern.
 
-### 1. Sample first
+#### 1. Sample first
 
 Run your normal binary with sampling enabled (the default mode — no env
 vars required beyond pointing at an output file if you want a specific
@@ -282,7 +331,7 @@ Feel free to hand-edit this file — add functions you know you care about
 even if they didn't clear the sampling threshold, or remove ones you
 don't want traced.
 
-### 2. Validate before you trace
+#### 2. Validate before you trace
 
 Before submitting a (possibly expensive, many-node) tracing run, check
 that every function in the `.mpa` file will actually resolve in your
@@ -332,7 +381,7 @@ genuinely built with `-finstrument-functions` (not just linked against
 the library) — a resolved name doesn't guarantee an entry/exit hook will
 actually fire if the compiler flag was forgotten.
 
-### 3. Trace
+#### 3. Trace
 
 ```bash
 MINIPROF_MODE=trace \
@@ -364,33 +413,7 @@ exactly the total `MPI_Allreduce` time in Table 2, since nearly all of
 that gap is `MPI_Allreduce` wait time, already broken out separately.
 
 
-## Makefile reference
-
-| Target | What it does |
-|---|---|
-| `make` / `make all` | Build `libminiprof.a` + `heat2d` (sample-mode example) |
-| `make lib` | Build `libminiprof.a` only |
-| `make example` | Build `heat2d` only (requires `lib`) |
-| `make example-trace` | Build `heat2d+trace`, instrumented with `-finstrument-functions` |
-| `make example-f` | Build `heat1d` (Fortran sample-mode example) |
-| `make example-f-trace` | Build `heat1d+trace` (Fortran, instrumented) |
-| `make mpa-check` | Build the standalone `.mpa` validator (no MPI dependency) |
-| `make run` | Run `heat2d` in sample mode, 4 ranks; prints report and writes `miniprof.mpa` |
-| `make run-trace` | Validate `miniprof.mpa` against `heat2d+trace`, then run trace mode, 4 ranks |
-| `make run-f` | Fortran equivalent of `run` |
-| `make run-f-trace` | Fortran equivalent of `run-trace` |
-| `make example-3d` | Build `diffusion3d` (3D anisotropic diffusion, 2D Cartesian MPI) |
-| `make example-3d-trace` | Build `diffusion3d+trace` (instrumented) |
-| `make run-3d` | Sampling run on `diffusion3d`, 4 ranks |
-| `make run-3d-trace` | Validate + trace run on `diffusion3d` |
-| `make mpa` | Full two-pass workflow end to end: clean, build, sample, validate, trace |
-| `make clean` | Remove all build artifacts and reports |
-
-Override rank count: `make run NRANKS=16`.
-Override the MPI compiler wrapper: `make CC=mpiicc` (Intel), etc.
-
-
-## Environment variables
+### Configuration
 
 All of these are read at `MPI_Init` time; set them in your job script or
 `mpirun -x VAR` (or just `export` before `mpirun`, depending on your MPI
@@ -413,7 +436,7 @@ The `.mpa` file format is plain text: one function name per line,
 Blank lines are ignored. It's meant to be hand-edited.
 
 
-## Reading the sampling report
+### Reading the sampling report
 
 ```
 Table 1: Profile by Group, Function, and Line
@@ -453,7 +476,7 @@ Below the group/function table are a per-rank top-5 breakdown and the
 raw per-rank sample counts and wall-clock times.
 
 
-## Notes on symbol resolution
+### Notes on symbol resolution
 
 Two non-obvious things this profiler had to work around, worth knowing
 if you're debugging unexpected output:
@@ -524,7 +547,7 @@ they're visible as profiling overhead without polluting your own code's
 numbers.
 
 
-## Known limitations
+### Known limitations
 
 - `MPI_Wait`/`MPI_Test` family and one-sided RMA calls beyond the basics
   wrapped in `mpi_trace.c` (`Send`, `Recv`, `Sendrecv`, `Isend`, `Irecv`,
