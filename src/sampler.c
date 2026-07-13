@@ -4,7 +4,7 @@
  * On each SIGPROF:
  *   1. Unwind up to g_depth frames with backtrace()
  *   2. Record the LEAF frame (pcs[0]) in profile_store — this is
- *      the flat/exclusive profile, matching CrayPat's sampling behaviour
+ *      the flat/exclusive profile
  *   3. Record the full call chain in path_store — this preserves
  *      caller→callee structure for call-path attribution
  *

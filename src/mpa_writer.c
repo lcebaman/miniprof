@@ -4,8 +4,7 @@
  * After a sampling run, any USER function whose aggregate Samp% exceeds
  * MINIPROF_MPA_THRESHOLD is written to the .mpa file, one name per line.
  * This is the function list that trace mode reads via
- * MINIPROF_TRACE_FUNCS, mirroring CrayPat's `pat_build -O apa` output
- * and its downstream `pat_build -O myprogram+pat+...sdot.apa` rebuild.
+ * MINIPROF_TRACE_FUNCS after the sampling pass.
  *
  * Why USER-only, not USER+MPI: trace mode's instrumentation filter
  * (instrument.c) resolves function names by running `nm` against the

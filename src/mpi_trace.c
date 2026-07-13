@@ -6,8 +6,8 @@
  *   2. Calls through to PMPI_<Name>
  *   3. Records elapsed time + message bytes (where applicable)
  *
- * This matches CrayPat's `pat_build -g mpi` group tracing: per-function
- * call count, cumulative time, and message-size statistics.
+ * The report includes per-function call counts, cumulative time, and
+ * message-size statistics.
  *
  * Only a representative, commonly-hot subset of MPI is wrapped here
  * (point-to-point + the collectives used in typical HPC codes). Adding

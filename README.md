@@ -1,14 +1,12 @@
 # miniprof
 
-A lightweight parallel performance profiler for MPI + C/C++ on Linux,
-inspired by Cray's CrayPat / perftools-lite, but vendor-neutral — it runs
-on any Linux cluster with a standard MPI install, no Cray Programming
-Environment required.
+A lightweight parallel performance profiler for MPI + C/C++ on Linux. It
+runs on any Linux cluster with a standard MPI installation.
 
-Two modes, mirroring CrayPat's own sampling → APA → tracing workflow:
+Two complementary modes support a sampling → selection → tracing workflow:
 
 - **sample** — statistical PC sampling via `SIGPROF`, near-zero overhead,
-  safe to run on every job by default. Produces a CrayPat-style text
+  safe to run on every job by default. Produces a hierarchical text
   report grouped by `Group → Function → Source Line`, plus a `.mpa`
   suggestions file listing the hot functions worth tracing in detail.
 - **trace** — exact entry/exit instrumentation of the functions named in
@@ -291,8 +289,8 @@ communication overlap.
 
 ### Two-pass profiling workflow
 
-This is the recommended way to use miniprof, and matches CrayPat's own
-sampling → APA → tracing pattern.
+This is the recommended way to use miniprof: sample broadly, select the
+important functions, then trace those functions precisely.
 
 #### 1. Sample first
 
@@ -304,7 +302,7 @@ name):
 mpirun -n 64 ./your_app
 ```
 
-This produces `miniprof_report.txt` — a CrayPat-style flat profile,
+This produces `miniprof_report.txt` — a flat sampling profile,
 grouped by `USER` / `MPI` / `OMP` / `LIBC` / `SYSTEM` / `ETC`, broken
 down to function and source-line granularity, with per-rank load
 imbalance — and `miniprof.mpa`, a plain-text list of every `USER`
@@ -459,12 +457,12 @@ Table 1: Profile by Group, Function, and Line
     1.4%       127         --         --  MPI
 ```
 
-This mirrors CrayPat's `pat_report -O samp_profile+src` table layout:
+The table groups samples by category, function, and source line:
 
 - **Samp% / Samp** — fraction and absolute count of samples landing in
   this group/function/line, aggregated across all ranks.
-- **Imb.Samp / Imb.Samp%** — load imbalance, computed the same way
-  CrayPat does it: `Imb.Samp = max_rank_samples − mean_rank_samples`,
+- **Imb.Samp / Imb.Samp%** — load imbalance, computed as
+  `Imb.Samp = max_rank_samples − mean_rank_samples`,
   `Imb.Samp% = Imb.Samp / max_rank_samples × 100`. A function with a
   large `Imb.Samp%` is unevenly distributed across ranks — a likely
   candidate for load-balancing work.
@@ -563,8 +561,8 @@ numbers.
   hard guarantees under heavy threading.
 - No GPU/CUDA support. This profiles host-side CPU and MPI activity
   only.
-- Hardware performance counters (PAPI-style FLOP/cache-miss counting,
-  CrayPat's `PAT_RT_PERFCTR`) are not implemented.
+- Hardware performance counters, such as FLOP or cache-miss counting, are
+  not implemented.
 - The `PROFILER` group's percentage (signal handler + dispatch overhead)
   scales inversely with `MINIPROF_INTERVAL_MS` — the default 10ms
   interval keeps this small for real workloads; the README's own

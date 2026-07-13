@@ -217,7 +217,7 @@ run-trace: $(EXAMPLE_TRACE) mpa-check
 	@echo "=== miniprof tracing report ==="
 	@cat miniprof_trace_report.txt
 
-# ── mpa: full two-pass workflow, matching CrayPat's APA process ────────────
+# ── mpa: full sample, validate, and trace workflow ──────────────────────────
 mpa: clean all example-trace run run-trace
 
 # ── Fortran run targets (same workflow, Fortran binary) ─────────────────────

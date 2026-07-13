@@ -1,7 +1,7 @@
 /*
  * trace_aggregator.c — MPI_Gather trace profiles, write tracing report
  *
- * Report layout mirrors CrayPat's tracing-experiment output:
+ * The report contains two summary tables:
  *
  *   Table: User Function Tracing (calls, inclusive/exclusive time)
  *   Table: MPI Call Tracing (calls, time, message bytes)

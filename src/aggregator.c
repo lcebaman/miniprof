@@ -1,14 +1,14 @@
 /*
- * aggregator.c — MPI_Gather flat profiles, write CrayPat-style text report
+ * aggregator.c — MPI_Gather flat profiles and write a text report
  *
- * Report layout mirrors `pat_report -O samp_profile+src`:
+ * Report layout:
  *
  *   Table 1: Profile by Group, Function, and Line
  *   Samp% | Samp | Imb.Samp | Imb.Samp% | Group
  *                                       | Function
  *                                       | Source Line
  *
- * Imbalance definition (matches CrayPat):
+ * Imbalance definition:
  *   Imb.Samp  = max_rank_samples - mean_rank_samples
  *   Imb.Samp% = Imb.Samp / max_rank_samples * 100
  *
@@ -204,7 +204,7 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
     }
     qsort(grps, n_grps, sizeof(grp_roll_t), cmp_grp_total_desc);
 
-    /* ── write MPA suggestions file (analogous to CrayPat's apa output) ──── */
+    /* ── write MPA suggestions file ─────────────────────────────────────── */
     if (mpa_outfile && mpa_outfile[0]) {
         const char **names  = calloc(n_funcs, sizeof(char *));
         double       *pcts  = calloc(n_funcs, sizeof(double));
@@ -232,7 +232,7 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
 
         const int W = 88;
         dline(f, W);
-        fprintf(f, " miniprof — Parallel Sampling Profile (CrayPat-style)\n");
+        fprintf(f, " miniprof — Parallel Sampling Profile\n");
         fprintf(f, " Generated : %s\n", tbuf);
         fprintf(f, " Ranks     : %d\n", world_size);
         fprintf(f, " Report    : %s\n", outfile);
@@ -278,7 +278,7 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                 double fpct = grand_samples
                               ? 100.0 * funcs[fi].total / grand_samples : 0.0;
 
-                /* CrayPat imbalance: max_rank - mean, as %/of max */
+                /* imbalance: max_rank - mean, as a percentage of max */
                 long max_r = 0, sum_r = 0;
                 for (int r = 0; r < ranks_tracked; r++) {
                     if (funcs[fi].per_rank[r] > max_r) max_r = funcs[fi].per_rank[r];

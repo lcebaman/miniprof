@@ -17,9 +17,7 @@
  *
  *   sample (default) — statistical SIGPROF sampling, as before.
  *                       Produces miniprof_report.txt AND miniprof.mpa
- *                       (a suggested function list for trace mode,
- *                       analogous to CrayPat's Automatic Program
- *                       Analysis / pat_build -O apa workflow).
+ *                       (a suggested function list for trace mode).
  *
  *   trace             — exact entry/exit instrumentation of the
  *                       functions named in MINIPROF_TRACE_FUNCS
@@ -64,7 +62,7 @@ extern "C" {
 #define MINIPROF_GROUP_LEN       16     /* group label, e.g. "USER","MPI"    */
 #define MINIPROF_MAX_LINES_PER_FUNC 8   /* line rows shown under a function  */
 
-/* ── CrayPat-style function groups ───────────────────────────────────────── */
+/* ── function groups ─────────────────────────────────────────────────────── */
 #define MINIPROF_GROUP_USER    "USER"
 #define MINIPROF_GROUP_MPI     "MPI"
 #define MINIPROF_GROUP_OMP     "OMP"

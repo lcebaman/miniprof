@@ -5,10 +5,8 @@
  * inserts a call to __cyg_profile_func_enter() at the start of every
  * function and __cyg_profile_func_exit() at every return. Without
  * filtering this is enormous overhead (every single function, including
- * tiny getters) — CrayPat avoids this by only instrumenting the named
- * functions at build time via pat_build -T. We don't control the build
- * step that finely (we'd need our own binary rewriter), so instead we
- * filter at runtime against a small allow-list of addresses.
+ * tiny getters). We do not control the build step at function granularity,
+ * so instead we filter at runtime against a small allow-list of addresses.
  *
  * IMPORTANT: the allow-list is built by resolving NAMES → ADDRESSES via
  * `nm` on the executable itself at startup, NOT via dladdr() on incoming
