@@ -29,6 +29,10 @@ typedef struct {
     double total_excl_s;
     long   total_bytes;     /* only meaningful for MPI rows */
     long   max_calls;       /* for imbalance reporting       */
+    uint64_t cycles;         /* only meaningful for user-function rows,
+                                 0 if hardware counters were unavailable */
+    uint64_t instructions;
+    uint64_t cache_misses;
 } roll_t;
 
 static roll_t *g_rolls_for_sort = NULL;
@@ -41,7 +45,10 @@ static int cmp_roll_time_desc(const void *a, const void *b)
     return (tb > ta) - (tb < ta);
 }
 
-void trace_aggregator_run(miniprof_trace_profile_t *local, const char *outfile)
+void trace_aggregator_run(miniprof_trace_profile_t *local, const char *outfile,
+                          double ipc_compute_threshold,
+                          double ipc_memory_threshold,
+                          double llc_memory_threshold)
 {
     int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -75,10 +82,18 @@ void trace_aggregator_run(miniprof_trace_profile_t *local, const char *outfile)
             func_rolls[idx].total_calls += fn->calls;
             func_rolls[idx].total_incl_s += fn->incl_time_s;
             func_rolls[idx].total_excl_s += fn->excl_time_s;
+            func_rolls[idx].cycles       += fn->cycles;
+            func_rolls[idx].instructions += fn->instructions;
+            func_rolls[idx].cache_misses += fn->cache_misses;
             if (fn->calls > func_rolls[idx].max_calls)
                 func_rolls[idx].max_calls = fn->calls;
         }
     }
+
+    int ranks_with_hwc = 0;
+    for (int r = 0; r < world_size; r++)
+        ranks_with_hwc += all[r].hwc_available ? 1 : 0;
+    int hwc_all_available = (world_size > 0 && ranks_with_hwc == world_size);
 
     /* ── roll up MPI calls across ranks ───────────────────────────────────── */
     roll_t *mpi_rolls = calloc(max_rows, sizeof(roll_t));
@@ -178,6 +193,63 @@ void trace_aggregator_run(miniprof_trace_profile_t *local, const char *outfile)
         if (n_mpi_rolls == 0)
             fprintf(f, "  (no MPI calls were wrapped in this build — "
                        "see mpi_trace.c for the wrapped subset)\n");
+        fputc('\n', f);
+
+        /* Table 3: hardware-counter characterisation, exact per-invocation
+         * (entry/exit deltas around each traced call), unlike sample
+         * mode's statistical leaf-PC attribution. INCLUSIVE — includes
+         * time/counters spent in callees, same convention as Incl(s)
+         * above, not Excl(s). Skipped (with a note) unless every rank
+         * had counters, for the same reason as sample mode's Table 2. */
+        fprintf(f, " Table 3: Hardware Counter Characterisation "
+                   "(exact per-invocation, inclusive)\n");
+        hline(f, W);
+        if (!hwc_all_available) {
+            fprintf(f, "  Hardware counters not available on %d/%d rank(s) "
+                       "(perf_event_open denied or unsupported) — skipping.\n",
+                    world_size - ranks_with_hwc, world_size);
+        } else if (n_func_rolls == 0) {
+            fprintf(f, "  (no user functions matched the trace list — "
+                       "check MINIPROF_TRACE_FUNCS / .mpa file)\n");
+        } else {
+            fprintf(f, "  %8s  %6s  %14s  %12s  %-14s  Function\n",
+                    "Calls", "IPC", "LLC miss/Kcall", "Cyc/call", "Classification");
+            hline(f, W);
+            for (int oi = 0; oi < n_func_rolls; oi++) {
+                roll_t *r = &func_rolls[forder[oi]];
+                if (r->cycles == 0) {
+                    fprintf(f, "  %8ld  %6s  %14s  %12s  %-14s  %s\n",
+                            r->total_calls, "--", "--", "--", "--", r->name);
+                    continue;
+                }
+                double ipc = (double)r->instructions / (double)r->cycles;
+                double llc_per_kcall = r->total_calls > 0
+                    ? (double)r->cache_misses / ((double)r->total_calls / 1000.0)
+                    : 0.0;
+                double cyc_per_call = r->total_calls > 0
+                    ? (double)r->cycles / (double)r->total_calls : 0.0;
+
+                const char *cls;
+                if (ipc >= ipc_compute_threshold) {
+                    cls = "COMPUTE-BOUND";
+                } else if (ipc <= ipc_memory_threshold &&
+                           llc_per_kcall >= llc_memory_threshold) {
+                    cls = "MEMORY-BOUND";
+                } else {
+                    cls = "MIXED";
+                }
+
+                fprintf(f, "  %8ld  %6.2f  %14.0f  %12.3e  %-14s  %s\n",
+                        r->total_calls, ipc, llc_per_kcall, cyc_per_call,
+                        cls, r->name);
+            }
+            hline(f, W);
+            fprintf(f, "  Classification: IPC>=%.1f = COMPUTE-BOUND, "
+                       "IPC<=%.1f + LLC miss/Kcall>=%.0f = MEMORY-BOUND, "
+                       "else MIXED\n",
+                    ipc_compute_threshold, ipc_memory_threshold,
+                    llc_memory_threshold);
+        }
         fputc('\n', f);
 
         dline(f, W);

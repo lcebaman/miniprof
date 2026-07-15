@@ -195,15 +195,13 @@ int hwc_read(hwc_snapshot_t *out)
     return 0;
 }
 
-int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
-                   uint64_t *cache_misses)
+void hwc_delta(const hwc_snapshot_t *before, const hwc_snapshot_t *after,
+              uint64_t *cycles, uint64_t *instructions,
+              uint64_t *cache_misses)
 {
-    hwc_snapshot_t snap;
-    if (hwc_read(&snap) != 0) return -1;
-
-    uint64_t dcyc  = snap.cycles       - g_prev_delta.cycles;
-    uint64_t dins  = snap.instructions - g_prev_delta.instructions;
-    uint64_t dmiss = snap.cache_misses - g_prev_delta.cache_misses;
+    uint64_t dcyc  = after->cycles       - before->cycles;
+    uint64_t dins  = after->instructions - before->instructions;
+    uint64_t dmiss = after->cache_misses - before->cache_misses;
 
     /* PMU multiplexing correction: if the kernel time-shared our group
      * with other active counters (e.g. a concurrent `perf stat`), only
@@ -211,8 +209,8 @@ int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
      * Scaling by time_enabled/time_running extrapolates to what the
      * full-time count would have been — the same correction `perf
      * stat` itself applies. */
-    uint64_t dt_en  = snap.time_enabled - g_prev_delta.time_enabled;
-    uint64_t dt_run = snap.time_running - g_prev_delta.time_running;
+    uint64_t dt_en  = after->time_enabled - before->time_enabled;
+    uint64_t dt_run = after->time_running - before->time_running;
     if (dt_run > 0 && dt_run < dt_en) {
         double scale = (double)dt_en / (double)dt_run;
         dcyc  = (uint64_t)(dcyc  * scale);
@@ -220,8 +218,17 @@ int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
         dmiss = (uint64_t)(dmiss * scale);
     }
 
-    g_prev_delta = snap;
     *cycles = dcyc; *instructions = dins; *cache_misses = dmiss;
+}
+
+int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
+                   uint64_t *cache_misses)
+{
+    hwc_snapshot_t snap;
+    if (hwc_read(&snap) != 0) return -1;
+
+    hwc_delta(&g_prev_delta, &snap, cycles, instructions, cache_misses);
+    g_prev_delta = snap;
     return 0;
 }
 

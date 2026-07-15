@@ -20,6 +20,7 @@
  */
 
 #include "trace_store.h"
+#include "sampler_hwc.h"
 #include "../include/miniprof.h"
 #include <string.h>
 #include <stdatomic.h>
@@ -32,6 +33,11 @@ typedef struct {
     double               incl_time_s; /* plain double: see file header note
                                           re: single-thread-per-rank assumption */
     double               excl_time_s;
+    /* inclusive hardware-counter totals (0/0/0 if unavailable) — see the
+       trace_store_iterate() doc comment in trace_store.h */
+    uint64_t             cycles;
+    uint64_t             instructions;
+    uint64_t             cache_misses;
 } trace_slot_t;
 
 #define TRACE_TABLE_CAPACITY 1024   /* power of 2, >= MINIPROF_TRACE_MAX_FUNCS*2 */
@@ -43,6 +49,7 @@ typedef struct {
     double    t_enter;
     double    child_time;          /* time already attributed to children */
     double    mpi_time_at_enter;   /* snapshot of g_mpi_time_total on entry */
+    hwc_snapshot_t hwc_enter;      /* zeroed if hardware counters unavailable */
 } frame_t;
 
 static _Thread_local frame_t g_stack[MINIPROF_TRACE_STACK_DEPTH];
@@ -128,6 +135,12 @@ void trace_store_enter(void *pc)
     g_stack[g_sp].t_enter           = now_s();
     g_stack[g_sp].child_time        = 0.0;
     g_stack[g_sp].mpi_time_at_enter = g_mpi_time_total;
+    if (hwc_enabled()) {
+        if (hwc_read(&g_stack[g_sp].hwc_enter) != 0)
+            memset(&g_stack[g_sp].hwc_enter, 0, sizeof(hwc_snapshot_t));
+    } else {
+        memset(&g_stack[g_sp].hwc_enter, 0, sizeof(hwc_snapshot_t));
+    }
     g_sp++;
 }
 
@@ -172,34 +185,57 @@ void trace_store_exit(void *pc)
     /* attribute this frame's inclusive time to its parent's child_time */
     if (g_sp > 0) g_stack[g_sp - 1].child_time += incl;
 
+    /*
+     * Hardware counters: exact entry-to-exit delta for this one
+     * invocation — inclusive of any callees, unlike excl_time_s above.
+     * Unlike sample mode's statistical leaf-PC attribution, this is
+     * exact per-call accounting, at the cost of only covering the
+     * functions actually named in the .mpa trace list.
+     */
+    uint64_t dcyc = 0, dins = 0, dmiss = 0;
+    if (hwc_enabled()) {
+        hwc_snapshot_t hwc_exit;
+        if (hwc_read(&hwc_exit) == 0)
+            hwc_delta(&fr->hwc_enter, &hwc_exit, &dcyc, &dins, &dmiss);
+    }
+
     int slot = find_or_create_slot((uintptr_t)pc);
     if (slot < 0) return; /* table full — drop sample */
 
     atomic_fetch_add_explicit(&g_table[slot].calls, 1L, memory_order_relaxed);
 
     /*
-     * Plain (non-atomic) read-modify-write on the double fields. This is
-     * safe under the single-thread-per-MPI-rank assumption documented in
-     * the file header. For OpenMP+MPI builds with concurrent calls into
-     * the *same* traced function from multiple threads, this is a known
-     * approximation (rare lost updates under heavy contention) —
-     * acceptable for a lightweight profiler; a future version could add
-     * a per-thread slot table merged at finalize time if needed.
+     * Plain (non-atomic) read-modify-write on the double/counter fields.
+     * This is safe under the single-thread-per-MPI-rank assumption
+     * documented in the file header. For OpenMP+MPI builds with
+     * concurrent calls into the *same* traced function from multiple
+     * threads, this is a known approximation (rare lost updates under
+     * heavy contention) — acceptable for a lightweight profiler; a
+     * future version could add a per-thread slot table merged at
+     * finalize time if needed.
      */
     g_table[slot].incl_time_s += incl;
     g_table[slot].excl_time_s += excl;
+    g_table[slot].cycles       += dcyc;
+    g_table[slot].instructions += dins;
+    g_table[slot].cache_misses += dmiss;
 }
 
 void trace_store_iterate(void (*cb)(uintptr_t pc, long calls,
-                                    double incl_s, double excl_s, void *arg),
+                                    double incl_s, double excl_s,
+                                    uint64_t cycles, uint64_t instructions,
+                                    uint64_t cache_misses, void *arg),
                          void *arg)
 {
     for (int i = 0; i < TRACE_TABLE_CAPACITY; i++) {
         uintptr_t pc = atomic_load(&g_table[i].pc);
         if (!pc) continue;
-        long   calls = atomic_load(&g_table[i].calls);
-        double incl  = g_table[i].incl_time_s;
-        double excl  = g_table[i].excl_time_s;
-        if (calls > 0) cb(pc, calls, incl, excl, arg);
+        long     calls = atomic_load(&g_table[i].calls);
+        double   incl   = g_table[i].incl_time_s;
+        double   excl   = g_table[i].excl_time_s;
+        uint64_t cycles = g_table[i].cycles;
+        uint64_t insns  = g_table[i].instructions;
+        uint64_t misses = g_table[i].cache_misses;
+        if (calls > 0) cb(pc, calls, incl, excl, cycles, insns, misses, arg);
     }
 }

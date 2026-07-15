@@ -109,7 +109,9 @@ static int collect_cb(uintptr_t pc, long count, uint64_t cycles,
 static miniprof_trace_profile_t g_trace_local;
 
 static void trace_func_cb(uintptr_t pc, long calls,
-                          double incl_s, double excl_s, void *arg)
+                          double incl_s, double excl_s,
+                          uint64_t cycles, uint64_t instructions,
+                          uint64_t cache_misses, void *arg)
 {
     (void)arg;
     if (g_trace_local.n_funcs >= MINIPROF_TRACE_MAX_FUNCS) return;
@@ -119,9 +121,12 @@ static void trace_func_cb(uintptr_t pc, long calls,
     miniprof_trace_func_t *fn = &g_trace_local.funcs[g_trace_local.n_funcs++];
     if (!instrument_lookup_name((void *)pc, fn->name, MINIPROF_SYMBOL_LEN))
         snprintf(fn->name, MINIPROF_SYMBOL_LEN, "%p", (void *)pc);
-    fn->calls       = calls;
-    fn->incl_time_s = incl_s;
-    fn->excl_time_s = excl_s;
+    fn->calls        = calls;
+    fn->incl_time_s  = incl_s;
+    fn->excl_time_s  = excl_s;
+    fn->cycles       = cycles;
+    fn->instructions = instructions;
+    fn->cache_misses = cache_misses;
 }
 
 static void trace_mpi_cb(const char *name, long calls,
@@ -291,6 +296,7 @@ static void miniprof_finalize_trace(double elapsed)
     g_trace_local.wall_elapsed_s = elapsed;
     g_trace_local.n_funcs = 0;
     g_trace_local.n_mpi   = 0;
+    g_trace_local.hwc_available = hwc_enabled();
 
     trace_store_iterate(trace_func_cb, NULL);
     mpi_trace_iterate(trace_mpi_cb, NULL);
@@ -302,7 +308,9 @@ static void miniprof_finalize_trace(double elapsed)
                 g_trace_local.n_mpi, elapsed);
     }
 
-    trace_aggregator_run(&g_trace_local, g_trace_outfile);
+    trace_aggregator_run(&g_trace_local, g_trace_outfile,
+                         g_ipc_compute_threshold, g_ipc_memory_threshold,
+                         g_llc_memory_threshold);
 }
 
 void miniprof_finalize(void)

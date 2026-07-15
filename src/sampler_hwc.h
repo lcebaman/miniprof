@@ -39,6 +39,15 @@ int hwc_read(hwc_snapshot_t *out);
 int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
                    uint64_t *cache_misses);
 
+/* Pure delta between two arbitrary snapshots (e.g. one taken at a traced
+ * function's entry, one at its exit), with the same multiplexing
+ * correction as hwc_read_delta() but no internal state — callers own
+ * both snapshots. Safe to call from anywhere, including signal handlers
+ * (no I/O, just arithmetic). */
+void hwc_delta(const hwc_snapshot_t *before, const hwc_snapshot_t *after,
+              uint64_t *cycles, uint64_t *instructions,
+              uint64_t *cache_misses);
+
 /* Closes the counter fds. Safe to call even if hwc_init() was never
  * called or failed. */
 void hwc_shutdown(void);

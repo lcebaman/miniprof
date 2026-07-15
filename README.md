@@ -468,6 +468,41 @@ its inclusive time (11.86s), with the ~4.58s difference matching almost
 exactly the total `MPI_Allreduce` time in Table 2, since nearly all of
 that gap is `MPI_Allreduce` wait time, already broken out separately.
 
+If hardware counters are available (see
+[Table 2: Hardware Counter Characterisation](#table-2-hardware-counter-characterisation)
+in the sampling report), the trace report gains a third table with
+**exact per-invocation** IPC and cache-miss data — `perf_event_open`
+counters are read at every traced function's entry and exit, so unlike
+sample mode's statistical leaf-PC attribution, there's no smearing:
+
+```
+Table 3: Hardware Counter Characterisation (exact per-invocation, inclusive)
+   Calls    IPC   LLC miss/Kcall      Cyc/call  Classification  Function
+    1600   3.65       114083934     6.897e+06  COMPUTE-BOUND   compute_stencil
+    1600   1.50       114193279     5.967e+06  COMPUTE-BOUND   check_convergence
+```
+
+Same classification rule and thresholds as sample mode's Table 2 (IPC
+and LLC-miss-per-1000-\*, just calls instead of samples). Two differences
+from sample mode's version worth knowing:
+
+- **Inclusive, not exclusive.** These counters are the entry→exit delta
+  for the whole call, including any nested traced functions or plain
+  (non-traced) work — the same convention as `Incl(s)` in Table 1, not
+  `Excl(s)`. A function whose IPC looks lower than expected here may
+  simply be dominated by a callee's counter activity.
+- **Exact, not statistical.** Because these numbers come from real
+  per-call boundaries rather than samples landing on a leaf PC, they can
+  (and did, during testing) disagree numerically with Table 2's
+  statistical estimate for the same function — that's expected, and
+  Table 3's numbers are the more precise ones when both are available.
+
+Only traced functions get a row (the `.mpa`-selected set), the same
+scoping as Tables 1 and 2. If any rank lacked hardware counters, this
+table is replaced by an explanatory note instead of showing zeros — see
+[Table 2](#table-2-hardware-counter-characterisation) for why that can
+happen.
+
 
 ### Configuration
 
@@ -485,6 +520,9 @@ launcher's environment-passing convention).
 | `MINIPROF_MPA_THRESHOLD` | sample | `1.0` | Minimum Samp% for a USER function to be suggested |
 | `MINIPROF_TRACE_FUNCS` | trace | `miniprof.mpa` | Which `.mpa`-format file to read the trace function list from |
 | `MINIPROF_TRACE_OUTPUT` | trace | `miniprof_trace_report.txt` | Tracing report path |
+| `MINIPROF_IPC_COMPUTE_THRESHOLD` | both | `1.2` | IPC at/above this → COMPUTE-BOUND (hardware-counter tables) |
+| `MINIPROF_IPC_MEMORY_THRESHOLD` | both | `0.5` | IPC at/below this + high LLC misses → MEMORY-BOUND |
+| `MINIPROF_LLC_MEMORY_THRESHOLD` | both | `500` | LLC misses per 1000 samples/calls, combined with low IPC, → MEMORY-BOUND |
 | `MINIPROF_VERBOSE` | both | `0` | Set to `1` for per-rank diagnostic lines on stderr |
 
 The `.mpa` file format is plain text: one function name per line,
@@ -608,15 +646,37 @@ memory-mapping data, not from `.dynsym`, so they succeed either way; only
 `dli_sname` (the symbol *name*) ever needed `.dynsym`, and that's
 precisely the part with an `addr2line` fallback already in place.
 
-**PIE binaries need load-base correction.** Every modern Linux binary is
-position-independent by default, so the addresses `nm`/`addr2line` print
-(link-time addresses, relative to the binary's own coordinate system)
-don't match the addresses you see at runtime (`backtrace()`,
-`__cyg_profile_func_enter`'s `this_fn` argument) until you account for
-where the loader actually placed the binary in memory. miniprof reads its
-own load base from `/proc/self/maps` (`dli_fbase` via `dladdr` for
-sampling; a `/proc/self/maps` scan for trace mode) and applies the offset
-before every comparison.
+**PIE binaries need load-base correction — non-PIE binaries must NOT get
+one.** A PIE (`ET_DYN`) binary loads at a runtime-chosen address, so the
+addresses `nm`/`addr2line` print (link-time addresses, relative to the
+binary's own coordinate system) don't match the addresses you see at
+runtime (`backtrace()`, `__cyg_profile_func_enter`'s `this_fn` argument)
+until you add the load base the loader actually placed it at. A non-PIE
+(`ET_EXEC`) binary loads at its *fixed* link-time address instead — `nm`'s
+addresses are already the runtime addresses, and adding a load base on
+top double-counts it, so every comparison silently fails to match.
+
+This isn't a hypothetical: this exact bug shipped and was only caught
+during testing of the hardware-counter trace-mode work, because trace
+mode's function-address matching in `instrument.c` unconditionally added
+`/proc/self/maps`'s load base regardless of binary type — and this
+toolchain's `mpicc` produces `ET_EXEC` (non-PIE) binaries by default, not
+PIE. The result was silent, not a crash: every traced function's address
+comparison failed, `__cyg_profile_func_enter`/`_exit` were called
+correctly but never matched, and trace mode reported real MPI timing
+(Table 2, wrapped independently in `mpi_trace.c`) but **zero** user
+functions (Table 1) on every run — with no error, since a `.mpa` file
+listing legitimately-resolvable functions produces no unresolved-symbol
+warning at `instrument_load_trace_list()` time (that check validates
+symbol names against `nm`'s table, not against runtime address matching).
+`mpa-check` didn't catch it either, for the same reason: it validates
+symbol names, not runtime address matching. Fixed by reading the ELF
+header's `e_type` field directly (`instrument.c`'s `is_pie_executable()`)
+and only adding the `/proc/self/maps` load base for `ET_DYN` binaries;
+`ET_EXEC` binaries now correctly use a load base of 0. Sample mode's
+`dladdr()`-based path was never affected — `dli_fbase` already returns 0
+for non-PIE executables, so it happened to do the right thing by
+construction.
 
 If you ever see a `??` symbol with surprisingly high sample weight, or a
 function from your `.mpa` file failing to resolve when you're sure the
@@ -670,15 +730,22 @@ numbers.
   [Two-pass profiling workflow](#two-pass-profiling-workflow)). Only
   sample mode is fully transparent.
 - Hardware performance counters cover cycles, instructions, and
-  cache-misses (see [Table 2](#table-2-hardware-counter-characterisation));
-  FLOP counting is not implemented.
-- The hardware counter group (Table 2) is opened by, and only counts,
-  the thread that calls `MPI_Init` — correct for the common
-  single-threaded-per-rank case, but not extended to per-OpenMP-thread
-  counter groups yet. If `SIGPROF` fires on a different thread in an
-  OpenMP+MPI hybrid code, the counter delta gets attributed to the
-  wrong thread's activity; sample counts (Table 1) are unaffected, only
-  Table 2's IPC/LLC-miss numbers would be misleading in that scenario.
+  cache-misses (sample mode's
+  [Table 2](#table-2-hardware-counter-characterisation) and trace mode's
+  Table 3); FLOP counting is not implemented.
+- The hardware counter group is opened by, and only counts, the thread
+  that calls `MPI_Init` — correct for the common single-threaded-per-rank
+  case, but not extended to per-OpenMP-thread counter groups yet. In
+  sample mode, if `SIGPROF` fires on a different thread in an OpenMP+MPI
+  hybrid code, the counter delta gets attributed to the wrong thread's
+  activity; sample counts (Table 1) are unaffected, only Table 2's
+  IPC/LLC-miss numbers would be misleading in that scenario. In trace
+  mode, `__cyg_profile_func_enter`/`_exit` fire on whichever thread calls
+  the traced function, so a function called only from a non-`MPI_Init`
+  thread would read counters that were never enabled on that thread —
+  `hwc_read()` fails cleanly in that case and the function's row falls
+  back to `--` (see the `cycles == 0` handling in `trace_aggregator.c`)
+  rather than showing a wrong number.
 - The `PROFILER` group's percentage (signal handler + dispatch overhead)
   scales inversely with `MINIPROF_INTERVAL_MS` — the default 10ms
   interval keeps this small for real workloads; the README's own

@@ -29,6 +29,7 @@
 
 #define _GNU_SOURCE
 #include "trace_store.h"
+#include "sampler_hwc.h"
 #include "../include/miniprof.h"
 #include <mpi.h>
 #include <stdio.h>
@@ -53,7 +54,13 @@ static char            g_exe_path[512] = {0};
 /* ── find this executable's runtime load base from /proc/self/maps ──────── *
  * The first mapping for our own executable path gives us the base address
  * the loader placed it at — this is what link-time addresses (from `nm`)
- * need to be offset by to become comparable to runtime PCs.            */
+ * need to be offset by to become comparable to runtime PCs, but ONLY for
+ * a PIE (ET_DYN) binary. A non-PIE (ET_EXEC) binary loads at its fixed
+ * link-time address — the same address `nm` already prints — so adding
+ * this mapping base on top would double-count it and every comparison
+ * in is_traced_pc() would silently fail to match (confirmed: this HPC
+ * toolchain's mpicc produces ET_EXEC binaries by default, not PIE, so
+ * this bug reliably fired here). See is_pie_executable() below.        */
 static uintptr_t find_exe_load_base(const char *exe_path)
 {
     FILE *f = fopen("/proc/self/maps", "r");
@@ -72,6 +79,28 @@ static uintptr_t find_exe_load_base(const char *exe_path)
     }
     fclose(f);
     return base;
+}
+
+/* ── is this executable PIE (ET_DYN) or fixed-address (ET_EXEC)? ─────────── *
+ * Reads e_type directly from the ELF header (offset 16, 2 bytes,
+ * little-endian on every platform this profiler targets) rather than
+ * shelling out — this is a 64-byte read, no need for `readelf`/`file`.
+ * Defaults to "PIE" (1) on any read failure, preserving the previous
+ * (offsetting) behaviour rather than silently breaking address matching
+ * in a new way if the file can't be inspected.                         */
+static int is_pie_executable(const char *exe_path)
+{
+    FILE *f = fopen(exe_path, "rb");
+    if (!f) return 1;
+    unsigned char hdr[18];
+    size_t n = fread(hdr, 1, sizeof(hdr), f);
+    fclose(f);
+    if (n < sizeof(hdr) || hdr[0] != 0x7f || hdr[1] != 'E' ||
+        hdr[2] != 'L' || hdr[3] != 'F') {
+        return 1;
+    }
+    uint16_t e_type = (uint16_t)(hdr[16] | (hdr[17] << 8));
+    return e_type == 3; /* ET_DYN */
 }
 
 /* ── run `nm` once, parse out (name -> link-time address) for our names ─── */
@@ -145,7 +174,12 @@ void instrument_load_trace_list(const char *path)
     if (g_n_entries == 0) { g_instrument_enabled = 0; return; }
 
     resolve_trace_addresses();
-    g_exe_load_base = find_exe_load_base(g_exe_path);
+    int is_pie = is_pie_executable(g_exe_path);
+    g_exe_load_base = is_pie ? find_exe_load_base(g_exe_path) : 0;
+    /* 0 is a legitimate load base for a non-PIE binary (its link-time
+       and runtime addresses are identical), but for a PIE binary it
+       means find_exe_load_base() failed to find our own mapping. */
+    int load_base_ok = is_pie ? (g_exe_load_base != 0) : 1;
 
     /* report + drop entries we failed to resolve (typo, inlined away,
        optimized out, wrong build, etc.) — silent failure here would
@@ -194,8 +228,13 @@ void instrument_load_trace_list(const char *path)
 
     g_n_entries = kept;
 
-    g_instrument_enabled = (g_n_entries > 0 && g_exe_load_base != 0);
+    g_instrument_enabled = (g_n_entries > 0 && load_base_ok);
     trace_store_init();
+
+    /* Trace mode has no sampler_start() equivalent to do this — sample
+     * mode's counter group is opened there instead. Only bother if
+     * there's actually something to trace. */
+    if (g_instrument_enabled) hwc_init();
 }
 
 /* ── public: reverse lookup used by miniprof.c when building the report ─── *

@@ -123,6 +123,11 @@ typedef struct {
     long   calls;
     double incl_time_s;     /* inclusive wall time (incl. callees)           */
     double excl_time_s;     /* exclusive wall time (self only)               */
+    /* exact per-invocation hardware counters, summed across calls —
+       INCLUSIVE (like incl_time_s, not excl_time_s); 0 if unavailable */
+    uint64_t cycles;
+    uint64_t instructions;
+    uint64_t cache_misses;
 } miniprof_trace_func_t;
 
 /* one traced MPI call's accumulated stats (sent rank->rank0) */
@@ -139,6 +144,7 @@ typedef struct {
     double                  wall_elapsed_s;
     int                     n_funcs;
     int                     n_mpi;
+    int                     hwc_available;   /* 1 if this rank had hardware counters */
     miniprof_trace_func_t   funcs[MINIPROF_TRACE_MAX_FUNCS];
     miniprof_trace_mpi_t    mpi  [MINIPROF_TRACE_MAX_FUNCS];
 } miniprof_trace_profile_t;
