@@ -10,6 +10,7 @@
 #   example-f-trace— build examples/heat1d+trace (Fortran instrumented binary)
 #   example-3d     — build examples/diffusion3d (3D anisotropic diffusion, 2D Cartesian MPI)
 #   example-3d-trace— build examples/diffusion3d+trace (instrumented)
+#   example-hwc-validate — build examples/hwc_validate (Table 2 sanity check)
 #   mpa-check      — build the standalone .mpa validator (no MPI needed)
 #   run            — sampling run with 4 ranks (heat2d)
 #   run-trace      — validate + trace run (heat2d)
@@ -17,6 +18,8 @@
 #   run-f-trace    — Fortran equivalent of run-trace
 #   run-3d         — sampling run with 4 ranks (diffusion3d)
 #   run-3d-trace   — validate + trace run (diffusion3d)
+#   run-hwc-validate — sanity-check Table 2 (hardware counter characterisation)
+#                      against a known compute-bound / memory-bound kernel pair
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
 #
@@ -72,6 +75,7 @@ EXAMPLE_DIR := examples
 LIB_SRCS := src/profile_store.c    \
             src/path_store.c       \
             src/sampler.c          \
+            src/sampler_hwc.c      \
             src/symbolizer.c       \
             src/aggregator.c       \
             src/mpa_writer.c       \
@@ -91,11 +95,13 @@ EXAMPLE_F     := $(EXAMPLE_DIR)/heat1d
 EXAMPLE_F_TRACE := $(EXAMPLE_DIR)/heat1d+trace
 EXAMPLE_3D    := $(EXAMPLE_DIR)/diffusion3d
 EXAMPLE_3D_TRACE := $(EXAMPLE_DIR)/diffusion3d+trace
+EXAMPLE_HWC_VALIDATE := $(EXAMPLE_DIR)/hwc_validate
 
 # ── rules ─────────────────────────────────────────────────────────────────────
 .PHONY: all lib examples example example-trace example-f example-f-trace \
-        example-3d example-3d-trace mpa-check \
-        run run-trace run-f run-f-trace run-3d run-3d-trace mpa clean
+        example-3d example-3d-trace example-hwc-validate mpa-check \
+        run run-trace run-f run-f-trace run-3d run-3d-trace \
+        run-hwc-validate mpa clean
 
 all: lib examples
 
@@ -169,6 +175,16 @@ example-3d-trace: $(EXAMPLE_3D_TRACE)
 
 $(EXAMPLE_3D_TRACE): $(LIB)
 	$(MAKE) -C $(EXAMPLE_DIR) diffusion3d+trace NX=$(NX) NY=$(NY) NZ=$(NZ) NSTEPS_3D=$(NSTEPS_3D)
+
+# hwc_validate — sanity check for Table 2 (hardware counter
+# characterisation): one kernel deliberately compute-bound (independent
+# FP chains, tiny working set) and one deliberately memory-bound
+# (pointer-chase over a buffer many times larger than LLC). Not part of
+# `make all` — a manual/CI check, see run-hwc-validate below.
+example-hwc-validate: $(EXAMPLE_HWC_VALIDATE)
+
+$(EXAMPLE_HWC_VALIDATE): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) hwc_validate
 
 # Standalone validator — deliberately NOT linked against libminiprof or
 # MPI at all (it just runs `nm` on a binary and cross-checks a .mpa file),
@@ -285,11 +301,41 @@ run-3d-trace: $(EXAMPLE_3D_TRACE) mpa-check
 	@echo "=== miniprof tracing report (3D diffusion) ==="
 	@cat miniprof_trace_report_3d.txt
 
+# ── run-hwc-validate: Table 2 sanity check ──────────────────────────────────
+# Single rank is deliberate: this checks classification correctness, not
+# parallel behaviour, and per-rank aggregation would only dilute the
+# signal. ~6s wall time (two 3s kernels). SKIPs (exit 0) rather than
+# FAILs when hardware counters aren't available on this system, since
+# that's an environment property, not a bug.
+run-hwc-validate: $(EXAMPLE_HWC_VALIDATE)
+	@echo "Running hwc_validate (SAMPLE mode) with 1 MPI rank..."
+	MINIPROF_MODE=sample \
+	MINIPROF_OUTPUT=miniprof_hwc_validate_report.txt \
+	MINIPROF_MPA_OUTPUT=miniprof_hwc_validate.mpa \
+	mpirun -n 1 ./$(EXAMPLE_HWC_VALIDATE)
+	@echo ""
+	@if grep -q "Hardware counters not available" miniprof_hwc_validate_report.txt; then \
+		echo "SKIP: hardware counters unavailable on this system — nothing to validate."; \
+	else \
+		echo "=== Table 2 ==="; \
+		sed -n '/Table 2:/,/^$$/p' miniprof_hwc_validate_report.txt; \
+		echo ""; \
+		FAIL=0; \
+		grep "compute_bound_kernel" miniprof_hwc_validate_report.txt | grep -q "COMPUTE-BOUND" \
+			&& echo "PASS: compute_bound_kernel classified COMPUTE-BOUND" \
+			|| { echo "FAIL: compute_bound_kernel NOT classified COMPUTE-BOUND"; FAIL=1; }; \
+		grep "memory_bound_kernel" miniprof_hwc_validate_report.txt | grep -q "MEMORY-BOUND" \
+			&& echo "PASS: memory_bound_kernel classified MEMORY-BOUND" \
+			|| { echo "FAIL: memory_bound_kernel NOT classified MEMORY-BOUND"; FAIL=1; }; \
+		exit $$FAIL; \
+	fi
+
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:
 	rm -f $(LIB_OBJS) $(LIB) $(EXAMPLE) $(EXAMPLE_TRACE) \
 	      $(EXAMPLE_F) $(EXAMPLE_F_TRACE) \
-	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) mpa-check \
+	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) $(EXAMPLE_HWC_VALIDATE) mpa-check \
 	      miniprof_report.txt miniprof.mpa miniprof_trace_report.txt \
 	      miniprof_report_f.txt miniprof_f.mpa miniprof_trace_report_f.txt \
-	      miniprof_report_3d.txt miniprof_3d.mpa miniprof_trace_report_3d.txt
+	      miniprof_report_3d.txt miniprof_3d.mpa miniprof_trace_report_3d.txt \
+	      miniprof_hwc_validate_report.txt miniprof_hwc_validate.mpa

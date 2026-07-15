@@ -1,6 +1,8 @@
 #ifndef MINIPROF_H
 #define MINIPROF_H
 
+#include <stdint.h>
+
 /*
  * miniprof.h — public API for the miniprof sampling/tracing profiler
  *
@@ -37,6 +39,11 @@
  *   MINIPROF_TRACE_FUNCS   Function list for trace mode (default: miniprof.mpa)
  *   MINIPROF_TRACE_OUTPUT  Tracing report path          (default: miniprof_trace_report.txt)
  *   MINIPROF_VERBOSE       Print per-rank diagnostics   (default: 0)
+ *   MINIPROF_IPC_COMPUTE_THRESHOLD  IPC above this => COMPUTE-BOUND (default: 1.2)
+ *   MINIPROF_IPC_MEMORY_THRESHOLD   IPC below this + high LLC misses
+ *                                   => MEMORY-BOUND                 (default: 0.5)
+ *   MINIPROF_LLC_MEMORY_THRESHOLD   LLC misses per 1000 samples, combined
+ *                                   with low IPC, => MEMORY-BOUND   (default: 500)
  */
 
 #ifdef __cplusplus
@@ -51,6 +58,11 @@ extern "C" {
 #define MINIPROF_DEFAULT_MPA_THRESHOLD 1.0
 #define MINIPROF_DEFAULT_TRACE_FUNCS   "miniprof.mpa"
 #define MINIPROF_DEFAULT_TRACE_OUTPUT  "miniprof_trace_report.txt"
+
+/* ── hardware-counter classification thresholds (Table 3) ───────────────── */
+#define MINIPROF_DEFAULT_IPC_COMPUTE_THRESHOLD  1.2   /* IPC above → COMPUTE-BOUND */
+#define MINIPROF_DEFAULT_IPC_MEMORY_THRESHOLD   0.5   /* IPC below → candidate MEMORY-BOUND */
+#define MINIPROF_DEFAULT_LLC_MEMORY_THRESHOLD 500.0   /* + LLC miss/Ksamp above → MEMORY-BOUND */
 
 /* ── profile store limits ────────────────────────────────────────────────── */
 #define MINIPROF_MAX_PCS        65536   /* unique PCs per rank              */
@@ -80,6 +92,10 @@ typedef struct {
     char        file[MINIPROF_SYMBOL_LEN];   /* source file (addr2line)      */
     int         line;                        /* source line  (addr2line)     */
     char        group[MINIPROF_GROUP_LEN];   /* USER / MPI / OMP / LIBC / .. */
+    /* hardware-counter accumulation (0 if counters were unavailable) */
+    uint64_t    cycles;
+    uint64_t    instructions;
+    uint64_t    cache_misses;
 } miniprof_sym_t;
 
 /* ── flat profile sent from each rank to rank 0 ──────────────────────────── */
@@ -88,6 +104,7 @@ typedef struct {
     int            n_syms;                          /* entries used in syms[] */
     long           total_samples;
     double         wall_elapsed_s;
+    int            hwc_available;    /* 1 if this rank had hardware counters */
     miniprof_sym_t syms[MINIPROF_MAX_SEND_SYMS];     /* full (func,line) table */
 } miniprof_rank_profile_t;
 

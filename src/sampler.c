@@ -18,6 +18,7 @@
 
 #define _GNU_SOURCE
 #include "sampler.h"
+#include "sampler_hwc.h"
 #include "profile_store.h"
 #include "path_store.h"
 #include <signal.h>
@@ -54,8 +55,21 @@ static void sigprof_handler(int sig, siginfo_t *si, void *ctx)
 
     /* Flat profile: record ONLY the true leaf (exclusive time).
      * Total samples == number of SIGPROF deliveries, and each
-     * function's Samp% is its real fraction of CPU time. */
-    profile_store_record(leaf_pc);
+     * function's Samp% is its real fraction of CPU time.
+     *
+     * When hardware counters are available, the cycles/instructions/
+     * cache-misses accumulated since the *previous* sample get
+     * attributed to this same leaf PC. That's an approximation (the
+     * previous interval's counter activity isn't all from this one
+     * PC), but at typical sampling rates and with enough samples per
+     * function it converges to a representative IPC/miss-rate — the
+     * same statistical argument that makes PC sampling itself valid. */
+    uint64_t dcyc = 0, dins = 0, dmiss = 0;
+    if (hwc_enabled() && hwc_read_delta(&dcyc, &dins, &dmiss) == 0) {
+        profile_store_record_hwc(leaf_pc, dcyc, dins, dmiss);
+    } else {
+        profile_store_record(leaf_pc);
+    }
 
     /* Full call chain for call-path attribution.
      * backtrace() gives us the chain from sigprof_handler upward;
@@ -83,6 +97,13 @@ void sampler_start(int interval_ms, int depth)
 
     profile_store_init();
     path_store_init();
+
+    /* Hardware counter group (cycles/instructions/cache-misses). Not
+     * yet read from the signal handler — this only establishes and
+     * self-tests the counter group so a future increment can start
+     * accumulating IPC/cache-miss data per sample. Falls back silently
+     * to sampling-only if counters are unavailable (see sampler_hwc.c). */
+    hwc_init();
 
     /* Install signal handler */
     struct sigaction sa;
@@ -121,4 +142,6 @@ void sampler_stop(void)
     sa.sa_handler = SIG_DFL;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGPROF, &sa, NULL);
+
+    hwc_shutdown();
 }

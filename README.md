@@ -250,6 +250,8 @@ Build all three sample and trace variants with `make examples`.
 | `make example-3d-trace` | Build `examples/diffusion3d+trace` (instrumented) |
 | `make run-3d` | Sampling run on `diffusion3d`, 4 ranks |
 | `make run-3d-trace` | Validate and trace `diffusion3d` |
+| `make example-hwc-validate` | Build `examples/hwc_validate` (Table 2 sanity check, see below) |
+| `make run-hwc-validate` | Run `hwc_validate`, 1 rank; asserts the compute-bound/memory-bound kernels land in the expected Table 2 classification |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
 
@@ -529,6 +531,50 @@ The table groups samples by category, function, and source line:
 Below the group/function table are a per-rank top-5 breakdown and the
 raw per-rank sample counts and wall-clock times.
 
+#### Table 2: Hardware Counter Characterisation
+
+If the kernel allows it (`perf_event_paranoid` ≤ 2, or `CAP_PERFMON`),
+each sample also accumulates CPU cycles, retired instructions, and
+last-level-cache misses via `perf_event_open`, and the report gains a
+second table classifying every function as compute-bound or
+memory-bound:
+
+```
+Table 2: Hardware Counter Characterisation (per function)
+------------------------------------------------------------------------------------
+      Samp     IPC  LLC miss/Ksamp    Cyc/samp  Classification  Function
+------------------------------------------------------------------------------------
+       832    1.83              12   1.140e+06  COMPUTE-BOUND   compute_viscous_dissipation
+       659    0.42             847   4.220e+06  MEMORY-BOUND    compute_stencil
+------------------------------------------------------------------------------------
+  Classification: IPC>=1.2 = COMPUTE-BOUND, IPC<=0.5 + LLC miss/Ksamp>=500 = MEMORY-BOUND, else MIXED
+```
+
+- **IPC** — instructions retired per cycle for that function, summed
+  across all ranks and all samples. High IPC means the pipeline is
+  staying full; low IPC means the CPU is stalled, usually waiting on
+  memory.
+- **LLC miss/Ksamp** — last-level-cache misses per 1000 samples
+  attributed to that function.
+- **Classification** — a heuristic from IPC and LLC miss rate; the
+  three cutoffs are architecture-dependent and configurable via
+  `MINIPROF_IPC_COMPUTE_THRESHOLD`, `MINIPROF_IPC_MEMORY_THRESHOLD`, and
+  `MINIPROF_LLC_MEMORY_THRESHOLD` (defaults: 1.2, 0.5, 500 — tune these
+  per CPU generation; the "right" cache-miss rate to call memory-bound
+  varies a lot by memory subsystem).
+
+The counter deltas between consecutive samples are attributed to
+whichever leaf PC the *second* sample landed on — an approximation, not
+exact per-instruction accounting, but one that converges to a
+representative IPC/miss-rate given enough samples for a function, the
+same statistical argument that makes PC sampling itself valid.
+
+If hardware counters aren't available on any rank (denied by
+`perf_event_paranoid`, or no PMU — e.g. inside a VM without a virtual
+PMU), sampling proceeds completely normally and Table 2 is replaced with
+a one-line note instead of silently showing zeros. A one-time diagnostic
+is also printed to stderr (rank 0 only) at startup in that case.
+
 
 ### Notes on symbol resolution
 
@@ -623,8 +669,16 @@ numbers.
   against `libminiprof.so`, see
   [Two-pass profiling workflow](#two-pass-profiling-workflow)). Only
   sample mode is fully transparent.
-- Hardware performance counters, such as FLOP or cache-miss counting, are
-  not implemented.
+- Hardware performance counters cover cycles, instructions, and
+  cache-misses (see [Table 2](#table-2-hardware-counter-characterisation));
+  FLOP counting is not implemented.
+- The hardware counter group (Table 2) is opened by, and only counts,
+  the thread that calls `MPI_Init` — correct for the common
+  single-threaded-per-rank case, but not extended to per-OpenMP-thread
+  counter groups yet. If `SIGPROF` fires on a different thread in an
+  OpenMP+MPI hybrid code, the counter delta gets attributed to the
+  wrong thread's activity; sample counts (Table 1) are unaffected, only
+  Table 2's IPC/LLC-miss numbers would be misleading in that scenario.
 - The `PROFILER` group's percentage (signal handler + dispatch overhead)
   scales inversely with `MINIPROF_INTERVAL_MS` — the default 10ms
   interval keeps this small for real workloads; the README's own

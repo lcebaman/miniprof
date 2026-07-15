@@ -54,7 +54,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate
 
 all: $(EXAMPLES)
 
@@ -76,5 +76,11 @@ diffusion3d: diffusion3d.c $(LIB)
 diffusion3d+trace: diffusion3d.c $(LIB)
 	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) -finstrument-functions $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -lm -o $@
 
+# Not part of `all` — a manual validator for Table 2 (hardware counter
+# characterisation), not a demo. See `make run-hwc-validate` at the repo
+# root.
+hwc_validate: hwc_validate.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 clean:
-	rm -f $(EXAMPLES)
+	rm -f $(EXAMPLES) hwc_validate
