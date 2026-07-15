@@ -39,6 +39,9 @@ typedef struct {
     char dso  [MINIPROF_SYMBOL_LEN];
     long total;
     long per_rank[MAX_RANKS_TRACKED];
+    uint64_t cycles;         /* 0 if hardware counters were unavailable */
+    uint64_t instructions;
+    uint64_t cache_misses;
 } func_roll_t;
 
 typedef struct { char group[MINIPROF_GROUP_LEN]; long total; } grp_roll_t;
@@ -86,7 +89,9 @@ static int cmp_func_rankcol_desc(const void *a, const void *b)
 
 /* ── main entry point ────────────────────────────────────────────────────── */
 void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
-                    const char *mpa_outfile, double mpa_threshold)
+                    const char *mpa_outfile, double mpa_threshold,
+                    double ipc_compute_threshold, double ipc_memory_threshold,
+                    double llc_memory_threshold)
 {
     int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -117,6 +122,9 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
     int    *e_line   = calloc(max_entries, sizeof(int));
     long   *e_total  = calloc(max_entries, sizeof(long));
     long   *e_perrank= calloc((size_t)max_entries * world_size, sizeof(long));
+    uint64_t *e_cycles      = calloc(max_entries, sizeof(uint64_t));
+    uint64_t *e_instructions= calloc(max_entries, sizeof(uint64_t));
+    uint64_t *e_cache_misses= calloc(max_entries, sizeof(uint64_t));
     int     n_entries = 0;
 
     for (int r = 0; r < world_size; r++) {
@@ -144,11 +152,19 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
             }
             e_total[idx] += sym->count;
             e_perrank[(size_t)idx * world_size + r] += sym->count;
+            e_cycles[idx]       += sym->cycles;
+            e_instructions[idx] += sym->instructions;
+            e_cache_misses[idx] += sym->cache_misses;
         }
     }
 
     long grand_samples = 0;
-    for (int r = 0; r < world_size; r++) grand_samples += all[r].total_samples;
+    int  ranks_with_hwc = 0;
+    for (int r = 0; r < world_size; r++) {
+        grand_samples += all[r].total_samples;
+        ranks_with_hwc += all[r].hwc_available ? 1 : 0;
+    }
+    int hwc_all_available = (world_size > 0 && ranks_with_hwc == world_size);
 
     /* sort entries by total_count descending */
     g_e_total = e_total;
@@ -175,6 +191,9 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
             snprintf(funcs[fidx].dso,   MINIPROF_SYMBOL_LEN, "%s", e_dso[e]);
         }
         funcs[fidx].total += e_total[e];
+        funcs[fidx].cycles       += e_cycles[e];
+        funcs[fidx].instructions += e_instructions[e];
+        funcs[fidx].cache_misses += e_cache_misses[e];
         for (int r = 0; r < ranks_tracked; r++)
             funcs[fidx].per_rank[r] += e_perrank[(size_t)e * world_size + r];
     }
@@ -318,6 +337,74 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
         free(line_idx);
         fputc('\n', f);
 
+        /* Table 2: hardware-counter characterisation (compute-bound vs
+         * memory-bound), from perf_event_open cycles/instructions/
+         * cache-misses accumulated alongside each sample. Skipped
+         * (with an explanatory note) unless every rank had counters
+         * available — a partial table would misleadingly imply the
+         * missing ranks simply did no work in those functions. */
+        fprintf(f, " Table 2: Hardware Counter Characterisation (per function)\n");
+        hline(f, W);
+        if (!hwc_all_available) {
+            fprintf(f, "  Hardware counters not available on %d/%d rank(s) "
+                       "(perf_event_open denied or unsupported) — skipping.\n"
+                       "  See MINIPROF_IPC_COMPUTE_THRESHOLD / "
+                       "MINIPROF_IPC_MEMORY_THRESHOLD / "
+                       "MINIPROF_LLC_MEMORY_THRESHOLD in miniprof.h.\n",
+                    world_size - ranks_with_hwc, world_size);
+        } else {
+            fprintf(f, "  %8s  %6s  %14s  %10s  %-14s  Function\n",
+                    "Samp", "IPC", "LLC miss/Ksamp", "Cyc/samp", "Classification");
+            hline(f, W);
+
+            int shown = 0;
+            for (int oi = 0; oi < n_funcs && shown < MINIPROF_TOP_N; oi++) {
+                int fi = forder[oi];
+                uint64_t cyc  = funcs[fi].cycles;
+                uint64_t ins  = funcs[fi].instructions;
+                uint64_t miss = funcs[fi].cache_misses;
+                long     cnt  = funcs[fi].total;
+
+                if (cyc == 0) {
+                    /* function had samples but never a nonzero counter
+                       delta attributed to it (e.g. too short-lived
+                       relative to the sampling interval) */
+                    fprintf(f, "  %8ld  %6s  %14s  %10s  %-14s  %s\n",
+                            cnt, "--", "--", "--", "--", funcs[fi].name);
+                    shown++;
+                    continue;
+                }
+
+                double ipc          = (double)ins / (double)cyc;
+                double llc_per_ksamp = cnt > 0
+                                       ? (double)miss / ((double)cnt / 1000.0)
+                                       : 0.0;
+                double cyc_per_samp = cnt > 0 ? (double)cyc / (double)cnt : 0.0;
+
+                const char *cls;
+                if (ipc >= ipc_compute_threshold) {
+                    cls = "COMPUTE-BOUND";
+                } else if (ipc <= ipc_memory_threshold &&
+                           llc_per_ksamp >= llc_memory_threshold) {
+                    cls = "MEMORY-BOUND";
+                } else {
+                    cls = "MIXED";
+                }
+
+                fprintf(f, "  %8ld  %6.2f  %14.0f  %10.3e  %-14s  %s\n",
+                        cnt, ipc, llc_per_ksamp, cyc_per_samp, cls,
+                        funcs[fi].name);
+                shown++;
+            }
+            hline(f, W);
+            fprintf(f, "  Classification: IPC>=%.1f = COMPUTE-BOUND, "
+                       "IPC<=%.1f + LLC miss/Ksamp>=%.0f = MEMORY-BOUND, "
+                       "else MIXED\n",
+                    ipc_compute_threshold, ipc_memory_threshold,
+                    llc_memory_threshold);
+        }
+        fputc('\n', f);
+
         /* per-rank breakdown */
         fprintf(f, " PER-RANK BREAKDOWN (top %d functions per rank)\n",
                 MINIPROF_TOP_PER_RANK);
@@ -368,6 +455,7 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
 done:
     free(e_group); free(e_name); free(e_dso); free(e_file);
     free(e_line); free(e_total); free(e_perrank);
+    free(e_cycles); free(e_instructions); free(e_cache_misses);
     free(order); free(funcs); free(forder);
     free(all);
 }

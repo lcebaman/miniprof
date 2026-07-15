@@ -33,6 +33,11 @@ static int g_fd_insns  = -1;
 static int g_fd_misses = -1;
 static int g_enabled   = 0;
 
+/* baseline for hwc_read_delta(), seeded from hwc_init()'s self-test
+ * snapshot so the first real delta reflects time since enable, not
+ * since an all-zero epoch */
+static hwc_snapshot_t g_prev_delta;
+
 static long perf_event_open(struct perf_event_attr *attr, int group_fd)
 {
     /* pid=0 (calling thread), cpu=-1 (any CPU the thread runs on) */
@@ -149,9 +154,9 @@ int hwc_init(void)
     g_enabled = 1;
 
     /* Self-test: confirm the group actually produces a well-formed
-     * snapshot before trusting it for the rest of the run. */
-    hwc_snapshot_t snap;
-    if (hwc_read(&snap) != 0 || snap.nr != 3) {
+     * snapshot before trusting it for the rest of the run. Doubles as
+     * the baseline for hwc_read_delta()'s first delta. */
+    if (hwc_read(&g_prev_delta) != 0 || g_prev_delta.nr != 3) {
         if (is_rank0()) {
             fprintf(stderr,
                 "[miniprof] hardware counter group opened but read() "
@@ -190,8 +195,39 @@ int hwc_read(hwc_snapshot_t *out)
     return 0;
 }
 
+int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
+                   uint64_t *cache_misses)
+{
+    hwc_snapshot_t snap;
+    if (hwc_read(&snap) != 0) return -1;
+
+    uint64_t dcyc  = snap.cycles       - g_prev_delta.cycles;
+    uint64_t dins  = snap.instructions - g_prev_delta.instructions;
+    uint64_t dmiss = snap.cache_misses - g_prev_delta.cache_misses;
+
+    /* PMU multiplexing correction: if the kernel time-shared our group
+     * with other active counters (e.g. a concurrent `perf stat`), only
+     * a fraction of the elapsed time was actually spent counting.
+     * Scaling by time_enabled/time_running extrapolates to what the
+     * full-time count would have been — the same correction `perf
+     * stat` itself applies. */
+    uint64_t dt_en  = snap.time_enabled - g_prev_delta.time_enabled;
+    uint64_t dt_run = snap.time_running - g_prev_delta.time_running;
+    if (dt_run > 0 && dt_run < dt_en) {
+        double scale = (double)dt_en / (double)dt_run;
+        dcyc  = (uint64_t)(dcyc  * scale);
+        dins  = (uint64_t)(dins  * scale);
+        dmiss = (uint64_t)(dmiss * scale);
+    }
+
+    g_prev_delta = snap;
+    *cycles = dcyc; *instructions = dins; *cache_misses = dmiss;
+    return 0;
+}
+
 void hwc_shutdown(void)
 {
     close_all();
     g_enabled = 0;
+    memset(&g_prev_delta, 0, sizeof(g_prev_delta));
 }

@@ -31,6 +31,14 @@ int hwc_enabled(void);
  * a short/failed read. No-op (returns -1) if hwc_enabled() is false. */
 int hwc_read(hwc_snapshot_t *out);
 
+/* Delta since the last call (or since hwc_init(), for the first call),
+ * corrected for PMU multiplexing via time_enabled/time_running. Async-
+ * signal-safe — this is what the SIGPROF handler calls. Returns 0 and
+ * writes *cycles, *instructions, *cache_misses on success, -1 (leaving
+ * the outputs untouched) if counters are disabled or the read failed. */
+int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
+                   uint64_t *cache_misses);
+
 /* Closes the counter fds. Safe to call even if hwc_init() was never
  * called or failed. */
 void hwc_shutdown(void);

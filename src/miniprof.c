@@ -25,6 +25,7 @@
 #define _GNU_SOURCE
 #include "../include/miniprof.h"
 #include "sampler.h"
+#include "sampler_hwc.h"
 #include "symbolizer.h"
 #include "aggregator.h"
 #include "profile_store.h"
@@ -55,6 +56,9 @@ static char            g_trace_funcs[512]   = MINIPROF_DEFAULT_TRACE_FUNCS;
 static char            g_trace_outfile[512] = MINIPROF_DEFAULT_TRACE_OUTPUT;
 static int             g_verbose      = 0;
 static struct timespec g_t_start;
+static double  g_ipc_compute_threshold = MINIPROF_DEFAULT_IPC_COMPUTE_THRESHOLD;
+static double  g_ipc_memory_threshold  = MINIPROF_DEFAULT_IPC_MEMORY_THRESHOLD;
+static double  g_llc_memory_threshold  = MINIPROF_DEFAULT_LLC_MEMORY_THRESHOLD;
 
 /* ── env-var helpers ─────────────────────────────────────────────────────── */
 static int env_int(const char *var, int def)
@@ -69,7 +73,13 @@ static double env_double(const char *var, double def)
 }
 
 /* ── sample-mode scratch buffer ──────────────────────────────────────────── */
-typedef struct { uintptr_t pc; long count; } pc_count_t;
+typedef struct {
+    uintptr_t pc;
+    long      count;
+    uint64_t  cycles;
+    uint64_t  instructions;
+    uint64_t  cache_misses;
+} pc_count_t;
 /* Buffer for collecting PCs from the profile store at finalize.
  * With leaf-only recording, the number of distinct PCs is bounded
  * by the number of unique instruction addresses the CPU was
@@ -80,12 +90,16 @@ typedef struct { uintptr_t pc; long count; } pc_count_t;
 static pc_count_t g_pcbuf[PCBUF_CAPACITY];
 static int        g_pcbuf_n = 0;
 
-static int collect_cb(uintptr_t pc, long count, void *arg)
+static int collect_cb(uintptr_t pc, long count, uint64_t cycles,
+                      uint64_t instructions, uint64_t cache_misses, void *arg)
 {
     (void)arg;
     if (g_pcbuf_n < PCBUF_CAPACITY) {
-        g_pcbuf[g_pcbuf_n].pc    = pc;
-        g_pcbuf[g_pcbuf_n].count = count;
+        g_pcbuf[g_pcbuf_n].pc           = pc;
+        g_pcbuf[g_pcbuf_n].count        = count;
+        g_pcbuf[g_pcbuf_n].cycles       = cycles;
+        g_pcbuf[g_pcbuf_n].instructions = instructions;
+        g_pcbuf[g_pcbuf_n].cache_misses = cache_misses;
         g_pcbuf_n++;
     }
     return 0;
@@ -142,6 +156,12 @@ void miniprof_init(int interval_ms)
     if (mpa_out) snprintf(g_mpa_outfile, sizeof(g_mpa_outfile), "%s", mpa_out);
     g_mpa_threshold = env_double("MINIPROF_MPA_THRESHOLD",
                                  MINIPROF_DEFAULT_MPA_THRESHOLD);
+    g_ipc_compute_threshold = env_double("MINIPROF_IPC_COMPUTE_THRESHOLD",
+                                         MINIPROF_DEFAULT_IPC_COMPUTE_THRESHOLD);
+    g_ipc_memory_threshold  = env_double("MINIPROF_IPC_MEMORY_THRESHOLD",
+                                         MINIPROF_DEFAULT_IPC_MEMORY_THRESHOLD);
+    g_llc_memory_threshold  = env_double("MINIPROF_LLC_MEMORY_THRESHOLD",
+                                         MINIPROF_DEFAULT_LLC_MEMORY_THRESHOLD);
 
     const char *trace_funcs = getenv("MINIPROF_TRACE_FUNCS");
     if (trace_funcs) snprintf(g_trace_funcs, sizeof(g_trace_funcs), "%s", trace_funcs);
@@ -182,6 +202,10 @@ void miniprof_init(int interval_ms)
 
 static void miniprof_finalize_sample(double elapsed)
 {
+    /* Captured before sampler_stop(), which shuts the counter group
+     * down (hwc_enabled() would read back 0 afterward otherwise). */
+    int hwc_was_enabled = hwc_enabled();
+
     sampler_stop();
 
     g_pcbuf_n = 0;
@@ -197,8 +221,11 @@ static void miniprof_finalize_sample(double elapsed)
 
     miniprof_sym_t *resolved = calloc(n_pcs, sizeof(miniprof_sym_t));
     for (int i = 0; i < n_pcs; i++) {
-        resolved[i].pc    = (void *)(uintptr_t)g_pcbuf[i].pc;
-        resolved[i].count = g_pcbuf[i].count;
+        resolved[i].pc           = (void *)(uintptr_t)g_pcbuf[i].pc;
+        resolved[i].count        = g_pcbuf[i].count;
+        resolved[i].cycles       = g_pcbuf[i].cycles;
+        resolved[i].instructions = g_pcbuf[i].instructions;
+        resolved[i].cache_misses = g_pcbuf[i].cache_misses;
     }
     symbolizer_resolve(resolved, n_pcs, /*use_addr2line=*/1);
 
@@ -208,6 +235,7 @@ static void miniprof_finalize_sample(double elapsed)
     local.total_samples  = profile_store_total();
     local.wall_elapsed_s = elapsed;
     local.n_syms         = 0;
+    local.hwc_available  = hwc_was_enabled;
 
     long samples_kept = 0;
     for (int i = 0; i < n_pcs; i++) {
@@ -220,7 +248,10 @@ static void miniprof_finalize_sample(double elapsed)
             }
         }
         if (found >= 0) {
-            local.syms[found].count += resolved[i].count;
+            local.syms[found].count        += resolved[i].count;
+            local.syms[found].cycles        += resolved[i].cycles;
+            local.syms[found].instructions  += resolved[i].instructions;
+            local.syms[found].cache_misses  += resolved[i].cache_misses;
             samples_kept += resolved[i].count;
         } else if (local.n_syms < MINIPROF_MAX_SEND_SYMS) {
             local.syms[local.n_syms] = resolved[i];
@@ -249,7 +280,9 @@ static void miniprof_finalize_sample(double elapsed)
                 local.rank, local.total_samples, elapsed, local.n_syms);
     }
 
-    aggregator_run(&local, g_outfile, g_mpa_outfile, g_mpa_threshold);
+    aggregator_run(&local, g_outfile, g_mpa_outfile, g_mpa_threshold,
+                   g_ipc_compute_threshold, g_ipc_memory_threshold,
+                   g_llc_memory_threshold);
 }
 
 static void miniprof_finalize_trace(double elapsed)
