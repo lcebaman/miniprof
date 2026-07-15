@@ -20,7 +20,7 @@ This repository contains two distinct parts:
 
 | Part | Location | Purpose |
 |---|---|---|
-| **Library** | `src/`, `include/`, `libminiprof.a` | The profiler to link into your own MPI application |
+| **Library** | `src/`, `include/`, `libminiprof.so`, `modulefiles/` | The profiler to link into your own MPI application (or preload transparently via the bundled Lmod module) |
 | **Examples** | `examples/` | Small C and Fortran programs plus a larger scientific benchmark |
 
 If you want to profile your own program, start with [Library](#library).
@@ -48,7 +48,7 @@ If you want to try miniprof first, skip to [Examples](#examples).
 make lib
 ```
 
-This creates `libminiprof.a`. The standalone `.mpa` validator is a
+This creates `libminiprof.so`. The standalone `.mpa` validator is a
 separate optional tool with no MPI dependency:
 
 ```bash
@@ -58,11 +58,58 @@ make mpa-check
 The default target, `make`, builds the library and all bundled examples.
 See [Examples](#examples) for example-specific targets.
 
-### Link miniprof into your application
+### Transparent sampling via `LD_PRELOAD`
+
+Because miniprof is a shared library, sample mode needs **zero changes**
+to your source or build: preload it over an already-built, unmodified
+binary and it self-attaches through the same `MPI_Init` PMPI
+interception described below.
 
 ```bash
-mpicc -O2 -g your_app.c -L/path/to/miniprof -lminiprof -ldl -lm -o your_app
+mpicc -O2 -g your_app.c -o your_app          # completely normal build
+LD_PRELOAD=/path/to/miniprof/libminiprof.so mpirun -n 64 ./your_app
 ```
+
+This is the intended way to wire miniprof up as an Lmod module: the
+module sets `LD_PRELOAD` and does nothing else, so `module load miniprof`
+followed by a normal `mpirun` produces a sampling report with no
+recompilation or relinking. `-g` is still recommended (see below) for
+source-line attribution, but function-level profiling works even without
+it, via an `nm`-based fallback — useful when preloading over a binary you
+didn't build yourself with debug info.
+
+A ready-to-use module is bundled at `modulefiles/miniprof/1.0.lua`. It
+locates `libminiprof.so` relative to its own path, so after `make lib`:
+
+```bash
+module use /path/to/miniprof/modulefiles
+module load miniprof
+mpirun -n 64 ./your_app
+```
+
+Trace mode still needs an explicit rebuild (see
+[Two-pass profiling workflow](#two-pass-profiling-workflow)), because it
+requires the compiler to actually emit `-finstrument-functions` calls
+into the target binary — that can't be injected after the fact.
+
+### Link miniprof into your application
+
+You can also link `libminiprof.so` directly, e.g. if you want the binary
+to always run under miniprof without relying on `LD_PRELOAD`:
+
+```bash
+mpicc -O2 -g your_app.c -L/path/to/miniprof -lminiprof \
+    -Wl,-rpath,/path/to/miniprof -Wl,--allow-shlib-undefined \
+    -ldl -lm -o your_app
+```
+
+`-Wl,--allow-shlib-undefined` is needed because `libminiprof.so`
+references a handful of Fortran PMPI symbols (`pmpi_init_` etc., see
+[Fortran applications](#fortran-applications)) that only resolve when the
+final binary also links Fortran's MPI bindings; some linkers otherwise
+treat an indirect shared library's undefined symbols as a hard error at
+link time even though they're only ever needed at load time. `-rpath` is
+optional — it just saves setting `LD_LIBRARY_PATH` at run time.
 
 That's it — no source changes required. `miniprof` intercepts
 `MPI_Init`/`MPI_Init_thread`/`MPI_Finalize` via the standard PMPI
@@ -90,7 +137,9 @@ binary, trace mode uses the instrumented one.
 
 ```bash
 mpicc -O2 -g -finstrument-functions your_app.c \
-    -L/path/to/miniprof -lminiprof -ldl -lm -o your_app+trace
+    -L/path/to/miniprof -lminiprof \
+    -Wl,-rpath,/path/to/miniprof -Wl,--allow-shlib-undefined \
+    -ldl -lm -o your_app+trace
 ```
 
 
@@ -98,18 +147,21 @@ mpicc -O2 -g -finstrument-functions your_app.c \
 
 Fortran MPI codes work the same way, automatically — no manual init
 calls, no separate API. Link your Fortran program against
-`libminiprof.a` using `mpifort`:
+`libminiprof.so` using `mpifort`:
 
 ```bash
-mpifort -O2 -g your_app.f90 -L/path/to/miniprof \
-    -lminiprof -ldl -lm -o your_app
+mpifort -O2 -g your_app.f90 -L/path/to/miniprof -lminiprof \
+    -Wl,-rpath,/path/to/miniprof -Wl,--allow-shlib-undefined \
+    -ldl -lm -o your_app
 ```
 
 For trace mode, build a second instrumented binary exactly as with C:
 
 ```bash
 mpifort -O2 -g -finstrument-functions your_app.f90 \
-    -L/path/to/miniprof -lminiprof -ldl -lm -o your_app+trace
+    -L/path/to/miniprof -lminiprof \
+    -Wl,-rpath,/path/to/miniprof -Wl,--allow-shlib-undefined \
+    -ldl -lm -o your_app+trace
 ```
 
 The bundled `examples/heat1d.f90` program demonstrates this setup; its
@@ -130,11 +182,15 @@ handles to real MPI C handles via the standard `MPI_*_f2c()` /
 `MPI_*_c2f()` API and delegating to the existing C wrapper logic, so
 there's no duplicated timing code per language.
 
-(The Fortran init/finalize wrappers live in their own object file,
-`miniprof_fortran.c`, rather than alongside the C ones — they reference
-`pmpi_init_` etc., which only exist in `libmpi_mpifh.so`, a library
-`mpicc` does not link by default. Keeping them separate means plain C
-builds never need that dependency resolved.)
+(The Fortran init/finalize wrappers in `src/miniprof_fortran.c` reference
+`pmpi_init_` etc., which only exist in `libmpi_mpifh.so` — a library
+`mpicc` does not link by default, only `mpifort` does. Since miniprof is
+a shared library, that's harmless: the symbols resolve lazily at load
+time, so `pmpi_init_` only needs to be found when `mpi_init_` is actually
+called, which only happens for Fortran applications. Plain C builds never
+trigger the lookup. This is also why linking against `libminiprof.so`
+needs `-Wl,--allow-shlib-undefined` — see
+[Link miniprof into your application](#link-miniprof-into-your-application).)
 
 #### Optimization note
 
@@ -178,8 +234,8 @@ Build all three sample and trace variants with `make examples`.
 
 | Target | What it does |
 |---|---|
-| `make` / `make all` | Build `libminiprof.a` and all example variants |
-| `make lib` | Build `libminiprof.a` only |
+| `make` / `make all` | Build `libminiprof.so` and all example variants |
+| `make lib` | Build `libminiprof.so` only |
 | `make examples` | Build all sample and trace example variants |
 | `make example` | Build `examples/heat2d` only (requires `lib`) |
 | `make example-trace` | Build `examples/heat2d+trace`, instrumented with `-finstrument-functions` |
@@ -561,6 +617,12 @@ numbers.
   hard guarantees under heavy threading.
 - No GPU/CUDA support. This profiles host-side CPU and MPI activity
   only.
+- Trace mode cannot be enabled via `LD_PRELOAD` alone — instrumentation
+  calls are inserted by the compiler at `-finstrument-functions`
+  build time, so the target binary must be rebuilt (or explicitly linked
+  against `libminiprof.so`, see
+  [Two-pass profiling workflow](#two-pass-profiling-workflow)). Only
+  sample mode is fully transparent.
 - Hardware performance counters, such as FLOP or cache-miss counting, are
   not implemented.
 - The `PROFILER` group's percentage (signal handler + dispatch overhead)

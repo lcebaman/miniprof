@@ -1,8 +1,8 @@
 # miniprof Makefile
 #
 # Targets:
-#   all            — build libminiprof.a and the bundled examples
-#   lib            — build libminiprof.a only
+#   all            — build libminiprof.so and the bundled examples
+#   lib            — build libminiprof.so only
 #   examples       — build the examples via examples/Makefile
 #   example        — build examples/heat2d (sample mode, default)
 #   example-trace  — build examples/heat2d+trace (instrumented C binary)
@@ -46,12 +46,10 @@ endif
 CC_HOST ?= cc
 CFLAGS  := -O2 -g -Wall -Wextra \
            -fno-omit-frame-pointer \
+           -fPIC \
            -I$(CURDIR)/include
-FFLAGS  := -O0 -g
+FFLAGS  := -O0 -g -fPIC
 LDFLAGS := -ldl -lm -Wl,-z,noexecstack
-
-AR      := ar
-ARFLAGS := rcs
 
 EXAMPLE_DIR := examples
 
@@ -59,16 +57,18 @@ EXAMPLE_DIR := examples
 # The library is mode-agnostic: trace-mode-only code (instrument.c,
 # trace_store.c, mpi_trace.c, trace_aggregator.c) is always linked in but
 # self-disables at runtime when MINIPROF_MODE != trace, so a single build
-# of libminiprof.a supports both modes — only the *target* binary needs a
+# of libminiprof.so supports both modes — only the *target* binary needs a
 # different build flag (-finstrument-functions) to actually emit the
 # function-entry/exit calls that trace mode consumes.
 #
-# miniprof_fortran.c (mpi_init_/mpi_init_thread_/mpi_finalize_) is kept in
-# its own object file deliberately: it references pmpi_init_ etc., which
-# only exist in libmpi_mpifh.so (linked by mpifort, not mpicc). Static
-# archives only pull in a .o when one of its symbols is referenced, so
-# keeping it separate means plain C builds (mpicc, no Fortran bindings
-# referenced) never need that dependency resolved at all.
+# miniprof_fortran.c (mpi_init_/mpi_init_thread_/mpi_finalize_) references
+# pmpi_init_ etc., which only exist in libmpi_mpifh.so (linked by mpifort,
+# not mpicc). That used to force it into its own object file in the static
+# archive so plain C builds wouldn't drag in the dependency. As a shared
+# library loaded via LD_PRELOAD, symbols resolve lazily at runtime instead:
+# mpi_init_ only pulls in pmpi_init_ if something actually calls it, which
+# only happens for Fortran applications, so there's no link-time failure
+# for C codes and no need to keep the file separate anymore.
 LIB_SRCS := src/profile_store.c    \
             src/path_store.c       \
             src/sampler.c          \
@@ -83,7 +83,7 @@ LIB_SRCS := src/profile_store.c    \
             src/miniprof_fortran.c
 
 LIB_OBJS := $(LIB_SRCS:.c=.o)
-LIB      := libminiprof.a
+LIB      := libminiprof.so
 
 EXAMPLE       := $(EXAMPLE_DIR)/heat2d
 EXAMPLE_TRACE := $(EXAMPLE_DIR)/heat2d+trace
@@ -105,8 +105,8 @@ examples:
 	$(MAKE) -C $(EXAMPLE_DIR)
 
 $(LIB): $(LIB_OBJS)
-	$(AR) $(ARFLAGS) $@ $^
-	@echo "  AR  $@"
+	$(CC) -shared -fPIC -o $@ $^ $(LDFLAGS)
+	@echo "  CC  $@  (shared library)"
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@

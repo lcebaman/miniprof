@@ -5,10 +5,15 @@
 # repository root.
 
 ROOT := ..
-LIB := $(ROOT)/libminiprof.a
+LIB := $(ROOT)/libminiprof.so
 
 $(LIB):
 	$(MAKE) -C $(ROOT) lib
+
+# Examples link against the .so directly (rather than relying on
+# LD_PRELOAD) to demonstrate the explicit-link workflow; the rpath lets
+# the resulting binaries find libminiprof.so without LD_LIBRARY_PATH.
+RPATH := -Wl,-rpath,$(abspath $(ROOT))
 
 ifeq ($(origin CC), default)
 CC := $(shell command -v mpicc 2>/dev/null || true)
@@ -33,7 +38,14 @@ endif
 CC_HOST ?= mpicc
 CFLAGS  := -O2 -g -Wall -Wextra -fno-omit-frame-pointer -I$(ROOT)/include
 FFLAGS  := -O0 -g
-LDFLAGS := -ldl -lm -Wl,-z,noexecstack
+# --allow-shlib-undefined: libminiprof.so references pmpi_init_/
+# pmpi_init_thread_/pmpi_finalize_ (Fortran PMPI bindings, only present in
+# libmpi_mpifh.so, which mpifort links but mpicc does not). Those stay
+# unresolved in C builds by design — see the sources comment in the root
+# Makefile — but some linker/toolchain defaults treat an indirect shared
+# library's undefined symbols as a hard link error unless told they're
+# expected to resolve at load time instead.
+LDFLAGS := -ldl -lm -Wl,-z,noexecstack -Wl,--allow-shlib-undefined
 
 NX     ?= 256
 NY     ?= 256
@@ -47,22 +59,22 @@ EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trac
 all: $(EXAMPLES)
 
 heat2d: heat2d.c $(LIB)
-	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 heat2d+trace: heat2d.c $(LIB)
-	$(CC) $(CFLAGS) -finstrument-functions $< -L$(ROOT) -lminiprof $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -finstrument-functions $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 heat1d: heat1d.f90 $(LIB)
-	$(FC) $(FFLAGS) $< -L$(ROOT) -lminiprof $(LDFLAGS) -o $@
+	$(FC) $(FFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 heat1d+trace: heat1d.f90 $(LIB)
-	$(FC) $(FFLAGS) -finstrument-functions $< -L$(ROOT) -lminiprof $(LDFLAGS) -o $@
+	$(FC) $(FFLAGS) -finstrument-functions $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 diffusion3d: diffusion3d.c $(LIB)
-	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) $< -L$(ROOT) -lminiprof $(LDFLAGS) -lm -o $@
+	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -lm -o $@
 
 diffusion3d+trace: diffusion3d.c $(LIB)
-	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) -finstrument-functions $< -L$(ROOT) -lminiprof $(LDFLAGS) -lm -o $@
+	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) -finstrument-functions $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -lm -o $@
 
 clean:
 	rm -f $(EXAMPLES)
