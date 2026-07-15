@@ -18,6 +18,7 @@
 
 #define _GNU_SOURCE
 #include "sampler.h"
+#include "sampler_hwc.h"
 #include "profile_store.h"
 #include "path_store.h"
 #include <signal.h>
@@ -84,6 +85,13 @@ void sampler_start(int interval_ms, int depth)
     profile_store_init();
     path_store_init();
 
+    /* Hardware counter group (cycles/instructions/cache-misses). Not
+     * yet read from the signal handler — this only establishes and
+     * self-tests the counter group so a future increment can start
+     * accumulating IPC/cache-miss data per sample. Falls back silently
+     * to sampling-only if counters are unavailable (see sampler_hwc.c). */
+    hwc_init();
+
     /* Install signal handler */
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -121,4 +129,6 @@ void sampler_stop(void)
     sa.sa_handler = SIG_DFL;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGPROF, &sa, NULL);
+
+    hwc_shutdown();
 }

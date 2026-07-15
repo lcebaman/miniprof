@@ -72,6 +72,7 @@ EXAMPLE_DIR := examples
 LIB_SRCS := src/profile_store.c    \
             src/path_store.c       \
             src/sampler.c          \
+            src/sampler_hwc.c      \
             src/symbolizer.c       \
             src/aggregator.c       \
             src/mpa_writer.c       \
