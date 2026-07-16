@@ -28,6 +28,7 @@
 #   run-hwc-validate-smear — negative control for the Table 2 interval-
 #                      smearing warning: many tiny functions, so the
 #                      warning should fire (opposite of the other two)
+#   check          — full test suite, one pass/fail exit code (what CI runs)
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
 #
@@ -112,7 +113,8 @@ EXAMPLE_HWC_VALIDATE_SMEAR := $(EXAMPLE_DIR)/hwc_validate_smear
         example-3d example-3d-trace example-hwc-validate \
         example-hwc-validate-omp example-hwc-validate-smear mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
-        run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear mpa clean
+        run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
+        mpa check clean
 
 all: lib examples
 
@@ -226,6 +228,11 @@ mpa-check: src/mpa_check.c
 
 # ── run: sampling pass ──────────────────────────────────────────────────────
 NRANKS ?= 4
+# Extra flags passed to every mpirun invocation below — empty by default, so
+# nothing changes for interactive/HPC use. CI passes --oversubscribe here,
+# since hosted runners commonly have fewer cores than NRANKS requests and
+# Open MPI otherwise refuses to place more ranks than physical slots.
+MPIRUN_FLAGS ?=
 
 run: $(EXAMPLE)
 	@echo "Running heat2d (SAMPLE mode) with $(NRANKS) MPI ranks..."
@@ -236,7 +243,7 @@ run: $(EXAMPLE)
 	MINIPROF_MPA_OUTPUT=miniprof.mpa \
 	MINIPROF_MPA_THRESHOLD=1.0 \
 	MINIPROF_VERBOSE=1 \
-	mpirun -n $(NRANKS) ./$(EXAMPLE)
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE)
 	@echo ""
 	@echo "=== miniprof sampling report ==="
 	@cat miniprof_report.txt
@@ -258,7 +265,7 @@ run-trace: $(EXAMPLE_TRACE) mpa-check
 	MINIPROF_TRACE_FUNCS=miniprof.mpa \
 	MINIPROF_TRACE_OUTPUT=miniprof_trace_report.txt \
 	MINIPROF_VERBOSE=1 \
-	mpirun -n $(NRANKS) ./$(EXAMPLE_TRACE)
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_TRACE)
 	@echo ""
 	@echo "=== miniprof tracing report ==="
 	@cat miniprof_trace_report.txt
@@ -276,7 +283,7 @@ run-f: $(EXAMPLE_F)
 	MINIPROF_MPA_OUTPUT=miniprof_f.mpa \
 	MINIPROF_MPA_THRESHOLD=1.0 \
 	MINIPROF_VERBOSE=1 \
-	mpirun -n $(NRANKS) ./$(EXAMPLE_F)
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_F)
 	@echo ""
 	@echo "=== miniprof sampling report (Fortran) ==="
 	@cat miniprof_report_f.txt
@@ -293,7 +300,7 @@ run-f-trace: $(EXAMPLE_F_TRACE) mpa-check
 	MINIPROF_TRACE_FUNCS=miniprof_f.mpa \
 	MINIPROF_TRACE_OUTPUT=miniprof_trace_report_f.txt \
 	MINIPROF_VERBOSE=1 \
-	mpirun -n $(NRANKS) ./$(EXAMPLE_F_TRACE)
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_F_TRACE)
 	@echo ""
 	@echo "=== miniprof tracing report (Fortran) ==="
 	@cat miniprof_trace_report_f.txt
@@ -308,7 +315,7 @@ run-3d: $(EXAMPLE_3D)
 	MINIPROF_MPA_OUTPUT=miniprof_3d.mpa \
 	MINIPROF_MPA_THRESHOLD=0.5 \
 	MINIPROF_VERBOSE=1 \
-	mpirun -n $(NRANKS) ./$(EXAMPLE_3D)
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_3D)
 	@echo ""
 	@echo "=== miniprof sampling report (3D diffusion) ==="
 	@cat miniprof_report_3d.txt
@@ -326,7 +333,7 @@ run-3d-trace: $(EXAMPLE_3D_TRACE) mpa-check
 	MINIPROF_TRACE_FUNCS=miniprof_3d.mpa \
 	MINIPROF_TRACE_OUTPUT=miniprof_trace_report_3d.txt \
 	MINIPROF_VERBOSE=1 \
-	mpirun -n $(NRANKS) ./$(EXAMPLE_3D_TRACE)
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_3D_TRACE)
 	@echo ""
 	@echo "=== miniprof tracing report (3D diffusion) ==="
 	@cat miniprof_trace_report_3d.txt
@@ -342,7 +349,7 @@ run-hwc-validate: $(EXAMPLE_HWC_VALIDATE)
 	MINIPROF_MODE=sample \
 	MINIPROF_OUTPUT=miniprof_hwc_validate_report.txt \
 	MINIPROF_MPA_OUTPUT=miniprof_hwc_validate.mpa \
-	mpirun -n 1 ./$(EXAMPLE_HWC_VALIDATE)
+	mpirun $(MPIRUN_FLAGS) -n 1 ./$(EXAMPLE_HWC_VALIDATE)
 	@echo ""
 	@if grep -q "Hardware counters not available" miniprof_hwc_validate_report.txt; then \
 		echo "SKIP: hardware counters unavailable on this system — nothing to validate."; \
@@ -371,7 +378,7 @@ run-hwc-validate-omp: $(EXAMPLE_HWC_VALIDATE_OMP)
 	MINIPROF_MODE=sample \
 	MINIPROF_OUTPUT=miniprof_hwc_validate_omp_report.txt \
 	MINIPROF_MPA_OUTPUT=miniprof_hwc_validate_omp.mpa \
-	mpirun -n 1 ./$(EXAMPLE_HWC_VALIDATE_OMP)
+	mpirun $(MPIRUN_FLAGS) -n 1 ./$(EXAMPLE_HWC_VALIDATE_OMP)
 	@echo ""
 	@if grep -q "Hardware counters not available" miniprof_hwc_validate_omp_report.txt; then \
 		echo "SKIP: hardware counters unavailable on this system — nothing to validate."; \
@@ -399,7 +406,7 @@ run-hwc-validate-smear: $(EXAMPLE_HWC_VALIDATE_SMEAR)
 	MINIPROF_MODE=sample \
 	MINIPROF_OUTPUT=miniprof_hwc_validate_smear_report.txt \
 	MINIPROF_MPA_OUTPUT=miniprof_hwc_validate_smear.mpa \
-	mpirun -n 1 ./$(EXAMPLE_HWC_VALIDATE_SMEAR)
+	mpirun $(MPIRUN_FLAGS) -n 1 ./$(EXAMPLE_HWC_VALIDATE_SMEAR)
 	@echo ""
 	@if grep -q "Hardware counters not available" miniprof_hwc_validate_smear_report.txt; then \
 		echo "SKIP: hardware counters unavailable on this system — nothing to validate."; \
@@ -409,6 +416,44 @@ run-hwc-validate-smear: $(EXAMPLE_HWC_VALIDATE_SMEAR)
 			&& echo "PASS: interval-smearing warning fired as expected" \
 			|| { echo "FAIL: smearing warning did NOT fire — detector may have regressed"; exit 1; }; \
 	fi
+
+# ── check: full test suite, one pass/fail exit code ──────────────────────────
+# What this actually tests, in two tiers:
+#   - The three hwc_validate targets assert on report *content* (correct
+#     classification, or the smearing warning firing/staying silent) —
+#     they SKIP (not FAIL) if hardware counters aren't available on this
+#     system, which is expected and common in CI containers.
+#   - run/run-trace/run-f/run-f-trace/run-3d/run-3d-trace don't assert on
+#     content, but a nonzero exit here is still a real regression signal:
+#     it means the build is broken, a PMPI symbol failed to resolve, or
+#     something segfaulted — exactly the class of bug this suite exists
+#     to catch on every push. See CI: .github/workflows/ci.yml.
+#
+# Override MPIRUN_FLAGS/NRANKS for constrained environments, e.g.:
+#   make check MPIRUN_FLAGS=--oversubscribe NRANKS=2
+check: lib examples mpa-check
+	@echo "=========================================="
+	@echo " miniprof test suite"
+	@echo "=========================================="
+	@FAIL=0; \
+	$(MAKE) run-hwc-validate       || FAIL=1; \
+	$(MAKE) run-hwc-validate-omp   || FAIL=1; \
+	$(MAKE) run-hwc-validate-smear || FAIL=1; \
+	$(MAKE) run          || FAIL=1; \
+	$(MAKE) run-trace    || FAIL=1; \
+	$(MAKE) run-f        || FAIL=1; \
+	$(MAKE) run-f-trace  || FAIL=1; \
+	$(MAKE) run-3d       || FAIL=1; \
+	$(MAKE) run-3d-trace || FAIL=1; \
+	echo ""; \
+	echo "=========================================="; \
+	if [ $$FAIL -eq 0 ]; then \
+		echo " ALL CHECKS PASSED"; \
+	else \
+		echo " SOME CHECKS FAILED — see output above"; \
+	fi; \
+	echo "=========================================="; \
+	exit $$FAIL
 
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:

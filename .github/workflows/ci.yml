@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Open MPI, gfortran, binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            openmpi-bin libopenmpi-dev gfortran binutils build-essential
+
+      - name: Build and run the full test suite
+        run: |
+          make check \
+            MPIRUN_FLAGS=--oversubscribe \
+            NRANKS=2 \
+            NX=64 NY=64 NZ=32 NSTEPS_3D=50
+
+      # Hardware counters (Table 2/3, hwc_validate*) need perf_event_open
+      # access that hosted runners may or may not grant — miniprof detects
+      # this itself and SKIPs (not FAILs) those specific checks when it's
+      # unavailable, so this step is informational, not a gate.
+      - name: Report perf_event_open availability
+        if: always()
+        run: cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo "not readable"
+
+      - name: Upload reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: miniprof-reports
+          path: |
+            miniprof*.txt
+            miniprof*.mpa
+            examples/miniprof*.txt
+            examples/miniprof*.mpa
+          if-no-files-found: ignore

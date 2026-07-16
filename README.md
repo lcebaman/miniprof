@@ -1,9 +1,13 @@
 # miniprof
 
-A lightweight parallel performance profiler for MPI + C/C++ on Linux. It
-runs on any Linux cluster with a standard MPI installation.
+[![CI](https://github.com/lcebaman/miniprof/actions/workflows/ci.yml/badge.svg)](https://github.com/lcebaman/miniprof/actions/workflows/ci.yml)
 
-Two complementary modes support a sampling → selection → tracing workflow:
+A lightweight parallel performance profiler for MPI + C/C++ on Linux. It
+runs on any Linux cluster with a standard MPI installation. No GUI —
+everything is plain text, designed to be read in a terminal or piped
+into a job log.
+
+Two complementary modes support a sample → select → trace workflow:
 
 - **sample** — statistical PC sampling via `SIGPROF`, near-zero overhead,
   safe to run on every job by default. Produces a hierarchical text
@@ -13,24 +17,37 @@ Two complementary modes support a sampling → selection → tracing workflow:
   the `.mpa` file, plus per-call MPI timing (call count, time, message
   size). Higher overhead, used only for the functions that matter.
 
-No GUI. Everything is plain text, designed to be read in a terminal or
-piped into a job log.
-
-This repository contains two distinct parts:
+This repository has two parts:
 
 | Part | Location | Purpose |
 |---|---|---|
-| **Library** | `src/`, `include/`, `libminiprof.so`, `modulefiles/` | The profiler to link into your own MPI application (or preload transparently via the bundled Lmod module) |
+| **Library** | `src/`, `include/`, `libminiprof.so`, `modulefiles/` | The profiler — link it into your application, or preload it transparently via the bundled Lmod module |
 | **Examples** | `examples/` | Small C and Fortran programs plus a larger scientific benchmark |
 
-If you want to profile your own program, start with [Library](#library).
-If you want to try miniprof first, skip to [Examples](#examples).
+## Contents
+
+- [Requirements](#requirements)
+- [Build](#build)
+- [Using miniprof](#using-miniprof)
+  - [Transparent sampling via `LD_PRELOAD`](#transparent-sampling-via-ld_preload)
+  - [Linking directly](#linking-directly)
+  - [Fortran applications](#fortran-applications)
+- [Two-pass profiling workflow](#two-pass-profiling-workflow)
+- [Configuration reference](#configuration-reference)
+- [Reading the reports](#reading-the-reports)
+  - [Sampling report](#sampling-report)
+  - [Table 2: Hardware Counter Characterisation](#table-2-hardware-counter-characterisation)
+  - [Trace report](#trace-report)
+- [Examples](#examples)
+  - [Build and run targets](#build-and-run-targets)
+  - [`diffusion3d`: scientific benchmark](#diffusion3d-scientific-benchmark)
+- [Troubleshooting & internals](#troubleshooting--internals)
+  - [Notes on symbol resolution](#notes-on-symbol-resolution)
+  - [Known limitations](#known-limitations)
+- [License](#license)
 
 
-## Library
-
-
-### Requirements
+## Requirements
 
 - Linux, x86-64
 - An MPI implementation with development headers (`mpicc`/`mpifort` on
@@ -42,28 +59,30 @@ If you want to try miniprof first, skip to [Examples](#examples).
   [Fortran applications](#fortran-applications))
 
 
-### Build the library
+## Build
 
 ```bash
 make lib
 ```
 
-This creates `libminiprof.so`. The standalone `.mpa` validator is a
-separate optional tool with no MPI dependency:
+This creates `libminiprof.so`. The default target, `make`, builds the
+library and all bundled examples — see [Examples](#examples) for
+example-specific targets. The standalone `.mpa` validator is a separate
+optional tool with no MPI dependency:
 
 ```bash
 make mpa-check
 ```
 
-The default target, `make`, builds the library and all bundled examples.
-See [Examples](#examples) for example-specific targets.
+
+## Using miniprof
 
 ### Transparent sampling via `LD_PRELOAD`
 
 Because miniprof is a shared library, sample mode needs **zero changes**
 to your source or build: preload it over an already-built, unmodified
 binary and it self-attaches through the same `MPI_Init` PMPI
-interception described below.
+interception used everywhere else in this profiler.
 
 ```bash
 mpicc -O2 -g your_app.c -o your_app          # completely normal build
@@ -73,10 +92,10 @@ LD_PRELOAD=/path/to/miniprof/libminiprof.so mpirun -n 64 ./your_app
 This is the intended way to wire miniprof up as an Lmod module: the
 module sets `LD_PRELOAD` and does nothing else, so `module load miniprof`
 followed by a normal `mpirun` produces a sampling report with no
-recompilation or relinking. `-g` is still recommended (see below) for
-source-line attribution, but function-level profiling works even without
-it, via an `nm`-based fallback — useful when preloading over a binary you
-didn't build yourself with debug info.
+recompilation or relinking. `-g` is still recommended for source-line
+attribution, but function-level profiling works even without it, via an
+`nm`-based fallback — useful when preloading over a binary you didn't
+build yourself with debug info.
 
 A ready-to-use module is bundled at `modulefiles/miniprof/1.0.lua`. It
 locates `libminiprof.so` relative to its own path, so after `make lib`:
@@ -92,7 +111,7 @@ Trace mode still needs an explicit rebuild (see
 requires the compiler to actually emit `-finstrument-functions` calls
 into the target binary — that can't be injected after the fact.
 
-### Link miniprof into your application
+### Linking directly
 
 You can also link `libminiprof.so` directly, e.g. if you want the binary
 to always run under miniprof without relying on `LD_PRELOAD`:
@@ -103,33 +122,29 @@ mpicc -O2 -g your_app.c -L/path/to/miniprof -lminiprof \
     -ldl -lm -o your_app
 ```
 
-`-Wl,--allow-shlib-undefined` is needed because `libminiprof.so`
-references a handful of Fortran PMPI symbols (`pmpi_init_` etc., see
-[Fortran applications](#fortran-applications)) that only resolve when the
-final binary also links Fortran's MPI bindings; some linkers otherwise
-treat an indirect shared library's undefined symbols as a hard error at
-link time even though they're only ever needed at load time. `-rpath` is
-optional — it just saves setting `LD_LIBRARY_PATH` at run time.
-
 That's it — no source changes required. `miniprof` intercepts
 `MPI_Init`/`MPI_Init_thread`/`MPI_Finalize` via the standard PMPI
 profiling interface and starts/stops itself automatically.
 
-One build requirement to keep in mind:
+Two flags worth understanding, not just copy-pasting:
 
-- `-g` — needed so `addr2line` can resolve source file/line info. Without
-  it you'll still get function names, just no line numbers.
+- **`-g`** — needed so `addr2line` can resolve source file/line info.
+  Without it you'll still get function names, just no line numbers.
+- **`-Wl,--allow-shlib-undefined`** — needed because `libminiprof.so`
+  references a handful of Fortran PMPI symbols (`pmpi_init_` etc., see
+  [Fortran applications](#fortran-applications)) that only resolve when
+  the final binary also links Fortran's MPI bindings; some linkers
+  otherwise treat an indirect shared library's undefined symbols as a
+  hard error at link time even though they're only ever needed at load
+  time. `-rpath` is optional — it just saves setting `LD_LIBRARY_PATH`
+  at run time.
 
-`-rdynamic` is **not** required, and miniprof's build no longer uses it.
-It's a common reflex to add when working with `backtrace()`/`dladdr()`,
-but it only controls which symbols get exported to the *dynamic* symbol
-table (`.dynsym`) — and the symbols that actually matter for this
-profiler (`static`-qualified compute kernels, internal Fortran `contains`
-subroutines) are never eligible for `.dynsym` regardless of the flag.
-miniprof resolves those via `nm`/`addr2line` against the regular
-`.symtab` instead — see [Notes on symbol resolution](#notes-on-symbol-resolution)
-for the full story, including how this was verified empirically rather
-than assumed.
+`-rdynamic` is **not** required. It's a common reflex when working with
+`backtrace()`/`dladdr()`, but the symbols that actually matter here
+(`static`-qualified compute kernels, internal Fortran `contains`
+subroutines) are never eligible for the dynamic symbol table regardless
+of the flag — see [Notes on symbol resolution](#notes-on-symbol-resolution)
+for why, and how miniprof resolves them instead.
 
 For trace mode, build a **second** binary of the same source with
 `-finstrument-functions` added. Keep both: sample mode uses the normal
@@ -141,7 +156,6 @@ mpicc -O2 -g -finstrument-functions your_app.c \
     -Wl,-rpath,/path/to/miniprof -Wl,--allow-shlib-undefined \
     -ldl -lm -o your_app+trace
 ```
-
 
 ### Fortran applications
 
@@ -165,62 +179,380 @@ mpifort -O2 -g -finstrument-functions your_app.f90 \
 ```
 
 The bundled `examples/heat1d.f90` program demonstrates this setup; its
-build and run commands are listed in the examples section below.
+build and run commands are in [Build and run targets](#build-and-run-targets).
 
-#### Why this needs separate support
+**Why this needs separate support.** Fortran's `mpi`/`mpi_f08` modules
+do not call the C `MPI_Init`/`MPI_Finalize` symbols — they call
+separately-mangled bindings (`mpi_init_`, `mpi_finalize_`, with a
+trailing underscore under gfortran's default mangling) that live in a
+separate shim library (`libmpi_mpifh.so` for Open MPI) and bypass the
+C-level PMPI interception entirely: the call site targets
+`mpi_init_@plt`, never `MPI_Init`. `src/miniprof_fortran.c` and the
+Fortran wrappers in `src/mpi_trace.c` add the matching bindings,
+converting Fortran's by-reference `INTEGER` handles to real MPI C
+handles via the standard `MPI_*_f2c()`/`MPI_*_c2f()` API and delegating
+to the existing C wrapper logic, so there's no duplicated timing code
+per language.
 
-Fortran's `mpi`/`mpi_f08` modules do not call the C `MPI_Init` /
-`MPI_Finalize` symbols — they call separately-mangled bindings
-(`mpi_init_`, `mpi_finalize_`, with a trailing underscore under
-gfortran's default mangling) that live in a separate shim library
-(`libmpi_mpifh.so` for Open MPI) and bypass the C-level PMPI
-interception entirely. Confirmed by disassembling a real gfortran
-binary: the call site targets `mpi_init_@plt`, never `MPI_Init`.
-`src/miniprof_fortran.c` and the Fortran wrappers in `src/mpi_trace.c`
-add the matching bindings, converting Fortran's by-reference `INTEGER`
-handles to real MPI C handles via the standard `MPI_*_f2c()` /
-`MPI_*_c2f()` API and delegating to the existing C wrapper logic, so
-there's no duplicated timing code per language.
+Those Fortran init/finalize wrappers reference `pmpi_init_` etc., which
+only exist in `libmpi_mpifh.so` — a library `mpicc` does not link by
+default, only `mpifort` does. Since miniprof is a shared library, that's
+harmless: the symbols resolve lazily at load time, so `pmpi_init_` only
+needs to be found when `mpi_init_` is actually called, which only
+happens for Fortran applications. Plain C builds never trigger the
+lookup — this is also why linking against `libminiprof.so` needs
+`-Wl,--allow-shlib-undefined` (see [Linking directly](#linking-directly)).
 
-(The Fortran init/finalize wrappers in `src/miniprof_fortran.c` reference
-`pmpi_init_` etc., which only exist in `libmpi_mpifh.so` — a library
-`mpicc` does not link by default, only `mpifort` does. Since miniprof is
-a shared library, that's harmless: the symbols resolve lazily at load
-time, so `pmpi_init_` only needs to be found when `mpi_init_` is actually
-called, which only happens for Fortran applications. Plain C builds never
-trigger the lookup. This is also why linking against `libminiprof.so`
-needs `-Wl,--allow-shlib-undefined` — see
-[Link miniprof into your application](#link-miniprof-into-your-application).)
+**Optimization note.** gfortran can inline small internal `contains`
+subroutines aggressively, removing them as separate symbols and leaving
+nothing for the profiler to attribute time to. If a function disappears
+from a report, try building at `-O0` or move the hot routine into a
+separate module procedure. The bundled Fortran example uses `-O0` for
+this reason.
 
-#### Optimization note
+**Coverage.** Both modes work end to end for Fortran: sample mode
+auto-starts via `MPI_Init` interception and attributes time down to
+source line; trace mode resolves gfortran-mangled subroutine names
+(`compute_step.2`, etc.) via `mpa-check`, and MPI call timing is
+populated from Fortran-side `MPI_Sendrecv`/`MPI_Allreduce` calls exactly
+as it is for C, including correct exclusive-time exclusion of MPI wait
+time.
 
-gfortran can inline small internal `contains` subroutines aggressively,
-removing them as separate symbols and leaving nothing for the profiler
-to attribute time to. If a function disappears from a report, try
-building at `-O0` or move the hot routine into a separate module
-procedure. The bundled Fortran example uses `-O0` for this reason.
 
-#### What's verified working
+## Two-pass profiling workflow
 
-Both modes were tested end to end against a real Fortran MPI program
-(1D heat diffusion with internal `compute_step`/`exchange_halo`/
-`check_norm` subroutines): sample mode correctly auto-starts via
-`MPI_Init` interception and attributes time down to source line; trace
-mode correctly resolves the gfortran-mangled subroutine names
-(`compute_step.2`, etc.) via `mpa-check`, and Table 2 (MPI call timing)
-is populated from the Fortran-side `MPI_Sendrecv`/`MPI_Allreduce` calls
-exactly as it is for C, including correct exclusive-time exclusion of
-MPI wait time.
+This is the recommended way to use miniprof: sample broadly, select the
+important functions, then trace those functions precisely.
 
-Next, follow the [two-pass profiling workflow](#two-pass-profiling-workflow)
-with your sample and trace binaries.
+### 1. Sample first
+
+Run your normal binary with sampling enabled (the default mode — no env
+vars required beyond pointing at an output file if you want a specific
+name):
+
+```bash
+mpirun -n 64 ./your_app
+```
+
+This produces `miniprof_report.txt` — a flat sampling profile, grouped
+by `USER`/`MPI`/`OMP`/`LIBC`/`SYSTEM`/`ETC`, broken down to function and
+source-line granularity, with per-rank load imbalance — and
+`miniprof.mpa`, a plain-text list of every `USER` function whose sampled
+time exceeded the threshold (default 1%):
+
+```
+$ cat miniprof.mpa
+# miniprof MPA suggestions — generated 2026-06-30 14:38:44
+# Functions with Samp% >= 1.0% from the sampling pass.
+# Only USER-group functions are listed: MPI calls are
+# always traced automatically (see mpi_trace.c) and don't
+# need — and can't use — an entry here.
+# Edit this file to add/remove functions, then run:
+#   ./mpa-check <binary>+trace miniprof.mpa   (validate first!)
+#   MINIPROF_MODE=trace MINIPROF_TRACE_FUNCS=miniprof.mpa mpirun -n <N> ./your_app+trace
+# One function name per line; '#' starts a comment.
+#
+# Function                             Samp%
+compute_stencil                     #   9.1%
+check_convergence                   #   7.2%
+```
+
+Feel free to hand-edit this file — add functions you know you care about
+even if they didn't clear the sampling threshold, or remove ones you
+don't want traced.
+
+### 2. Validate before you trace
+
+Before submitting a (possibly expensive, many-node) tracing run, check
+that every function in the `.mpa` file will actually resolve in your
+instrumented binary:
+
+```bash
+./mpa-check your_app+trace miniprof.mpa
+```
+
+```
+mpa-check: validating 2 function(s) from 'miniprof.mpa' against 'your_app+trace'
+
+  OK    compute_stencil                           0x00003be0  (local/static)
+  OK    check_convergence                         0x00003e50  (local/static)
+
+2 resolved, 0 failed, out of 2 total
+
+mpa-check: confirmed 4 instrumentation call site(s) in 'your_app+trace' — this binary was built with -finstrument-functions.
+
+mpa-check: all functions resolved successfully.
+```
+
+Exit code is `0` on success, `1` on any failure — safe to use as a gate
+in a job script:
+
+```bash
+./mpa-check your_app+trace miniprof.mpa || exit 1
+mpirun -n 64 ./your_app+trace
+```
+
+If something doesn't resolve, `mpa-check` tells you why:
+
+```
+  FAIL  compute_stenncil                          (not found in binary)
+
+mpa-check: FAILED — 1 function(s) will not be traced.
+  Common causes:
+    1. Typo in the .mpa file
+    2. Function was inlined away or optimized out
+       (try -O0 or __attribute__((noinline)) on that function)
+    3. .mpa file was generated against a different binary
+    4. Binary is stripped (rebuild without -s / strip)
+```
+
+It also independently checks that the binary you're pointing it at was
+genuinely built with `-finstrument-functions` (not just linked against
+the library) — a resolved name doesn't guarantee an entry/exit hook will
+actually fire if the compiler flag was forgotten.
+
+### 3. Trace
+
+```bash
+MINIPROF_MODE=trace \
+MINIPROF_TRACE_FUNCS=miniprof.mpa \
+mpirun -n 64 ./your_app+trace
+```
+
+Produces `miniprof_trace_report.txt` — see [Trace report](#trace-report)
+for how to read it.
+
+
+## Configuration reference
+
+All of these are read at `MPI_Init` time; set them in your job script or
+`mpirun -x VAR` (or just `export` before `mpirun`, depending on your MPI
+launcher's environment-passing convention).
+
+| Variable | Mode | Default | Meaning |
+|---|---|---|---|
+| `MINIPROF_MODE` | both | `sample` | `sample` or `trace` |
+| `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
+| `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |
+| `MINIPROF_OUTPUT` | sample | `miniprof_report.txt` | Sampling report path |
+| `MINIPROF_MPA_OUTPUT` | sample | `miniprof.mpa` | Where to write the trace-candidate suggestions |
+| `MINIPROF_MPA_THRESHOLD` | sample | `1.0` | Minimum Samp% for a USER function to be suggested |
+| `MINIPROF_TRACE_FUNCS` | trace | `miniprof.mpa` | Which `.mpa`-format file to read the trace function list from |
+| `MINIPROF_TRACE_OUTPUT` | trace | `miniprof_trace_report.txt` | Tracing report path |
+| `MINIPROF_IPC_COMPUTE_THRESHOLD` | both | `1.2` | IPC at/above this → COMPUTE-BOUND (hardware-counter tables) |
+| `MINIPROF_IPC_MEMORY_THRESHOLD` | both | `0.5` | IPC at/below this + high MPKI → MEMORY-BOUND |
+| `MINIPROF_MPKI_MEMORY_THRESHOLD` | both | `10` | MPKI (LLC misses per 1000 instructions) at/above this, combined with low IPC, → MEMORY-BOUND |
+| `MINIPROF_VERBOSE` | both | `0` | Set to `1` for per-rank diagnostic lines on stderr |
+
+The `.mpa` file format is plain text: one function name per line,
+`#` starts a comment (also used for trailing inline annotations). Blank
+lines are ignored. It's meant to be hand-edited.
+
+
+## Reading the reports
+
+### Sampling report
+
+```
+Table 1: Profile by Group, Function, and Line
+   Samp%      Samp   Imb.Samp  Imb.Samp%  Group
+                                           Function
+                                            Source Line
+----------------------------------------------------------------------------------------
+  100.0%      9166         --         --  Total
+   49.4%      4529         --         --  LIBC
+   16.4%      1505       44.8      10.6%   __sigaction
+   16.4%      1505         --         --  PROFILER
+   16.4%      1505       44.8      10.6%   sigprof_handler
+   16.4%      1503         --         --  USER
+    9.1%       832       29.0      12.2%   compute_stencil
+    2.1%       190         --         --    heat2d.c:38
+    1.9%       172         --         --    heat2d.c:33
+    7.2%       659       16.2       9.0%   check_convergence
+    2.9%       263         --         --    heat2d.c:68
+   16.3%      1490         --         --  SYSTEM
+    1.4%       127         --         --  MPI
+```
+
+The table groups samples by category, function, and source line:
+
+- **Samp% / Samp** — fraction and absolute count of samples landing in
+  this group/function/line, aggregated across all ranks.
+- **Imb.Samp / Imb.Samp%** — load imbalance, computed as
+  `Imb.Samp = max_rank_samples − mean_rank_samples`,
+  `Imb.Samp% = Imb.Samp / max_rank_samples × 100`. A function with a
+  large `Imb.Samp%` is unevenly distributed across ranks — a likely
+  candidate for load-balancing work.
+- **Group** — `USER` (your code), `MPI`, `OMP`, `LIBC`, `SYSTEM`
+  (process startup), `PROFILER` (miniprof's own sampling overhead —
+  see [Known limitations](#known-limitations)), or `ETC` (anything
+  unclassified).
+
+Below the group/function table are a per-rank top-5 breakdown and the
+raw per-rank sample counts and wall-clock times.
+
+### Table 2: Hardware Counter Characterisation
+
+If the kernel allows it (`perf_event_paranoid` ≤ 2, or `CAP_PERFMON`),
+each sample also accumulates CPU cycles, retired instructions, and
+last-level-cache misses via `perf_event_open`, and the report gains a
+second table classifying every **USER**-group function as compute-bound
+or memory-bound. Scoped to `USER` deliberately: an MPI progress engine
+or libc/OpenMP-runtime function that happens to catch a sample isn't
+code you can act on here, and mixing it in just buries the functions
+that are (Table 1 still shows every group, since that's useful there —
+it's specifically this table that's about *your* code's characteristics):
+
+```
+Table 2: Hardware Counter Characterisation (per function)
+------------------------------------------------------------------------------------------
+      Samp     IPC    MPKI      Cycles  Instructions  LLC misses  Classification  Function
+------------------------------------------------------------------------------------------
+       832    1.83    0.09   9.480e+08     1.734e+09   1.561e+05  COMPUTE-BOUND   compute_viscous_dissipation
+       659    0.42   28.14   2.782e+09     1.168e+09   3.288e+07  MEMORY-BOUND    compute_stencil
+------------------------------------------------------------------------------------------
+  Classification: IPC>=1.2 = COMPUTE-BOUND, IPC<=0.5 + MPKI>=10.0 = MEMORY-BOUND, else MIXED
+```
+
+- **IPC** — instructions retired per cycle for that function, summed
+  across all ranks and all samples. High IPC means the pipeline is
+  staying full; low IPC means the CPU is stalled, usually waiting on
+  memory.
+- **MPKI** — last-level-cache misses per 1000 instructions retired, the
+  standard architecture metric for cache-miss rate. Normalizing by
+  instructions (the same denominator IPC uses, since
+  `IPC = instructions / cycles`) rather than by sample/call count keeps
+  the two numbers on a comparable, hardware-meaningful scale, and keeps
+  the values human-recognizable (single or low double digits for a
+  reasonably cache-friendly function) instead of the large, arbitrary
+  numbers a per-sample or per-call normalization produces.
+- **Cycles / Instructions / LLC misses** — the raw totals IPC and MPKI
+  are computed from, summed across all ranks and all samples, shown in
+  scientific notation. Useful for sanity-checking the derived numbers,
+  or applying a different normalization.
+- **Classification** — a heuristic from IPC and MPKI; the three cutoffs
+  are architecture-dependent and configurable via
+  `MINIPROF_IPC_COMPUTE_THRESHOLD`, `MINIPROF_IPC_MEMORY_THRESHOLD`, and
+  `MINIPROF_MPKI_MEMORY_THRESHOLD` (defaults: 1.2, 0.5, 10 — tune these
+  per CPU generation; the "right" MPKI to call memory-bound varies by
+  memory subsystem and cache size).
+
+**Accuracy depends on function duration relative to the sampling
+interval.** The counter delta between two SIGPROF samples is attributed
+wholly to whichever leaf PC the *second* sample landed on — a valid
+approximation when a function runs for longer than one sampling
+interval (validated against `perf stat` on `heat2d`'s `compute_stencil`),
+but it breaks down for functions shorter than `MINIPROF_INTERVAL_MS`: a
+single 10ms window can span thousands of calls to many small, frequently
+called subroutines (a tight numerical solver loop, say), and the *whole
+window's* counter delta gets attributed to whichever one the sample
+happened to land on. The tell: many structurally unrelated functions all
+showing nearly the same cycles per sample (`Cycles` ÷ `Samp` — not a
+displayed column, but easy to check by eye), because none of them are
+really measuring their own cost anymore — they're all measuring
+"however many cycles elapsed in one sampling interval."
+
+**Table 2 detects this itself** and warns instead of silently presenting
+numbers that look plausible but aren't:
+
+```
+  WARNING: 21 of 25 functions above (84%) show Cyc/samp within 20% of
+  each other (interval smearing)
+  These numbers likely reflect "cycles per 10ms sampling interval", not
+  this function's own cost — a sign that these
+  functions run for less time than MINIPROF_INTERVAL_MS=10, so a single
+  interval spans many different calls and
+  the whole interval's counter delta gets attributed to whichever one
+  the sample happened to land on. IPC/MPKI
+  numbers above are not trustworthy for those functions. For exact
+  per-function data regardless of call duration, use
+  trace mode (Table 3) instead — see the two-pass profiling workflow in
+  the README.
+```
+
+The check: among functions with at least a handful of samples, compute
+cycles-per-sample internally and take the median, then see how many
+functions land within 20% of it. A tight majority (≥60%, requiring at
+least 5 functions) is the smearing signature — but that clustering alone
+isn't quite sufficient evidence with only a few data points, since
+genuinely different functions can coincidentally land close together by
+chance. Real smearing also produces near-uniform *IPC* across the
+clustered set — the interval is dominated by whichever code actually
+ran, and that same code's instruction mix drives both numbers together
+— so the warning additionally requires ≥90% of the clustered functions
+to share the same classification (COMPUTE-BOUND/MEMORY-BOUND/MIXED).
+Genuinely different functions rarely do; smeared ones almost always do.
+`make run-hwc-validate-smear` exercises the positive case (many tiny
+functions — the warning should fire); `run-hwc-validate`/
+`run-hwc-validate-omp` exercise the negative case (long-running,
+structurally different kernels — it should stay silent).
+
+If hardware counters aren't available on any rank (denied by
+`perf_event_paranoid`, or no PMU — e.g. inside a VM without a virtual
+PMU), sampling proceeds completely normally and Table 2 is replaced with
+a one-line note instead of silently showing zeros. A one-time diagnostic
+is also printed to stderr (rank 0 only) at startup in that case.
+
+### Trace report
+
+```
+Table 1: User Function Tracing (aggregated across all ranks)
+   Calls   Incl(s)   Excl(s)   Avg.Excl   MaxCalls  Function
+    1600    7.72      7.72     4826.38us    400     compute_stencil
+    1600   11.86      7.28     4552.68us    400     check_convergence
+
+Table 2: MPI Call Tracing (aggregated across all ranks)
+   Calls   Time(s)   Avg(us)   Total Bytes   Avg Bytes  Function
+    3200    5.75      1796.49   52428800     16384.0    MPI_Sendrecv
+    1600    4.58      2860.74     12800          8.0    MPI_Allreduce
+```
+
+Table 1 gives exact call counts, inclusive time, and exclusive (self)
+time for each traced function; Table 2 gives MPI call statistics — MPI
+tracing happens automatically, no `.mpa` entry needed. Exclusive time
+correctly excludes time spent inside MPI calls — note
+`check_convergence`'s exclusive time (7.28s) is noticeably lower than
+its inclusive time (11.86s), with the ~4.58s difference matching almost
+exactly the total `MPI_Allreduce` time in Table 2, since nearly all of
+that gap is `MPI_Allreduce` wait time, already broken out separately.
+
+If hardware counters are available, the trace report gains a third table
+with **exact per-invocation** IPC and MPKI data — `perf_event_open`
+counters are read at every traced function's entry and exit, so unlike
+sample mode's statistical leaf-PC attribution, there's no smearing:
+
+```
+Table 3: Hardware Counter Characterisation (exact per-invocation, inclusive)
+   Calls    IPC    MPKI      Cycles  Instructions  LLC misses  Classification  Function
+    1600   3.68    4.47   1.095e+10     4.028e+10   1.799e+08  COMPUTE-BOUND   compute_stencil
+    1600   1.51   13.28   8.997e+09     1.356e+10   1.802e+08  COMPUTE-BOUND   check_convergence
+```
+
+Same classification rule and thresholds as sample mode's
+[Table 2](#table-2-hardware-counter-characterisation). Two differences
+worth knowing:
+
+- **Inclusive, not exclusive.** These counters are the entry→exit delta
+  for the whole call, including any nested traced functions or plain
+  (non-traced) work — the same convention as `Incl(s)` above, not
+  `Excl(s)`. A function whose IPC looks lower than expected here may
+  simply be dominated by a callee's counter activity.
+- **Exact, not statistical.** Because these numbers come from real
+  per-call boundaries rather than samples landing on a leaf PC, they can
+  disagree numerically with sample mode's Table 2 for the same
+  function — that's expected, and Table 3's numbers are the more
+  precise ones when both are available.
+
+Only traced functions get a row (the `.mpa`-selected set), the same
+scoping as Tables 1 and 2. If any rank lacked hardware counters, this
+table is replaced by an explanatory note instead of showing zeros.
 
 
 ## Examples
 
 The programs in `examples/` demonstrate and test miniprof; they are not
-part of the library and are not needed when linking miniprof into your own
-application.
+part of the library and are not needed when linking miniprof into your
+own application.
 
 | Program | Language | Purpose |
 |---|---|---|
@@ -256,6 +588,7 @@ Build all three sample and trace variants with `make examples`.
 | `make run-hwc-validate-omp` | Run `hwc_validate_omp`, 1 rank, 2 OpenMP threads running the same two kernels *concurrently*; asserts they're still classified independently and correctly |
 | `make example-hwc-validate-smear` | Build `examples/hwc_validate_smear` (interval-smearing warning positive control) |
 | `make run-hwc-validate-smear` | Run `hwc_validate_smear`, 1 rank, 20 tiny functions; asserts Table 2's smearing warning fires (opposite check from the two above) |
+| `make check` | Full test suite, one pass/fail exit code — builds everything, runs all three `hwc_validate*` checks plus sample/trace smoke runs on every example. What CI runs on every push; see `.github/workflows/ci.yml`. Override for constrained environments, e.g. `make check MPIRUN_FLAGS=--oversubscribe NRANKS=2` |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
 
@@ -272,10 +605,10 @@ heterogeneous medium:
 dT/dt = d/dx(Kx dT/dx) + d/dy(Ky dT/dy) + d/dz(Kz dT/dz) + Q
 ```
 
-where `Kx`, `Ky`, `Kz` are spatially-varying thermal conductivity
-fields (modelling geological heterogeneity — high-K inclusions, low-K
-zones, anisotropy with `Kz = 0.1 * Kx`) and `Q` is a time-modulated
-Gaussian ring heat source. Second-order centred finite differences with
+where `Kx`, `Ky`, `Kz` are spatially-varying thermal conductivity fields
+(modelling geological heterogeneity — high-K inclusions, low-K zones,
+anisotropy with `Kz = 0.1 * Kx`) and `Q` is a time-modulated Gaussian
+ring heat source. Second-order centred finite differences with
 face-averaged conductivities, explicit Euler time integration, Dirichlet
 BCs on Z faces, periodic in XY.
 
@@ -347,437 +680,64 @@ to increase local work per rank (larger NX/NY/NZ) or rethink
 communication overlap.
 
 
-## Library workflow and reference
-
-### Two-pass profiling workflow
-
-This is the recommended way to use miniprof: sample broadly, select the
-important functions, then trace those functions precisely.
-
-#### 1. Sample first
-
-Run your normal binary with sampling enabled (the default mode — no env
-vars required beyond pointing at an output file if you want a specific
-name):
-
-```bash
-mpirun -n 64 ./your_app
-```
-
-This produces `miniprof_report.txt` — a flat sampling profile,
-grouped by `USER` / `MPI` / `OMP` / `LIBC` / `SYSTEM` / `ETC`, broken
-down to function and source-line granularity, with per-rank load
-imbalance — and `miniprof.mpa`, a plain-text list of every `USER`
-function whose sampled time exceeded the threshold (default 1%).
-
-```bash
-$ cat miniprof.mpa
-# miniprof MPA suggestions — generated 2026-06-30 14:38:44
-# Functions with Samp% >= 1.0% from the sampling pass.
-# Only USER-group functions are listed: MPI calls are
-# always traced automatically (see mpi_trace.c) and don't
-# need — and can't use — an entry here.
-# Edit this file to add/remove functions, then run:
-#   ./mpa-check <binary>+trace miniprof.mpa   (validate first!)
-#   MINIPROF_MODE=trace MINIPROF_TRACE_FUNCS=miniprof.mpa mpirun -n <N> ./your_app+trace
-# One function name per line; '#' starts a comment.
-#
-# Function                             Samp%
-compute_stencil                     #   9.1%
-check_convergence                   #   7.2%
-```
-
-Feel free to hand-edit this file — add functions you know you care about
-even if they didn't clear the sampling threshold, or remove ones you
-don't want traced.
-
-#### 2. Validate before you trace
-
-Before submitting a (possibly expensive, many-node) tracing run, check
-that every function in the `.mpa` file will actually resolve in your
-instrumented binary:
-
-```bash
-./mpa-check your_app+trace miniprof.mpa
-```
-
-```
-mpa-check: validating 2 function(s) from 'miniprof.mpa' against 'your_app+trace'
-
-  OK    compute_stencil                           0x00003be0  (local/static)
-  OK    check_convergence                         0x00003e50  (local/static)
-
-2 resolved, 0 failed, out of 2 total
-
-mpa-check: confirmed 4 instrumentation call site(s) in 'your_app+trace' — this binary was built with -finstrument-functions.
-
-mpa-check: all functions resolved successfully.
-```
-
-Exit code is `0` on success, `1` on any failure — safe to use as a gate
-in a job script:
-
-```bash
-./mpa-check your_app+trace miniprof.mpa || exit 1
-mpirun -n 64 ./your_app+trace
-```
-
-If something doesn't resolve, `mpa-check` tells you why:
-
-```
-  FAIL  compute_stenncil                          (not found in binary)
-
-mpa-check: FAILED — 1 function(s) will not be traced.
-  Common causes:
-    1. Typo in the .mpa file
-    2. Function was inlined away or optimized out
-       (try -O0 or __attribute__((noinline)) on that function)
-    3. .mpa file was generated against a different binary
-    4. Binary is stripped (rebuild without -s / strip)
-```
-
-It also independently checks that the binary you're pointing it at was
-genuinely built with `-finstrument-functions` (not just linked against
-the library) — a resolved name doesn't guarantee an entry/exit hook will
-actually fire if the compiler flag was forgotten.
-
-#### 3. Trace
-
-```bash
-MINIPROF_MODE=trace \
-MINIPROF_TRACE_FUNCS=miniprof.mpa \
-mpirun -n 64 ./your_app+trace
-```
-
-Produces `miniprof_trace_report.txt`: exact call counts, inclusive time,
-and exclusive (self) time for each traced function, plus a separate
-table of MPI call statistics (call count, total time, message bytes) —
-MPI tracing happens automatically, no `.mpa` entry needed.
-
-```
-Table 1: User Function Tracing (aggregated across all ranks)
-   Calls   Incl(s)   Excl(s)   Avg.Excl   MaxCalls  Function
-    1600    7.72      7.72     4826.38us    400     compute_stencil
-    1600   11.86      7.28     4552.68us    400     check_convergence
-
-Table 2: MPI Call Tracing (aggregated across all ranks)
-   Calls   Time(s)   Avg(us)   Total Bytes   Avg Bytes  Function
-    3200    5.75      1796.49   52428800     16384.0    MPI_Sendrecv
-    1600    4.58      2860.74     12800          8.0    MPI_Allreduce
-```
-
-Exclusive time correctly excludes time spent inside MPI calls — note
-`check_convergence`'s exclusive time (7.28s) is noticeably lower than
-its inclusive time (11.86s), with the ~4.58s difference matching almost
-exactly the total `MPI_Allreduce` time in Table 2, since nearly all of
-that gap is `MPI_Allreduce` wait time, already broken out separately.
-
-If hardware counters are available (see
-[Table 2: Hardware Counter Characterisation](#table-2-hardware-counter-characterisation)
-in the sampling report), the trace report gains a third table with
-**exact per-invocation** IPC and cache-miss data — `perf_event_open`
-counters are read at every traced function's entry and exit, so unlike
-sample mode's statistical leaf-PC attribution, there's no smearing:
-
-```
-Table 3: Hardware Counter Characterisation (exact per-invocation, inclusive)
-   Calls    IPC    MPKI      Cycles  Instructions  LLC misses  Classification  Function
-    1600   3.68    4.47   1.095e+10     4.028e+10   1.799e+08  COMPUTE-BOUND   compute_stencil
-    1600   1.51   13.28   8.997e+09     1.356e+10   1.802e+08  COMPUTE-BOUND   check_convergence
-```
-
-Same classification rule and thresholds as sample mode's Table 2 (IPC
-and MPKI, just calls instead of samples). Two differences from sample
-mode's version worth knowing:
-
-- **Inclusive, not exclusive.** These counters are the entry→exit delta
-  for the whole call, including any nested traced functions or plain
-  (non-traced) work — the same convention as `Incl(s)` in Table 1, not
-  `Excl(s)`. A function whose IPC looks lower than expected here may
-  simply be dominated by a callee's counter activity.
-- **Exact, not statistical.** Because these numbers come from real
-  per-call boundaries rather than samples landing on a leaf PC, they can
-  (and did, during testing) disagree numerically with Table 2's
-  statistical estimate for the same function — that's expected, and
-  Table 3's numbers are the more precise ones when both are available.
-
-Only traced functions get a row (the `.mpa`-selected set), the same
-scoping as Tables 1 and 2. If any rank lacked hardware counters, this
-table is replaced by an explanatory note instead of showing zeros — see
-[Table 2](#table-2-hardware-counter-characterisation) for why that can
-happen.
-
-
-### Configuration
-
-All of these are read at `MPI_Init` time; set them in your job script or
-`mpirun -x VAR` (or just `export` before `mpirun`, depending on your MPI
-launcher's environment-passing convention).
-
-| Variable | Mode | Default | Meaning |
-|---|---|---|---|
-| `MINIPROF_MODE` | both | `sample` | `sample` or `trace` |
-| `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
-| `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |
-| `MINIPROF_OUTPUT` | sample | `miniprof_report.txt` | Sampling report path |
-| `MINIPROF_MPA_OUTPUT` | sample | `miniprof.mpa` | Where to write the trace-candidate suggestions |
-| `MINIPROF_MPA_THRESHOLD` | sample | `1.0` | Minimum Samp% for a USER function to be suggested |
-| `MINIPROF_TRACE_FUNCS` | trace | `miniprof.mpa` | Which `.mpa`-format file to read the trace function list from |
-| `MINIPROF_TRACE_OUTPUT` | trace | `miniprof_trace_report.txt` | Tracing report path |
-| `MINIPROF_IPC_COMPUTE_THRESHOLD` | both | `1.2` | IPC at/above this → COMPUTE-BOUND (hardware-counter tables) |
-| `MINIPROF_IPC_MEMORY_THRESHOLD` | both | `0.5` | IPC at/below this + high MPKI → MEMORY-BOUND |
-| `MINIPROF_MPKI_MEMORY_THRESHOLD` | both | `10` | MPKI (LLC misses per 1000 instructions) at/above this, combined with low IPC, → MEMORY-BOUND |
-| `MINIPROF_VERBOSE` | both | `0` | Set to `1` for per-rank diagnostic lines on stderr |
-
-The `.mpa` file format is plain text: one function name per line,
-`#` starts a comment (also used for trailing inline annotations).
-Blank lines are ignored. It's meant to be hand-edited.
-
-
-### Reading the sampling report
-
-```
-Table 1: Profile by Group, Function, and Line
-   Samp%      Samp   Imb.Samp  Imb.Samp%  Group
-                                           Function
-                                            Source Line
-----------------------------------------------------------------------------------------
-  100.0%      9166         --         --  Total
-   49.4%      4529         --         --  LIBC
-   16.4%      1505       44.8      10.6%   __sigaction
-   16.4%      1505         --         --  PROFILER
-   16.4%      1505       44.8      10.6%   sigprof_handler
-   16.4%      1503         --         --  USER
-    9.1%       832       29.0      12.2%   compute_stencil
-    2.1%       190         --         --    heat2d.c:38
-    1.9%       172         --         --    heat2d.c:33
-    7.2%       659       16.2       9.0%   check_convergence
-    2.9%       263         --         --    heat2d.c:68
-   16.3%      1490         --         --  SYSTEM
-    1.4%       127         --         --  MPI
-```
-
-The table groups samples by category, function, and source line:
-
-- **Samp% / Samp** — fraction and absolute count of samples landing in
-  this group/function/line, aggregated across all ranks.
-- **Imb.Samp / Imb.Samp%** — load imbalance, computed as
-  `Imb.Samp = max_rank_samples − mean_rank_samples`,
-  `Imb.Samp% = Imb.Samp / max_rank_samples × 100`. A function with a
-  large `Imb.Samp%` is unevenly distributed across ranks — a likely
-  candidate for load-balancing work.
-- **Group** — `USER` (your code), `MPI`, `OMP`, `LIBC`, `SYSTEM`
-  (process startup), `PROFILER` (miniprof's own sampling overhead —
-  see below), or `ETC` (anything unclassified).
-
-Below the group/function table are a per-rank top-5 breakdown and the
-raw per-rank sample counts and wall-clock times.
-
-#### Table 2: Hardware Counter Characterisation
-
-If the kernel allows it (`perf_event_paranoid` ≤ 2, or `CAP_PERFMON`),
-each sample also accumulates CPU cycles, retired instructions, and
-last-level-cache misses via `perf_event_open`, and the report gains a
-second table classifying every **USER**-group function as compute-bound
-or memory-bound. Scoped to `USER` deliberately: an MPI progress engine
-or `libc`/OpenMP-runtime function that happens to catch a sample isn't
-code you can act on here, and mixing it in just buries the functions
-that are (Table 1 still shows every group, since that's useful there —
-it's specifically this table that's about *your* code's characteristics):
-
-```
-Table 2: Hardware Counter Characterisation (per function)
-------------------------------------------------------------------------------------------
-      Samp     IPC    MPKI      Cycles  Instructions  LLC misses  Classification  Function
-------------------------------------------------------------------------------------------
-       832    1.83    0.09   9.480e+08     1.734e+09   1.561e+05  COMPUTE-BOUND   compute_viscous_dissipation
-       659    0.42   28.14   2.782e+09     1.168e+09   3.288e+07  MEMORY-BOUND    compute_stencil
-------------------------------------------------------------------------------------------
-  Classification: IPC>=1.2 = COMPUTE-BOUND, IPC<=0.5 + MPKI>=10.0 = MEMORY-BOUND, else MIXED
-```
-
-- **IPC** — instructions retired per cycle for that function, summed
-  across all ranks and all samples. High IPC means the pipeline is
-  staying full; low IPC means the CPU is stalled, usually waiting on
-  memory.
-- **MPKI** — last-level-cache misses per 1000 instructions retired,
-  the standard architecture metric for cache-miss rate. Normalizing by
-  instructions (the same denominator IPC uses, since `IPC = instructions
-  / cycles`) rather than by sample/call count keeps the two numbers on a
-  comparable, hardware-meaningful scale — and keeps the values in a
-  human-recognizable range (single or low double digits for a
-  reasonably cache-friendly function) instead of the arbitrary
-  large numbers a per-sample or per-call normalization produces.
-- **Cycles / Instructions / LLC misses** — the raw totals IPC and MPKI
-  are computed from, summed across all ranks and all samples, shown in
-  scientific notation. Useful for sanity-checking the derived numbers,
-  or if you want a different normalization than IPC/MPKI.
-- **Classification** — a heuristic from IPC and MPKI; the three cutoffs
-  are architecture-dependent and configurable via
-  `MINIPROF_IPC_COMPUTE_THRESHOLD`, `MINIPROF_IPC_MEMORY_THRESHOLD`, and
-  `MINIPROF_MPKI_MEMORY_THRESHOLD` (defaults: 1.2, 0.5, 10 — tune these
-  per CPU generation; the "right" MPKI to call memory-bound varies by
-  memory subsystem and cache size).
-
-The counter deltas between consecutive samples are attributed to
-whichever leaf PC the *second* sample landed on — an approximation, not
-exact per-instruction accounting, but one that converges to a
-representative IPC/miss-rate given enough samples for a function **that
-runs for longer than one sampling interval**. When that assumption
-holds it's a good approximation, validated against `perf stat` on
-`heat2d`'s `compute_stencil`.
-
-It breaks down for functions shorter than `MINIPROF_INTERVAL_MS`: a
-single 10ms window can span thousands of calls to many small, frequently
-called subroutines (a tight numerical solver loop, say), and the *whole
-window's* counter delta gets attributed to whichever one the sample
-happened to land on — not because of a bug, but because that's what
-"delta since the last sample" fundamentally measures. The tell: many
-structurally unrelated functions all showing nearly the same cycles per
-sample (`Cycles` ÷ `Samp` — not a displayed column, but easy to check by
-eye, and exactly what the detector below computes internally), because
-none of them are really measuring their own cost anymore — they're all
-measuring "however many cycles elapsed in one sampling interval."
-Confirmed against a real MPI+OpenMP NAS Parallel Benchmark run, where
-this fired for exactly this reason.
-
-**Table 2 detects this itself** and warns instead of silently presenting
-numbers that look plausible but aren't:
-
-```
-  WARNING: 21 of 25 functions above (84%) show Cyc/samp within 20% of
-  each other (interval smearing)
-  These numbers likely reflect "cycles per 10ms sampling interval", not
-  this function's own cost — a sign that these
-  functions run for less time than MINIPROF_INTERVAL_MS=10, so a single
-  interval spans many different calls and
-  the whole interval's counter delta gets attributed to whichever one
-  the sample happened to land on. IPC/MPKI
-  numbers above are not trustworthy for those functions. For exact
-  per-function data regardless of call duration, use
-  trace mode (Table 3) instead — see the two-pass profiling workflow in
-  the README.
-```
-
-The check: among functions with at least a handful of samples, compute
-cycles-per-sample internally (not a displayed column) and take the
-median, then see how many functions land within 20% of it. A tight
-majority (≥60%, requiring at least 5 functions) is the smearing
-signature — but that clustering alone isn't quite sufficient
-evidence with only a few data points, since genuinely different
-functions can coincidentally land close together by chance (caught in
-testing: two deliberately opposite kernels, IPC 1.96 vs 0.01, landed in
-the same band with only 5 qualifying functions). Real smearing also
-produces near-uniform *IPC* across the clustered set — the interval is
-dominated by whichever code actually ran, and that same code's
-instruction mix drives both numbers together — so the warning
-additionally requires ≥90% of the clustered functions to share the same
-classification (COMPUTE-BOUND/MEMORY-BOUND/MIXED). Genuinely different
-functions rarely do; smeared ones almost always do. Both conditions are
-exercised directly: `make run-hwc-validate-smear` is a positive control
-(many tiny functions — the warning should fire), while
-`run-hwc-validate`/`run-hwc-validate-omp` are negative controls (long-
-running, structurally different kernels — it should stay silent).
-
-If hardware counters aren't available on any rank (denied by
-`perf_event_paranoid`, or no PMU — e.g. inside a VM without a virtual
-PMU), sampling proceeds completely normally and Table 2 is replaced with
-a one-line note instead of silently showing zeros. A one-time diagnostic
-is also printed to stderr (rank 0 only) at startup in that case.
-
+## Troubleshooting & internals
 
 ### Notes on symbol resolution
 
 Two non-obvious things this profiler had to work around, worth knowing
-if you're debugging unexpected output:
+if you're debugging unexpected output.
 
 **`dladdr()` cannot see `static`/local functions, ever, regardless of
 `-rdynamic`.** That flag only controls which symbols get *exported* to
 the dynamic symbol table (`.dynsym`) for cross-DSO resolution — local
-symbols are never eligible no matter what. Since HPC compute kernels
-are very often declared `static` (and Fortran's internal `contains`
+symbols are never eligible no matter what. Since HPC compute kernels are
+very often declared `static` (and Fortran's internal `contains`
 subroutines are conceptually the same thing), relying on `dladdr` alone
 would silently fail to symbolize most of the interesting code. miniprof
 works around this in two places: the sampling symbolizer uses
 `addr2line` (which reads the regular `.symtab`, not `.dynsym`) for
 anything `dladdr` can't name; the trace-mode instrumentation filter
 resolves the `.mpa` function list to addresses once at startup via `nm`
-against the binary itself, rather than trying to resolve incoming PCs
-at runtime.
+against the binary itself, rather than trying to resolve incoming PCs at
+runtime. A direct consequence: `-rdynamic` is not required and
+miniprof's own build does not use it — the symbol paths that actually
+carry weight (`nm`, `addr2line`) read `.symtab` directly off the ELF
+file and never depend on `.dynsym` at all.
 
-A direct consequence: **`-rdynamic` is not required and miniprof's own
-build does not use it.** This was verified empirically, not assumed —
-identical sample and trace reports were produced with and without the
-flag across both the C and Fortran examples, since the symbol paths
-that actually carry weight here (`nm`, `addr2line`) read `.symtab`
-directly off the ELF file and never depend on `.dynsym` at all. The
-remaining `dladdr()` call sites in `symbolizer.c` still run regardless
-of `-rdynamic` — they're used for DSO path and load-base resolution
-(`dli_fname`/`dli_fbase`), which `dladdr` derives from the process's
-memory-mapping data, not from `.dynsym`, so they succeed either way; only
-`dli_sname` (the symbol *name*) ever needed `.dynsym`, and that's
-precisely the part with an `addr2line` fallback already in place.
-
-**PIE binaries need load-base correction — non-PIE binaries must NOT get
-one.** A PIE (`ET_DYN`) binary loads at a runtime-chosen address, so the
-addresses `nm`/`addr2line` print (link-time addresses, relative to the
-binary's own coordinate system) don't match the addresses you see at
+**PIE binaries need load-base correction — non-PIE binaries must NOT
+get one.** A PIE (`ET_DYN`) binary loads at a runtime-chosen address, so
+the addresses `nm`/`addr2line` print (link-time addresses, relative to
+the binary's own coordinate system) don't match the addresses you see at
 runtime (`backtrace()`, `__cyg_profile_func_enter`'s `this_fn` argument)
 until you add the load base the loader actually placed it at. A non-PIE
-(`ET_EXEC`) binary loads at its *fixed* link-time address instead — `nm`'s
-addresses are already the runtime addresses, and adding a load base on
-top double-counts it, so every comparison silently fails to match.
-
-This isn't a hypothetical: this exact bug shipped and was only caught
-during testing of the hardware-counter trace-mode work, because trace
-mode's function-address matching in `instrument.c` unconditionally added
-`/proc/self/maps`'s load base regardless of binary type — and this
-toolchain's `mpicc` produces `ET_EXEC` (non-PIE) binaries by default, not
-PIE. The result was silent, not a crash: every traced function's address
-comparison failed, `__cyg_profile_func_enter`/`_exit` were called
-correctly but never matched, and trace mode reported real MPI timing
-(Table 2, wrapped independently in `mpi_trace.c`) but **zero** user
-functions (Table 1) on every run — with no error, since a `.mpa` file
-listing legitimately-resolvable functions produces no unresolved-symbol
-warning at `instrument_load_trace_list()` time (that check validates
-symbol names against `nm`'s table, not against runtime address matching).
-`mpa-check` didn't catch it either, for the same reason: it validates
-symbol names, not runtime address matching. Fixed by reading the ELF
-header's `e_type` field directly (`instrument.c`'s `is_pie_executable()`)
-and only adding the `/proc/self/maps` load base for `ET_DYN` binaries;
-`ET_EXEC` binaries now correctly use a load base of 0. Sample mode's
-`dladdr()`-based path was never affected — `dli_fbase` already returns 0
-for non-PIE executables, so it happened to do the right thing by
-construction.
+(`ET_EXEC`) binary loads at its *fixed* link-time address instead —
+`nm`'s addresses are already the runtime addresses, and adding a load
+base on top double-counts it, so every comparison silently fails to
+match. `instrument.c`'s `is_pie_executable()` reads the ELF header's
+`e_type` field directly and only adds the `/proc/self/maps` load base
+for `ET_DYN` binaries; sample mode's `dladdr()`-based path handles this
+correctly by construction, since `dli_fbase` already returns 0 for
+non-PIE executables.
 
 If you ever see a `??` symbol with surprisingly high sample weight, or a
 function from your `.mpa` file failing to resolve when you're sure the
 name is right, these are the first two things to suspect — and
-`mpa-check` is specifically built to catch the second case before you
-waste a cluster allocation on it.
+`mpa-check` is specifically built to catch the second case (it validates
+symbol *names* against `nm`'s table; it does not validate runtime
+address matching, so a `.mpa` file that resolves cleanly can still trace
+zero functions if the PIE/non-PIE handling above is wrong for your
+toolchain) before you waste a cluster allocation on it.
 
-**A function that should clearly be hot showing zero samples.**
-`sampler.c`'s `SIGPROF` handler walks the call stack via `backtrace()`
-and previously skipped its first three returned frames, under the
-assumption that `backtrace()` includes a frame for itself in the
-array it returns. It does not — `pcs[0]` is already the true leaf, the
-actual interrupted instruction. The old code's extra skip silently
-discarded every sample's leaf frame and started attribution one level
-up the call stack, which meant any function whose own body was the hot
-path (rather than its caller) received zero direct credit, no matter
-how much CPU time it actually consumed — confirmed by direct
-experiment: a function measured at 1.65s of real CPU time across 100
-calls received zero sampling hits under the old code, while raw
-`backtrace()` calls in an identical standalone test landed inside that
-same function on 74% of samples. This is fixed; `sigprof_handler` now
-records starting from the true leaf frame. One side effect: since the
-handler's own epilogue can occasionally be the "true leaf" at the
-instant of signal delivery, a small fraction of samples legitimately
-land inside `sigprof_handler` itself — these are classified under their
-own `PROFILER` group (rather than mixed into `USER`) specifically so
-they're visible as profiling overhead without polluting your own code's
-numbers.
-
+**A function that should clearly be hot showing zero samples** usually
+means the true leaf frame isn't being captured — `sigprof_handler`
+records the interrupted instruction directly from the signal context
+(`ucontext_t` → `uc_mcontext` → `gregs[REG_RIP]`), not from
+`backtrace()`'s first returned frame, which is the handler's own frame,
+not the interrupted code. A small fraction of samples can legitimately
+land inside `sigprof_handler` itself at the instant of signal delivery
+— these are classified under their own `PROFILER` group (rather than
+mixed into `USER`) specifically so they're visible as profiling overhead
+without polluting your own code's numbers.
 
 ### Known limitations
 
@@ -796,31 +756,22 @@ numbers.
 - No GPU/CUDA support. This profiles host-side CPU and MPI activity
   only.
 - Trace mode cannot be enabled via `LD_PRELOAD` alone — instrumentation
-  calls are inserted by the compiler at `-finstrument-functions`
-  build time, so the target binary must be rebuilt (or explicitly linked
+  calls are inserted by the compiler at `-finstrument-functions` build
+  time, so the target binary must be rebuilt (or explicitly linked
   against `libminiprof.so`, see
   [Two-pass profiling workflow](#two-pass-profiling-workflow)). Only
   sample mode is fully transparent.
 - Hardware performance counters cover cycles, instructions, and
-  cache-misses (sample mode's
-  [Table 2](#table-2-hardware-counter-characterisation) and trace mode's
-  Table 3); FLOP counting is not implemented.
+  cache-misses ([sample mode's Table 2](#table-2-hardware-counter-characterisation)
+  and [trace mode's Table 3](#trace-report)); FLOP counting is not
+  implemented.
 - Hardware counters are opened per OS thread, lazily, the first time
   each thread needs them — correct for OpenMP+MPI hybrid codes as well
-  as the single-threaded-per-rank case. (An earlier version opened one
-  group on whichever thread called `MPI_Init` and read it from every
-  thread's `SIGPROF` handler unconditionally; a sample landing in an
-  OpenMP worker thread would report the `MPI_Init` thread's counters
-  instead, collapsing every worker function's IPC/MPKI numbers
-  toward whatever that one thread happened to be doing — usually idling
-  at a barrier. Confirmed against a real MPI+OpenMP NAS Parallel
-  Benchmark run: seven structurally unrelated kernels all showed
-  near-identical `Cyc/samp`, which is the signature of measuring the
-  same thread's counters every time. Fixed in `sampler_hwc.c`; see
+  as the single-threaded-per-rank case (`sampler_hwc.c`). See
   `make run-hwc-validate-omp` for a regression check that runs a
   deliberately compute-bound kernel and a deliberately memory-bound one
   concurrently on two OpenMP threads and asserts they're still
-  classified correctly, independent of each other.)
+  classified correctly, independent of each other.
 - The `PROFILER` group's percentage (signal handler + dispatch overhead)
   scales inversely with `MINIPROF_INTERVAL_MS` — the default 10ms
   interval keeps this small for real workloads; the README's own
