@@ -33,6 +33,28 @@
 /* ── per-function rollup row ─────────────────────────────────────────────── */
 #define MAX_RANKS_TRACKED 1024
 
+/* Table 2 interval-smearing detector thresholds — see the check itself,
+ * below the Table 2 print loop, for the full explanation. Uses a
+ * median + band-fraction statistic rather than a population
+ * coefficient-of-variation: real workloads (diffusion3d, in testing)
+ * can have a tightly-smeared majority alongside a legitimate minority
+ * of genuinely different functions (a one-shot initialization routine,
+ * a libm call with real different cache behavior) — a few such outliers
+ * inflate stddev enough to hide the majority's clustering under a pure
+ * CoV test, so this instead asks "do most qualifying functions sit near
+ * the same value", which tolerates a minority that doesn't. */
+#define SMEAR_MIN_SAMPLES      5     /* per-function floor; avoids 1-2 sample noise */
+#define SMEAR_MIN_FUNCS        5     /* need this many qualifying functions to judge "clustering" */
+#define SMEAR_BAND             0.20  /* within 20% of the median counts as "clustered" */
+#define SMEAR_MIN_FRACTION     0.6   /* need this fraction of qualifying functions clustered */
+#define SMEAR_MIN_CLASS_AGREEMENT 0.9 /* clustered set must mostly share one classification */
+
+static int cmp_double_asc(const void *a, const void *b)
+{
+    double da = *(const double *)a, db = *(const double *)b;
+    return (da > db) - (da < db);
+}
+
 typedef struct {
     char group[MINIPROF_GROUP_LEN];
     char name [MINIPROF_SYMBOL_LEN];
@@ -91,7 +113,7 @@ static int cmp_func_rankcol_desc(const void *a, const void *b)
 void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                     const char *mpa_outfile, double mpa_threshold,
                     double ipc_compute_threshold, double ipc_memory_threshold,
-                    double llc_memory_threshold)
+                    double llc_memory_threshold, int interval_ms)
 {
     int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -357,6 +379,14 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                     "Samp", "IPC", "LLC miss/Ksamp", "Cyc/samp", "Classification");
             hline(f, W);
 
+            /* interval-smearing detector scratch: Cyc/samp (and
+               classification, 0/1/2 = COMPUTE/MEMORY/MIXED) of every
+               well-sampled function shown below (see the check after
+               this loop for what it's looking for and why). */
+            double *smear_cycsamp = calloc(n_funcs, sizeof(double));
+            int    *smear_class   = calloc(n_funcs, sizeof(int));
+            int     smear_n = 0;
+
             int shown = 0;
             for (int oi = 0; oi < n_funcs && shown < MINIPROF_TOP_N; oi++) {
                 int fi = forder[oi];
@@ -382,19 +412,26 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                 double cyc_per_samp = cnt > 0 ? (double)cyc / (double)cnt : 0.0;
 
                 const char *cls;
+                int cls_code;
                 if (ipc >= ipc_compute_threshold) {
-                    cls = "COMPUTE-BOUND";
+                    cls = "COMPUTE-BOUND"; cls_code = 0;
                 } else if (ipc <= ipc_memory_threshold &&
                            llc_per_ksamp >= llc_memory_threshold) {
-                    cls = "MEMORY-BOUND";
+                    cls = "MEMORY-BOUND"; cls_code = 1;
                 } else {
-                    cls = "MIXED";
+                    cls = "MIXED"; cls_code = 2;
                 }
 
                 fprintf(f, "  %8ld  %6.2f  %14.0f  %10.3e  %-14s  %s\n",
                         cnt, ipc, llc_per_ksamp, cyc_per_samp, cls,
                         funcs[fi].name);
                 shown++;
+
+                if (cnt >= SMEAR_MIN_SAMPLES) {
+                    smear_cycsamp[smear_n] = cyc_per_samp;
+                    smear_class[smear_n]   = cls_code;
+                    smear_n++;
+                }
             }
             hline(f, W);
             fprintf(f, "  Classification: IPC>=%.1f = COMPUTE-BOUND, "
@@ -402,6 +439,91 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                        "else MIXED\n",
                     ipc_compute_threshold, ipc_memory_threshold,
                     llc_memory_threshold);
+
+            /*
+             * Interval-smearing check: sample-mode counter deltas are
+             * read since the *previous* SIGPROF sample and attributed
+             * wholly to the current leaf PC — valid only when a
+             * function's execution time is long relative to the
+             * sampling interval. For short, frequently-called functions
+             * (many small subroutines in a tight solver loop, say), a
+             * single interval spans many different calls, and the
+             * *whole interval's* delta gets attributed to whichever one
+             * happened to be running at the sample boundary. The tell:
+             * many structurally different functions all show nearly
+             * the same Cyc/samp, because none of them are really
+             * measuring their own cost — they're all measuring
+             * "however many cycles elapsed in one sampling interval."
+             * Confirmed against a real MPI+OpenMP NAS Parallel
+             * Benchmark run where this fired for exactly this reason;
+             * Table 3 (trace mode) is immune, since it uses exact
+             * entry/exit deltas instead of interval sampling.
+             *
+             * Cyc/samp clustering alone isn't quite enough: with only a
+             * handful of qualifying functions, genuinely different ones
+             * can coincidentally land in the same band (caught in
+             * testing — two deliberately opposite kernels, IPC 1.96 vs
+             * 0.01, landed within the same 20% Cyc/samp band purely by
+             * chance with only 5 data points). Real smearing produces
+             * near-uniform IPC too (the interval is dominated by
+             * whichever code actually ran, and that same code's
+             * instruction mix drives both numbers together), so require
+             * the clustered set to also mostly agree on classification —
+             * genuinely different functions rarely do.
+             */
+            if (smear_n >= SMEAR_MIN_FUNCS) {
+                double *sorted = calloc(smear_n, sizeof(double));
+                memcpy(sorted, smear_cycsamp, smear_n * sizeof(double));
+                qsort(sorted, smear_n, sizeof(double), cmp_double_asc);
+                double median = (smear_n % 2)
+                    ? sorted[smear_n / 2]
+                    : (sorted[smear_n / 2 - 1] + sorted[smear_n / 2]) / 2.0;
+                free(sorted);
+
+                int n_clustered = 0;
+                int class_counts[3] = {0, 0, 0};
+                if (median > 0.0) {
+                    for (int i = 0; i < smear_n; i++) {
+                        double rel = fabs(smear_cycsamp[i] - median) / median;
+                        if (rel <= SMEAR_BAND) {
+                            n_clustered++;
+                            class_counts[smear_class[i]]++;
+                        }
+                    }
+                }
+                double fraction = (double)n_clustered / smear_n;
+                int class_majority = class_counts[0] > class_counts[1]
+                    ? (class_counts[0] > class_counts[2] ? class_counts[0] : class_counts[2])
+                    : (class_counts[1] > class_counts[2] ? class_counts[1] : class_counts[2]);
+                double class_agreement = n_clustered > 0
+                    ? (double)class_majority / n_clustered : 0.0;
+
+                if (n_clustered >= SMEAR_MIN_FUNCS && fraction >= SMEAR_MIN_FRACTION &&
+                    class_agreement >= SMEAR_MIN_CLASS_AGREEMENT) {
+                    fprintf(f, "\n  WARNING: %d of %d functions above "
+                               "(%.0f%%) show Cyc/samp within %.0f%% of "
+                               "each other (interval smearing)\n"
+                               "  These numbers likely reflect \"cycles "
+                               "per %dms sampling interval\", not this "
+                               "function's own cost — a sign that these\n"
+                               "  functions run for less time than "
+                               "MINIPROF_INTERVAL_MS=%d, so a single "
+                               "interval spans many different calls and\n"
+                               "  the whole interval's counter delta "
+                               "gets attributed to whichever one the "
+                               "sample happened to land on. IPC/LLC-miss\n"
+                               "  numbers above are not trustworthy for "
+                               "those functions. For exact per-function "
+                               "data regardless of call duration, use\n"
+                               "  trace mode (Table 3) instead — see the "
+                               "two-pass profiling workflow in the "
+                               "README.\n",
+                            n_clustered, smear_n, fraction * 100.0,
+                            SMEAR_BAND * 100.0, interval_ms, interval_ms);
+                }
+            }
+            free(smear_cycsamp);
+            free(smear_class);
         }
         fputc('\n', f);
 

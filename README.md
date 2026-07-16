@@ -254,6 +254,8 @@ Build all three sample and trace variants with `make examples`.
 | `make run-hwc-validate` | Run `hwc_validate`, 1 rank; asserts the compute-bound/memory-bound kernels land in the expected Table 2 classification |
 | `make example-hwc-validate-omp` | Build `examples/hwc_validate_omp` (per-thread counter sanity check, needs `-fopenmp`) |
 | `make run-hwc-validate-omp` | Run `hwc_validate_omp`, 1 rank, 2 OpenMP threads running the same two kernels *concurrently*; asserts they're still classified independently and correctly |
+| `make example-hwc-validate-smear` | Build `examples/hwc_validate_smear` (interval-smearing warning positive control) |
+| `make run-hwc-validate-smear` | Run `hwc_validate_smear`, 1 rank, 20 tiny functions; asserts Table 2's smearing warning fires (opposite check from the two above) |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
 
@@ -606,8 +608,59 @@ Table 2: Hardware Counter Characterisation (per function)
 The counter deltas between consecutive samples are attributed to
 whichever leaf PC the *second* sample landed on — an approximation, not
 exact per-instruction accounting, but one that converges to a
-representative IPC/miss-rate given enough samples for a function, the
-same statistical argument that makes PC sampling itself valid.
+representative IPC/miss-rate given enough samples for a function **that
+runs for longer than one sampling interval**. When that assumption
+holds it's a good approximation, validated against `perf stat` on
+`heat2d`'s `compute_stencil`.
+
+It breaks down for functions shorter than `MINIPROF_INTERVAL_MS`: a
+single 10ms window can span thousands of calls to many small, frequently
+called subroutines (a tight numerical solver loop, say), and the *whole
+window's* counter delta gets attributed to whichever one the sample
+happened to land on — not because of a bug, but because that's what
+"delta since the last sample" fundamentally measures. The tell: many
+structurally unrelated functions all showing nearly the same `Cyc/samp`,
+because none of them are really measuring their own cost anymore —
+they're all measuring "however many cycles elapsed in one sampling
+interval." Confirmed against a real MPI+OpenMP NAS Parallel Benchmark
+run, where this fired for exactly this reason.
+
+**Table 2 detects this itself** and warns instead of silently presenting
+numbers that look plausible but aren't:
+
+```
+  WARNING: 21 of 25 functions above (84%) show Cyc/samp within 20% of
+  each other (interval smearing)
+  These numbers likely reflect "cycles per 10ms sampling interval", not
+  this function's own cost — a sign that these
+  functions run for less time than MINIPROF_INTERVAL_MS=10, so a single
+  interval spans many different calls and
+  the whole interval's counter delta gets attributed to whichever one
+  the sample happened to land on. IPC/LLC-miss
+  numbers above are not trustworthy for those functions. For exact
+  per-function data regardless of call duration, use
+  trace mode (Table 3) instead — see the two-pass profiling workflow in
+  the README.
+```
+
+The check: among functions with at least a handful of samples, take the
+median `Cyc/samp` and see how many land within 20% of it. A tight
+majority (≥60%, requiring at least 5 functions) is the smearing
+signature — but `Cyc/samp` clustering alone isn't quite sufficient
+evidence with only a few data points, since genuinely different
+functions can coincidentally land close together by chance (caught in
+testing: two deliberately opposite kernels, IPC 1.96 vs 0.01, landed in
+the same band with only 5 qualifying functions). Real smearing also
+produces near-uniform *IPC* across the clustered set — the interval is
+dominated by whichever code actually ran, and that same code's
+instruction mix drives both numbers together — so the warning
+additionally requires ≥90% of the clustered functions to share the same
+classification (COMPUTE-BOUND/MEMORY-BOUND/MIXED). Genuinely different
+functions rarely do; smeared ones almost always do. Both conditions are
+exercised directly: `make run-hwc-validate-smear` is a positive control
+(many tiny functions — the warning should fire), while
+`run-hwc-validate`/`run-hwc-validate-omp` are negative controls (long-
+running, structurally different kernels — it should stay silent).
 
 If hardware counters aren't available on any rank (denied by
 `perf_event_paranoid`, or no PMU — e.g. inside a VM without a virtual

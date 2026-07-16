@@ -54,7 +54,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear
 
 all: $(EXAMPLES)
 
@@ -88,5 +88,11 @@ hwc_validate: hwc_validate.c $(LIB)
 hwc_validate_omp: hwc_validate_omp.c $(LIB)
 	$(CC) $(CFLAGS) -fopenmp $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Negative control for the Table 2 "interval smearing" self-diagnostic
+# (see hwc_validate_smear.c) — many tiny functions, so the warning
+# should fire, unlike hwc_validate/hwc_validate_omp's long-running ones.
+hwc_validate_smear: hwc_validate_smear.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 clean:
-	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp
+	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear

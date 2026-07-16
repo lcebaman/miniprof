@@ -25,6 +25,9 @@
 #   run-hwc-validate-omp — same, but with the two kernels running
 #                      concurrently on separate OpenMP threads, to check
 #                      counters aren't cross-attributed between threads
+#   run-hwc-validate-smear — negative control for the Table 2 interval-
+#                      smearing warning: many tiny functions, so the
+#                      warning should fire (opposite of the other two)
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
 #
@@ -102,13 +105,14 @@ EXAMPLE_3D    := $(EXAMPLE_DIR)/diffusion3d
 EXAMPLE_3D_TRACE := $(EXAMPLE_DIR)/diffusion3d+trace
 EXAMPLE_HWC_VALIDATE := $(EXAMPLE_DIR)/hwc_validate
 EXAMPLE_HWC_VALIDATE_OMP := $(EXAMPLE_DIR)/hwc_validate_omp
+EXAMPLE_HWC_VALIDATE_SMEAR := $(EXAMPLE_DIR)/hwc_validate_smear
 
 # ── rules ─────────────────────────────────────────────────────────────────────
 .PHONY: all lib examples example example-trace example-f example-f-trace \
         example-3d example-3d-trace example-hwc-validate \
-        example-hwc-validate-omp mpa-check \
+        example-hwc-validate-omp example-hwc-validate-smear mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
-        run-hwc-validate run-hwc-validate-omp mpa clean
+        run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear mpa clean
 
 all: lib examples
 
@@ -201,6 +205,16 @@ example-hwc-validate-omp: $(EXAMPLE_HWC_VALIDATE_OMP)
 
 $(EXAMPLE_HWC_VALIDATE_OMP): $(LIB)
 	$(MAKE) -C $(EXAMPLE_DIR) hwc_validate_omp
+
+# hwc_validate_smear — negative control for Table 2's interval-smearing
+# warning (see the detector in aggregator.c): 20 tiny, near-instantaneous
+# functions round-robin-called for several seconds, guaranteeing many
+# calls per sampling interval. Unlike the two validators above, this one
+# is EXPECTED to trigger the warning.
+example-hwc-validate-smear: $(EXAMPLE_HWC_VALIDATE_SMEAR)
+
+$(EXAMPLE_HWC_VALIDATE_SMEAR): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) hwc_validate_smear
 
 # Standalone validator — deliberately NOT linked against libminiprof or
 # MPI at all (it just runs `nm` on a binary and cross-checks a .mpa file),
@@ -375,14 +389,37 @@ run-hwc-validate-omp: $(EXAMPLE_HWC_VALIDATE_OMP)
 		exit $$FAIL; \
 	fi
 
+# ── run-hwc-validate-smear: interval-smearing warning negative control ──────
+# Opposite check from the two targets above: this workload is EXPECTED
+# to trigger Table 2's smearing warning (many tiny functions called far
+# more often than the sampling interval), so PASS here means the
+# warning appears, not that classification was correct. ~5s wall time.
+run-hwc-validate-smear: $(EXAMPLE_HWC_VALIDATE_SMEAR)
+	@echo "Running hwc_validate_smear (SAMPLE mode) with 1 MPI rank..."
+	MINIPROF_MODE=sample \
+	MINIPROF_OUTPUT=miniprof_hwc_validate_smear_report.txt \
+	MINIPROF_MPA_OUTPUT=miniprof_hwc_validate_smear.mpa \
+	mpirun -n 1 ./$(EXAMPLE_HWC_VALIDATE_SMEAR)
+	@echo ""
+	@if grep -q "Hardware counters not available" miniprof_hwc_validate_smear_report.txt; then \
+		echo "SKIP: hardware counters unavailable on this system — nothing to validate."; \
+	else \
+		sed -n '/Table 2:/,/^ PER-RANK/p' miniprof_hwc_validate_smear_report.txt; \
+		grep -q "WARNING.*interval smearing" miniprof_hwc_validate_smear_report.txt \
+			&& echo "PASS: interval-smearing warning fired as expected" \
+			|| { echo "FAIL: smearing warning did NOT fire — detector may have regressed"; exit 1; }; \
+	fi
+
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:
 	rm -f $(LIB_OBJS) $(LIB) $(EXAMPLE) $(EXAMPLE_TRACE) \
 	      $(EXAMPLE_F) $(EXAMPLE_F_TRACE) \
 	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) \
-	      $(EXAMPLE_HWC_VALIDATE) $(EXAMPLE_HWC_VALIDATE_OMP) mpa-check \
+	      $(EXAMPLE_HWC_VALIDATE) $(EXAMPLE_HWC_VALIDATE_OMP) \
+	      $(EXAMPLE_HWC_VALIDATE_SMEAR) mpa-check \
 	      miniprof_report.txt miniprof.mpa miniprof_trace_report.txt \
 	      miniprof_report_f.txt miniprof_f.mpa miniprof_trace_report_f.txt \
 	      miniprof_report_3d.txt miniprof_3d.mpa miniprof_trace_report_3d.txt \
 	      miniprof_hwc_validate_report.txt miniprof_hwc_validate.mpa \
-	      miniprof_hwc_validate_omp_report.txt miniprof_hwc_validate_omp.mpa
+	      miniprof_hwc_validate_omp_report.txt miniprof_hwc_validate_omp.mpa \
+	      miniprof_hwc_validate_smear_report.txt miniprof_hwc_validate_smear.mpa

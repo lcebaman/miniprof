@@ -287,7 +287,7 @@ static void miniprof_finalize_sample(double elapsed)
 
     aggregator_run(&local, g_outfile, g_mpa_outfile, g_mpa_threshold,
                    g_ipc_compute_threshold, g_ipc_memory_threshold,
-                   g_llc_memory_threshold);
+                   g_llc_memory_threshold, g_interval_ms);
 }
 
 static void miniprof_finalize_trace(double elapsed)
