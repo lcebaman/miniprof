@@ -11,6 +11,8 @@
 #   example-3d     — build examples/diffusion3d (3D anisotropic diffusion, 2D Cartesian MPI)
 #   example-3d-trace— build examples/diffusion3d+trace (instrumented)
 #   example-hwc-validate — build examples/hwc_validate (Table 2 sanity check)
+#   example-hwc-validate-omp — build examples/hwc_validate_omp (per-thread
+#                      counter sanity check, MPI+OpenMP)
 #   mpa-check      — build the standalone .mpa validator (no MPI needed)
 #   run            — sampling run with 4 ranks (heat2d)
 #   run-trace      — validate + trace run (heat2d)
@@ -20,6 +22,9 @@
 #   run-3d-trace   — validate + trace run (diffusion3d)
 #   run-hwc-validate — sanity-check Table 2 (hardware counter characterisation)
 #                      against a known compute-bound / memory-bound kernel pair
+#   run-hwc-validate-omp — same, but with the two kernels running
+#                      concurrently on separate OpenMP threads, to check
+#                      counters aren't cross-attributed between threads
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
 #
@@ -96,12 +101,14 @@ EXAMPLE_F_TRACE := $(EXAMPLE_DIR)/heat1d+trace
 EXAMPLE_3D    := $(EXAMPLE_DIR)/diffusion3d
 EXAMPLE_3D_TRACE := $(EXAMPLE_DIR)/diffusion3d+trace
 EXAMPLE_HWC_VALIDATE := $(EXAMPLE_DIR)/hwc_validate
+EXAMPLE_HWC_VALIDATE_OMP := $(EXAMPLE_DIR)/hwc_validate_omp
 
 # ── rules ─────────────────────────────────────────────────────────────────────
 .PHONY: all lib examples example example-trace example-f example-f-trace \
-        example-3d example-3d-trace example-hwc-validate mpa-check \
+        example-3d example-3d-trace example-hwc-validate \
+        example-hwc-validate-omp mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
-        run-hwc-validate mpa clean
+        run-hwc-validate run-hwc-validate-omp mpa clean
 
 all: lib examples
 
@@ -185,6 +192,15 @@ example-hwc-validate: $(EXAMPLE_HWC_VALIDATE)
 
 $(EXAMPLE_HWC_VALIDATE): $(LIB)
 	$(MAKE) -C $(EXAMPLE_DIR) hwc_validate
+
+# hwc_validate_omp — same two kernels, but run concurrently on separate
+# OpenMP threads within one MPI rank, specifically to check that
+# per-thread counter groups aren't cross-attributed (see
+# sampler_hwc.c's file header for the bug this guards against).
+example-hwc-validate-omp: $(EXAMPLE_HWC_VALIDATE_OMP)
+
+$(EXAMPLE_HWC_VALIDATE_OMP): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) hwc_validate_omp
 
 # Standalone validator — deliberately NOT linked against libminiprof or
 # MPI at all (it just runs `nm` on a binary and cross-checks a .mpa file),
@@ -330,12 +346,43 @@ run-hwc-validate: $(EXAMPLE_HWC_VALIDATE)
 		exit $$FAIL; \
 	fi
 
+# ── run-hwc-validate-omp: per-thread counter sanity check ───────────────────
+# Same idea as run-hwc-validate, but the two kernels run CONCURRENTLY on
+# separate OpenMP threads (see hwc_validate_omp.c) instead of
+# sequentially on one. This specifically catches counter groups being
+# opened once and read from every thread regardless of which thread is
+# actually executing — see sampler_hwc.c's file header. ~4s wall time.
+run-hwc-validate-omp: $(EXAMPLE_HWC_VALIDATE_OMP)
+	@echo "Running hwc_validate_omp (SAMPLE mode) with 1 MPI rank, 2 OpenMP threads..."
+	MINIPROF_MODE=sample \
+	MINIPROF_OUTPUT=miniprof_hwc_validate_omp_report.txt \
+	MINIPROF_MPA_OUTPUT=miniprof_hwc_validate_omp.mpa \
+	mpirun -n 1 ./$(EXAMPLE_HWC_VALIDATE_OMP)
+	@echo ""
+	@if grep -q "Hardware counters not available" miniprof_hwc_validate_omp_report.txt; then \
+		echo "SKIP: hardware counters unavailable on this system — nothing to validate."; \
+	else \
+		echo "=== Table 2 ==="; \
+		sed -n '/Table 2:/,/^$$/p' miniprof_hwc_validate_omp_report.txt; \
+		echo ""; \
+		FAIL=0; \
+		grep "compute_bound_kernel" miniprof_hwc_validate_omp_report.txt | grep -q "COMPUTE-BOUND" \
+			&& echo "PASS: compute_bound_kernel (thread 0) classified COMPUTE-BOUND" \
+			|| { echo "FAIL: compute_bound_kernel NOT classified COMPUTE-BOUND"; FAIL=1; }; \
+		grep "memory_bound_kernel" miniprof_hwc_validate_omp_report.txt | grep -q "MEMORY-BOUND" \
+			&& echo "PASS: memory_bound_kernel (thread 1, concurrent) classified MEMORY-BOUND" \
+			|| { echo "FAIL: memory_bound_kernel NOT classified MEMORY-BOUND"; FAIL=1; }; \
+		exit $$FAIL; \
+	fi
+
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:
 	rm -f $(LIB_OBJS) $(LIB) $(EXAMPLE) $(EXAMPLE_TRACE) \
 	      $(EXAMPLE_F) $(EXAMPLE_F_TRACE) \
-	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) $(EXAMPLE_HWC_VALIDATE) mpa-check \
+	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) \
+	      $(EXAMPLE_HWC_VALIDATE) $(EXAMPLE_HWC_VALIDATE_OMP) mpa-check \
 	      miniprof_report.txt miniprof.mpa miniprof_trace_report.txt \
 	      miniprof_report_f.txt miniprof_f.mpa miniprof_trace_report_f.txt \
 	      miniprof_report_3d.txt miniprof_3d.mpa miniprof_trace_report_3d.txt \
-	      miniprof_hwc_validate_report.txt miniprof_hwc_validate.mpa
+	      miniprof_hwc_validate_report.txt miniprof_hwc_validate.mpa \
+	      miniprof_hwc_validate_omp_report.txt miniprof_hwc_validate_omp.mpa

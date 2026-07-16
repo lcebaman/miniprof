@@ -252,6 +252,8 @@ Build all three sample and trace variants with `make examples`.
 | `make run-3d-trace` | Validate and trace `diffusion3d` |
 | `make example-hwc-validate` | Build `examples/hwc_validate` (Table 2 sanity check, see below) |
 | `make run-hwc-validate` | Run `hwc_validate`, 1 rank; asserts the compute-bound/memory-bound kernels land in the expected Table 2 classification |
+| `make example-hwc-validate-omp` | Build `examples/hwc_validate_omp` (per-thread counter sanity check, needs `-fopenmp`) |
+| `make run-hwc-validate-omp` | Run `hwc_validate_omp`, 1 rank, 2 OpenMP threads running the same two kernels *concurrently*; asserts they're still classified independently and correctly |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
 
@@ -733,19 +735,22 @@ numbers.
   cache-misses (sample mode's
   [Table 2](#table-2-hardware-counter-characterisation) and trace mode's
   Table 3); FLOP counting is not implemented.
-- The hardware counter group is opened by, and only counts, the thread
-  that calls `MPI_Init` — correct for the common single-threaded-per-rank
-  case, but not extended to per-OpenMP-thread counter groups yet. In
-  sample mode, if `SIGPROF` fires on a different thread in an OpenMP+MPI
-  hybrid code, the counter delta gets attributed to the wrong thread's
-  activity; sample counts (Table 1) are unaffected, only Table 2's
-  IPC/LLC-miss numbers would be misleading in that scenario. In trace
-  mode, `__cyg_profile_func_enter`/`_exit` fire on whichever thread calls
-  the traced function, so a function called only from a non-`MPI_Init`
-  thread would read counters that were never enabled on that thread —
-  `hwc_read()` fails cleanly in that case and the function's row falls
-  back to `--` (see the `cycles == 0` handling in `trace_aggregator.c`)
-  rather than showing a wrong number.
+- Hardware counters are opened per OS thread, lazily, the first time
+  each thread needs them — correct for OpenMP+MPI hybrid codes as well
+  as the single-threaded-per-rank case. (An earlier version opened one
+  group on whichever thread called `MPI_Init` and read it from every
+  thread's `SIGPROF` handler unconditionally; a sample landing in an
+  OpenMP worker thread would report the `MPI_Init` thread's counters
+  instead, collapsing every worker function's IPC/LLC-miss numbers
+  toward whatever that one thread happened to be doing — usually idling
+  at a barrier. Confirmed against a real MPI+OpenMP NAS Parallel
+  Benchmark run: seven structurally unrelated kernels all showed
+  near-identical `Cyc/samp`, which is the signature of measuring the
+  same thread's counters every time. Fixed in `sampler_hwc.c`; see
+  `make run-hwc-validate-omp` for a regression check that runs a
+  deliberately compute-bound kernel and a deliberately memory-bound one
+  concurrently on two OpenMP threads and asserts they're still
+  classified correctly, independent of each other.)
 - The `PROFILER` group's percentage (signal handler + dispatch overhead)
   scales inversely with `MINIPROF_INTERVAL_MS` — the default 10ms
   interval keeps this small for real workloads; the README's own

@@ -54,7 +54,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp
 
 all: $(EXAMPLES)
 
@@ -82,5 +82,11 @@ diffusion3d+trace: diffusion3d.c $(LIB)
 hwc_validate: hwc_validate.c $(LIB)
 	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# MPI+OpenMP variant — validates PER-THREAD hardware counters
+# specifically (see hwc_validate_omp.c). Needs -fopenmp and
+# MPI_THREAD_FUNNELED support from the MPI implementation.
+hwc_validate_omp: hwc_validate_omp.c $(LIB)
+	$(CC) $(CFLAGS) -fopenmp $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 clean:
-	rm -f $(EXAMPLES) hwc_validate
+	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp

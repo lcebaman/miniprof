@@ -1,19 +1,44 @@
 /*
- * sampler_hwc.c — perf_event_open hardware counter group
+ * sampler_hwc.c — perf_event_open hardware counter group, per OS thread
  *
  * Opens three counters as a group (CYCLES as leader, INSTRUCTIONS and
  * CACHE_MISSES attached to it) so a single read() returns a consistent
- * snapshot of all three via PERF_FORMAT_GROUP. That single read() is a
- * plain fd read — async-signal-safe — which is what will eventually let
- * the SIGPROF handler sample counters alongside the PC (not wired up
- * yet in this increment; see hwc_read()'s doc comment).
+ * snapshot of all three via PERF_FORMAT_GROUP.
+ *
+ * PER-THREAD, NOT PER-PROCESS: perf_event_open() with pid=0 counts only
+ * the calling thread. Sample mode's SIGPROF handler and trace mode's
+ * __cyg_profile_func_enter/exit can all fire on whatever OS thread is
+ * currently running — the MPI_Init-calling thread for a single-threaded
+ * MPI rank, but any OpenMP worker thread too in an MPI+OpenMP hybrid
+ * code. An earlier version of this file opened one counter group on
+ * whichever thread called hwc_init() and used it from every thread's
+ * signal handler unconditionally: reading a group opened by thread A
+ * while thread B is what's actually executing returns thread A's
+ * counters, not thread B's — thread A being wherever the MPI_Init
+ * caller was at the time (often idling at an OpenMP barrier), so every
+ * sample regardless of which worker function it landed in reported
+ * near-identical numbers dominated by thread A's activity. Confirmed
+ * against a real OpenMP+MPI NAS Parallel Benchmark run: Cyc/samp came
+ * out within 0.2% of each other across seven structurally unrelated
+ * kernels (LU block solve, dense matmul, tridiagonal solves), which is
+ * not physically plausible for genuinely distinct compute — the
+ * signature of measuring the same thread's counters every time.
+ *
+ * Fix: `_Thread_local` state below, one counter group per OS thread,
+ * lazily opened (silently — no stdio, so it's safe from a signal
+ * handler) the first time that thread calls hwc_read()/hwc_read_delta().
+ * hwc_init() remains the eager, diagnostic-printing entry point for the
+ * *first* thread (the one that calls MPI_Init, or instrument_load_trace_
+ * list() in trace mode) — it shares the same underlying open logic, just
+ * with a one-time stderr message on failure so paranoid/unsupported
+ * systems still get one clear explanation instead of N silent no-ops.
  *
  * This module must never turn a missing/denied counter into a fatal
  * error: perf_event_open requires either CAP_PERFMON or
  * kernel.perf_event_paranoid <= 2, and plenty of HPC login/compute
  * nodes (and every container without --privileged) lock that down.
- * Every failure path here degrades to hwc_enabled() == 0 and prints a
- * one-time diagnostic; sampling itself is entirely unaffected.
+ * Every failure path here degrades to that thread's counters being
+ * unavailable; sampling itself is entirely unaffected.
  */
 
 #define _GNU_SOURCE
@@ -28,15 +53,27 @@
 #include <errno.h>
 #include <mpi.h>
 
-static int g_fd_cycles = -1;   /* group leader */
-static int g_fd_insns  = -1;
-static int g_fd_misses = -1;
-static int g_enabled   = 0;
+/* ── per-thread state ─────────────────────────────────────────────────── */
+typedef struct {
+    int fd_cycles;   /* group leader; -1 = not opened */
+    int fd_insns;
+    int fd_misses;
+    int state;       /* 0 = not attempted yet, 1 = enabled, -1 = failed */
+    hwc_snapshot_t prev_delta; /* baseline for hwc_read_delta() on this thread */
+} hwc_tls_t;
 
-/* baseline for hwc_read_delta(), seeded from hwc_init()'s self-test
- * snapshot so the first real delta reflects time since enable, not
- * since an all-zero epoch */
-static hwc_snapshot_t g_prev_delta;
+static _Thread_local hwc_tls_t g_tls = { .fd_cycles = -1, .fd_insns = -1,
+                                         .fd_misses = -1, .state = 0 };
+
+/* Set by hwc_init() for the *first* (eager) thread only — this is what
+ * hwc_enabled() reports, used for the rank-level "counters available"
+ * summary in reports. Other threads open their own groups lazily and
+ * independently; a later thread's failure (e.g. running out of fds
+ * across hundreds of OpenMP threads) doesn't flip this back off, and a
+ * later thread's success doesn't require this to have been 1 first —
+ * each thread's actual availability is simply whether *that* thread's
+ * hwc_read()/hwc_read_delta() calls succeed. */
+static int g_first_thread_enabled = 0;
 
 static long perf_event_open(struct perf_event_attr *attr, int group_fd)
 {
@@ -70,14 +107,22 @@ static int is_rank0(void)
     return rank == 0;
 }
 
-static void close_all(void)
+static void tls_close_all(void)
 {
-    if (g_fd_insns  >= 0) { close(g_fd_insns);  g_fd_insns  = -1; }
-    if (g_fd_misses >= 0) { close(g_fd_misses); g_fd_misses = -1; }
-    if (g_fd_cycles >= 0) { close(g_fd_cycles); g_fd_cycles = -1; }
+    if (g_tls.fd_insns  >= 0) { close(g_tls.fd_insns);  g_tls.fd_insns  = -1; }
+    if (g_tls.fd_misses >= 0) { close(g_tls.fd_misses); g_tls.fd_misses = -1; }
+    if (g_tls.fd_cycles >= 0) { close(g_tls.fd_cycles); g_tls.fd_cycles = -1; }
 }
 
-int hwc_init(void)
+/*
+ * Core open+enable+self-test for the CALLING thread's counter group.
+ * No stdio, no MPI calls — every operation here is a raw syscall
+ * (perf_event_open/ioctl/read), so this is safe to call the first time
+ * any thread (including from inside a signal handler) needs its group.
+ * Returns 1 on success, 0 on failure (errno left set to the last
+ * failing syscall's error for hwc_init()'s diagnostics to inspect).
+ */
+static int tls_open_silent(void)
 {
     struct perf_event_attr attr;
 
@@ -94,27 +139,8 @@ int hwc_init(void)
                            | PERF_FORMAT_TOTAL_TIME_ENABLED
                            | PERF_FORMAT_TOTAL_TIME_RUNNING;
 
-    g_fd_cycles = perf_event_open(&attr, -1);
-    if (g_fd_cycles < 0) {
-        if (is_rank0()) {
-            if (errno == EACCES || errno == EPERM) {
-                fprintf(stderr,
-                    "[miniprof] hardware counters unavailable "
-                    "(perf_event_paranoid=%d, need <=2). Profiling "
-                    "continues with sampling only.\n"
-                    "[miniprof] To enable: "
-                    "sudo sysctl kernel.perf_event_paranoid=2\n",
-                    read_paranoid_level());
-            } else {
-                fprintf(stderr,
-                    "[miniprof] hardware counters unavailable "
-                    "(perf_event_open: %s). Profiling continues with "
-                    "sampling only.\n", strerror(errno));
-            }
-        }
-        g_enabled = 0;
-        return 0;
-    }
+    g_tls.fd_cycles = perf_event_open(&attr, -1);
+    if (g_tls.fd_cycles < 0) { g_tls.state = -1; return 0; }
 
     /* Attach INSTRUCTIONS and CACHE_MISSES to the same group. Group
      * members inherit disabled=0 from the leader's enable state, so we
@@ -122,75 +148,90 @@ int hwc_init(void)
     attr.disabled = 0;
 
     attr.config = PERF_COUNT_HW_INSTRUCTIONS;
-    g_fd_insns  = perf_event_open(&attr, g_fd_cycles);
+    g_tls.fd_insns = perf_event_open(&attr, g_tls.fd_cycles);
 
     attr.config = PERF_COUNT_HW_CACHE_MISSES;
-    g_fd_misses = perf_event_open(&attr, g_fd_cycles);
+    g_tls.fd_misses = perf_event_open(&attr, g_tls.fd_cycles);
 
-    if (g_fd_insns < 0 || g_fd_misses < 0) {
-        if (is_rank0()) {
-            fprintf(stderr,
-                "[miniprof] partial hardware counter support (%s), "
-                "falling back to sampling only.\n", strerror(errno));
-        }
-        close_all();
-        g_enabled = 0;
+    if (g_tls.fd_insns < 0 || g_tls.fd_misses < 0) {
+        tls_close_all();
+        g_tls.state = -1;
         return 0;
     }
 
-    if (ioctl(g_fd_cycles, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP) != 0 ||
-        ioctl(g_fd_cycles, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP) != 0) {
-        if (is_rank0()) {
-            fprintf(stderr,
-                "[miniprof] failed to enable hardware counter group "
-                "(%s), falling back to sampling only.\n",
-                strerror(errno));
-        }
-        close_all();
-        g_enabled = 0;
+    if (ioctl(g_tls.fd_cycles, PERF_EVENT_IOC_RESET, PERF_IOC_FLAG_GROUP) != 0 ||
+        ioctl(g_tls.fd_cycles, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP) != 0) {
+        tls_close_all();
+        g_tls.state = -1;
         return 0;
     }
 
-    g_enabled = 1;
+    g_tls.state = 1; /* hwc_read() below requires this to already be 1 */
 
     /* Self-test: confirm the group actually produces a well-formed
-     * snapshot before trusting it for the rest of the run. Doubles as
-     * the baseline for hwc_read_delta()'s first delta. */
-    if (hwc_read(&g_prev_delta) != 0 || g_prev_delta.nr != 3) {
-        if (is_rank0()) {
-            fprintf(stderr,
-                "[miniprof] hardware counter group opened but read() "
-                "self-test failed, falling back to sampling only.\n");
-        }
-        close_all();
-        g_enabled = 0;
+     * snapshot before trusting it. Doubles as the baseline for this
+     * thread's hwc_read_delta(). */
+    if (hwc_read(&g_tls.prev_delta) != 0 || g_tls.prev_delta.nr != 3) {
+        tls_close_all();
+        g_tls.state = -1;
         return 0;
-    }
-
-    if (is_rank0() && getenv("MINIPROF_VERBOSE") && atoi(getenv("MINIPROF_VERBOSE"))) {
-        fprintf(stderr,
-            "[miniprof] hardware counters enabled "
-            "(cycles, instructions, cache-misses)\n");
     }
 
     return 1;
 }
 
+int hwc_init(void)
+{
+    if (g_tls.state != 0) return g_tls.state == 1; /* already attempted */
+
+    if (tls_open_silent()) {
+        g_first_thread_enabled = 1;
+        if (is_rank0() && getenv("MINIPROF_VERBOSE") && atoi(getenv("MINIPROF_VERBOSE"))) {
+            fprintf(stderr,
+                "[miniprof] hardware counters enabled "
+                "(cycles, instructions, cache-misses)\n");
+        }
+        return 1;
+    }
+
+    if (is_rank0()) {
+        if (errno == EACCES || errno == EPERM) {
+            fprintf(stderr,
+                "[miniprof] hardware counters unavailable "
+                "(perf_event_paranoid=%d, need <=2). Profiling "
+                "continues with sampling only.\n"
+                "[miniprof] To enable: "
+                "sudo sysctl kernel.perf_event_paranoid=2\n",
+                read_paranoid_level());
+        } else {
+            fprintf(stderr,
+                "[miniprof] hardware counters unavailable "
+                "(%s). Profiling continues with sampling only.\n",
+                strerror(errno));
+        }
+    }
+    g_first_thread_enabled = 0;
+    return 0;
+}
+
 int hwc_enabled(void)
 {
-    return g_enabled;
+    return g_first_thread_enabled;
 }
 
 int hwc_read(hwc_snapshot_t *out)
 {
-    if (!g_enabled || g_fd_cycles < 0) return -1;
+    /* Lazily open THIS thread's own group on first use — silent (no
+     * stdio/MPI calls in tls_open_silent()), so this is safe to reach
+     * for the first time from inside a signal handler on a thread that
+     * never explicitly called hwc_init() (e.g. an OpenMP worker). */
+    if (g_tls.state == 0) tls_open_silent();
+    if (g_tls.state != 1) return -1;
 
     /* One read() on the group leader returns all member counters
      * (PERF_FORMAT_GROUP) plus enabled/running time — a plain fd read,
-     * async-signal-safe, which is what makes this safe to eventually
-     * call from the SIGPROF handler. Not yet wired in: this increment
-     * only establishes and self-tests the counter group. */
-    ssize_t n = read(g_fd_cycles, out, sizeof(*out));
+     * async-signal-safe. */
+    ssize_t n = read(g_tls.fd_cycles, out, sizeof(*out));
     if (n != (ssize_t)sizeof(*out) || out->nr != 3) return -1;
     return 0;
 }
@@ -227,14 +268,20 @@ int hwc_read_delta(uint64_t *cycles, uint64_t *instructions,
     hwc_snapshot_t snap;
     if (hwc_read(&snap) != 0) return -1;
 
-    hwc_delta(&g_prev_delta, &snap, cycles, instructions, cache_misses);
-    g_prev_delta = snap;
+    hwc_delta(&g_tls.prev_delta, &snap, cycles, instructions, cache_misses);
+    g_tls.prev_delta = snap;
     return 0;
 }
 
 void hwc_shutdown(void)
 {
-    close_all();
-    g_enabled = 0;
-    memset(&g_prev_delta, 0, sizeof(g_prev_delta));
+    /* Only closes the CALLING thread's fds — that's the only state
+     * accessible from here. Other threads' per-thread groups (e.g.
+     * OpenMP workers that never call this) are closed implicitly by
+     * the OS when those threads exit or the process terminates, which
+     * happens shortly after MPI_Finalize either way. */
+    tls_close_all();
+    g_tls.state = 0;
+    memset(&g_tls.prev_delta, 0, sizeof(g_tls.prev_delta));
+    if (g_first_thread_enabled) g_first_thread_enabled = 0;
 }
