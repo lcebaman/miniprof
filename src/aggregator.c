@@ -392,9 +392,16 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
             int    *smear_class   = calloc(n_funcs, sizeof(int));
             int     smear_n = 0;
 
+            /* USER only — MPI/OMP-runtime/LIBC/SYSTEM/PROFILER functions
+               that happen to catch a sample aren't code the user can
+               act on here (they don't own that code), and mixing them
+               in just adds noise around the functions that matter. */
             int shown = 0;
             for (int oi = 0; oi < n_funcs && shown < MINIPROF_TOP_N; oi++) {
                 int fi = forder[oi];
+                if (strcmp(funcs[fi].group, MINIPROF_GROUP_USER) != 0)
+                    continue;
+
                 uint64_t cyc  = funcs[fi].cycles;
                 uint64_t ins  = funcs[fi].instructions;
                 uint64_t miss = funcs[fi].cache_misses;
@@ -439,6 +446,9 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                     smear_n++;
                 }
             }
+            if (shown == 0)
+                fprintf(f, "  (no USER-group functions were sampled — "
+                           "everything landed in MPI/library/runtime code)\n");
             hline(f, W);
             fprintf(f, "  Classification: IPC>=%.1f = COMPUTE-BOUND, "
                        "IPC<=%.1f + MPKI>=%.1f = MEMORY-BOUND, "

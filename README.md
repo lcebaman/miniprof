@@ -578,8 +578,12 @@ raw per-rank sample counts and wall-clock times.
 If the kernel allows it (`perf_event_paranoid` ≤ 2, or `CAP_PERFMON`),
 each sample also accumulates CPU cycles, retired instructions, and
 last-level-cache misses via `perf_event_open`, and the report gains a
-second table classifying every function as compute-bound or
-memory-bound:
+second table classifying every **USER**-group function as compute-bound
+or memory-bound. Scoped to `USER` deliberately: an MPI progress engine
+or `libc`/OpenMP-runtime function that happens to catch a sample isn't
+code you can act on here, and mixing it in just buries the functions
+that are (Table 1 still shows every group, since that's useful there —
+it's specifically this table that's about *your* code's characteristics):
 
 ```
 Table 2: Hardware Counter Characterisation (per function)
