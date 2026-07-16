@@ -28,6 +28,10 @@
 #   run-hwc-validate-smear — negative control for the Table 2 interval-
 #                      smearing warning: many tiny functions, so the
 #                      warning should fire (opposite of the other two)
+#   example-mpi-ext-validate — build mpi_ext_validate(_f): MPI_Test/Wait
+#                      family + one-sided RMA wrapper sanity check, C+Fortran
+#   run-ext-trace  — trace-mode check that every new MPI wrapper above
+#                      is actually recorded, for both languages
 #   check          — full test suite, one pass/fail exit code (what CI runs)
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
@@ -107,14 +111,17 @@ EXAMPLE_3D_TRACE := $(EXAMPLE_DIR)/diffusion3d+trace
 EXAMPLE_HWC_VALIDATE := $(EXAMPLE_DIR)/hwc_validate
 EXAMPLE_HWC_VALIDATE_OMP := $(EXAMPLE_DIR)/hwc_validate_omp
 EXAMPLE_HWC_VALIDATE_SMEAR := $(EXAMPLE_DIR)/hwc_validate_smear
+EXAMPLE_MPI_EXT_VALIDATE := $(EXAMPLE_DIR)/mpi_ext_validate
+EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
 
 # ── rules ─────────────────────────────────────────────────────────────────────
 .PHONY: all lib examples example example-trace example-f example-f-trace \
         example-3d example-3d-trace example-hwc-validate \
-        example-hwc-validate-omp example-hwc-validate-smear mpa-check \
+        example-hwc-validate-omp example-hwc-validate-smear \
+        example-mpi-ext-validate mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
-        mpa check clean
+        run-ext-trace mpa check clean
 
 all: lib examples
 
@@ -217,6 +224,18 @@ example-hwc-validate-smear: $(EXAMPLE_HWC_VALIDATE_SMEAR)
 
 $(EXAMPLE_HWC_VALIDATE_SMEAR): $(LIB)
 	$(MAKE) -C $(EXAMPLE_DIR) hwc_validate_smear
+
+# mpi_ext_validate(_f) — validates the MPI_Test/Wait family (Test,
+# Testany, Testall, Waitany, Waitall) and one-sided RMA (Win_create,
+# Win_fence, Put, Get, Win_free) wrappers added to mpi_trace.c, in both
+# C and Fortran. See run-ext-trace below for the actual check.
+example-mpi-ext-validate: $(EXAMPLE_MPI_EXT_VALIDATE) $(EXAMPLE_MPI_EXT_VALIDATE_F)
+
+$(EXAMPLE_MPI_EXT_VALIDATE): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) mpi_ext_validate
+
+$(EXAMPLE_MPI_EXT_VALIDATE_F): $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) mpi_ext_validate_f
 
 # Standalone validator — deliberately NOT linked against libminiprof or
 # MPI at all (it just runs `nm` on a binary and cross-checks a .mpa file),
@@ -417,6 +436,37 @@ run-hwc-validate-smear: $(EXAMPLE_HWC_VALIDATE_SMEAR)
 			|| { echo "FAIL: smearing warning did NOT fire — detector may have regressed"; exit 1; }; \
 	fi
 
+# ── run-ext-trace: MPI_Test/Wait family + RMA wrapper sanity check ──────────
+# Runs mpi_ext_validate (C) and mpi_ext_validate_f (Fortran) under TRACE
+# mode and asserts every new wrapper actually shows up in Table 2 (MPI
+# Call Tracing) with a nonzero call count, for both languages. The
+# binaries themselves also self-check correctness (wrong RMA/request
+# data aborts with a nonzero exit before miniprof even writes a report),
+# so this target catches both "does the wrapper exist" and "does the
+# underlying MPI call still behave correctly through the wrapper".
+# MINIPROF_TRACE_FUNCS=/dev/null is deliberate: this only tests MPI call
+# tracing (independent of the user-function trace list), not Table 1.
+run-ext-trace: $(EXAMPLE_MPI_EXT_VALIDATE) $(EXAMPLE_MPI_EXT_VALIDATE_F)
+	@echo "Running mpi_ext_validate (C) under TRACE mode, $(NRANKS) ranks..."
+	MINIPROF_MODE=trace MINIPROF_TRACE_FUNCS=/dev/null \
+	MINIPROF_TRACE_OUTPUT=miniprof_ext_trace_c.txt \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_MPI_EXT_VALIDATE)
+	@echo "Running mpi_ext_validate_f (Fortran) under TRACE mode, $(NRANKS) ranks..."
+	MINIPROF_MODE=trace MINIPROF_TRACE_FUNCS=/dev/null \
+	MINIPROF_TRACE_OUTPUT=miniprof_ext_trace_f.txt \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_MPI_EXT_VALIDATE_F)
+	@echo ""
+	@FAIL=0; \
+	for fn in MPI_Test MPI_Testany MPI_Waitall MPI_Waitany \
+	          MPI_Win_create MPI_Win_fence MPI_Put MPI_Get MPI_Win_free; do \
+		for f in miniprof_ext_trace_c.txt miniprof_ext_trace_f.txt; do \
+			grep -q "  $$fn$$" $$f \
+				&& echo "PASS: $$fn traced in $$f" \
+				|| { echo "FAIL: $$fn missing from $$f"; FAIL=1; }; \
+		done; \
+	done; \
+	exit $$FAIL
+
 # ── check: full test suite, one pass/fail exit code ──────────────────────────
 # What this actually tests, in two tiers:
 #   - The three hwc_validate targets assert on report *content* (correct
@@ -445,6 +495,7 @@ check: lib examples mpa-check
 	$(MAKE) run-f-trace  || FAIL=1; \
 	$(MAKE) run-3d       || FAIL=1; \
 	$(MAKE) run-3d-trace || FAIL=1; \
+	$(MAKE) run-ext-trace || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -461,10 +512,12 @@ clean:
 	      $(EXAMPLE_F) $(EXAMPLE_F_TRACE) \
 	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) \
 	      $(EXAMPLE_HWC_VALIDATE) $(EXAMPLE_HWC_VALIDATE_OMP) \
-	      $(EXAMPLE_HWC_VALIDATE_SMEAR) mpa-check \
+	      $(EXAMPLE_HWC_VALIDATE_SMEAR) \
+	      $(EXAMPLE_MPI_EXT_VALIDATE) $(EXAMPLE_MPI_EXT_VALIDATE_F) mpa-check \
 	      miniprof_report.txt miniprof.mpa miniprof_trace_report.txt \
 	      miniprof_report_f.txt miniprof_f.mpa miniprof_trace_report_f.txt \
 	      miniprof_report_3d.txt miniprof_3d.mpa miniprof_trace_report_3d.txt \
 	      miniprof_hwc_validate_report.txt miniprof_hwc_validate.mpa \
 	      miniprof_hwc_validate_omp_report.txt miniprof_hwc_validate_omp.mpa \
-	      miniprof_hwc_validate_smear_report.txt miniprof_hwc_validate_smear.mpa
+	      miniprof_hwc_validate_smear_report.txt miniprof_hwc_validate_smear.mpa \
+	      miniprof_ext_trace_c.txt miniprof_ext_trace_f.txt

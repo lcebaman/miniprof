@@ -54,7 +54,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f
 
 all: $(EXAMPLES)
 
@@ -94,5 +94,14 @@ hwc_validate_omp: hwc_validate_omp.c $(LIB)
 hwc_validate_smear: hwc_validate_smear.c $(LIB)
 	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Validator for the MPI_Test/Wait family + one-sided RMA wrappers in
+# mpi_trace.c (see mpi_ext_validate.c/.f90). Needs >= 2 ranks.
+mpi_ext_validate: mpi_ext_validate.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
+mpi_ext_validate_f: mpi_ext_validate.f90 $(LIB)
+	$(FC) $(FFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 clean:
-	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear
+	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
+	      mpi_ext_validate mpi_ext_validate_f
