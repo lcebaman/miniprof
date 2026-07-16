@@ -58,7 +58,7 @@ static int             g_verbose      = 0;
 static struct timespec g_t_start;
 static double  g_ipc_compute_threshold = MINIPROF_DEFAULT_IPC_COMPUTE_THRESHOLD;
 static double  g_ipc_memory_threshold  = MINIPROF_DEFAULT_IPC_MEMORY_THRESHOLD;
-static double  g_llc_memory_threshold  = MINIPROF_DEFAULT_LLC_MEMORY_THRESHOLD;
+static double  g_mpki_memory_threshold = MINIPROF_DEFAULT_MPKI_MEMORY_THRESHOLD;
 
 /* ── env-var helpers ─────────────────────────────────────────────────────── */
 static int env_int(const char *var, int def)
@@ -165,8 +165,8 @@ void miniprof_init(int interval_ms)
                                          MINIPROF_DEFAULT_IPC_COMPUTE_THRESHOLD);
     g_ipc_memory_threshold  = env_double("MINIPROF_IPC_MEMORY_THRESHOLD",
                                          MINIPROF_DEFAULT_IPC_MEMORY_THRESHOLD);
-    g_llc_memory_threshold  = env_double("MINIPROF_LLC_MEMORY_THRESHOLD",
-                                         MINIPROF_DEFAULT_LLC_MEMORY_THRESHOLD);
+    g_mpki_memory_threshold = env_double("MINIPROF_MPKI_MEMORY_THRESHOLD",
+                                         MINIPROF_DEFAULT_MPKI_MEMORY_THRESHOLD);
 
     const char *trace_funcs = getenv("MINIPROF_TRACE_FUNCS");
     if (trace_funcs) snprintf(g_trace_funcs, sizeof(g_trace_funcs), "%s", trace_funcs);
@@ -287,7 +287,7 @@ static void miniprof_finalize_sample(double elapsed)
 
     aggregator_run(&local, g_outfile, g_mpa_outfile, g_mpa_threshold,
                    g_ipc_compute_threshold, g_ipc_memory_threshold,
-                   g_llc_memory_threshold, g_interval_ms);
+                   g_mpki_memory_threshold, g_interval_ms);
 }
 
 static void miniprof_finalize_trace(double elapsed)
@@ -310,7 +310,7 @@ static void miniprof_finalize_trace(double elapsed)
 
     trace_aggregator_run(&g_trace_local, g_trace_outfile,
                          g_ipc_compute_threshold, g_ipc_memory_threshold,
-                         g_llc_memory_threshold);
+                         g_mpki_memory_threshold);
 }
 
 void miniprof_finalize(void)

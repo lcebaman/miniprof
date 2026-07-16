@@ -48,7 +48,7 @@ static int cmp_roll_time_desc(const void *a, const void *b)
 void trace_aggregator_run(miniprof_trace_profile_t *local, const char *outfile,
                           double ipc_compute_threshold,
                           double ipc_memory_threshold,
-                          double llc_memory_threshold)
+                          double mpki_memory_threshold)
 {
     int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -212,43 +212,44 @@ void trace_aggregator_run(miniprof_trace_profile_t *local, const char *outfile,
             fprintf(f, "  (no user functions matched the trace list — "
                        "check MINIPROF_TRACE_FUNCS / .mpa file)\n");
         } else {
-            fprintf(f, "  %8s  %6s  %14s  %12s  %-14s  Function\n",
-                    "Calls", "IPC", "LLC miss/Kcall", "Cyc/call", "Classification");
+            fprintf(f, "  %8s  %6s  %7s  %10s  %12s  %10s  %-14s  Function\n",
+                    "Calls", "IPC", "MPKI", "Cycles", "Instructions",
+                    "LLC misses", "Classification");
             hline(f, W);
             for (int oi = 0; oi < n_func_rolls; oi++) {
                 roll_t *r = &func_rolls[forder[oi]];
                 if (r->cycles == 0) {
-                    fprintf(f, "  %8ld  %6s  %14s  %12s  %-14s  %s\n",
-                            r->total_calls, "--", "--", "--", "--", r->name);
+                    fprintf(f, "  %8ld  %6s  %7s  %10s  %12s  %10s  %-14s  %s\n",
+                            r->total_calls, "--", "--", "--", "--", "--",
+                            "--", r->name);
                     continue;
                 }
-                double ipc = (double)r->instructions / (double)r->cycles;
-                double llc_per_kcall = r->total_calls > 0
-                    ? (double)r->cache_misses / ((double)r->total_calls / 1000.0)
+                double ipc  = (double)r->instructions / (double)r->cycles;
+                double mpki = r->instructions > 0
+                    ? (double)r->cache_misses * 1000.0 / (double)r->instructions
                     : 0.0;
-                double cyc_per_call = r->total_calls > 0
-                    ? (double)r->cycles / (double)r->total_calls : 0.0;
 
                 const char *cls;
                 if (ipc >= ipc_compute_threshold) {
                     cls = "COMPUTE-BOUND";
                 } else if (ipc <= ipc_memory_threshold &&
-                           llc_per_kcall >= llc_memory_threshold) {
+                           mpki >= mpki_memory_threshold) {
                     cls = "MEMORY-BOUND";
                 } else {
                     cls = "MIXED";
                 }
 
-                fprintf(f, "  %8ld  %6.2f  %14.0f  %12.3e  %-14s  %s\n",
-                        r->total_calls, ipc, llc_per_kcall, cyc_per_call,
+                fprintf(f, "  %8ld  %6.2f  %7.2f  %10.3e  %12.3e  %10.3e  %-14s  %s\n",
+                        r->total_calls, ipc, mpki, (double)r->cycles,
+                        (double)r->instructions, (double)r->cache_misses,
                         cls, r->name);
             }
             hline(f, W);
             fprintf(f, "  Classification: IPC>=%.1f = COMPUTE-BOUND, "
-                       "IPC<=%.1f + LLC miss/Kcall>=%.0f = MEMORY-BOUND, "
+                       "IPC<=%.1f + MPKI>=%.1f = MEMORY-BOUND, "
                        "else MIXED\n",
                     ipc_compute_threshold, ipc_memory_threshold,
-                    llc_memory_threshold);
+                    mpki_memory_threshold);
         }
         fputc('\n', f);
 

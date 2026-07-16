@@ -481,14 +481,14 @@ sample mode's statistical leaf-PC attribution, there's no smearing:
 
 ```
 Table 3: Hardware Counter Characterisation (exact per-invocation, inclusive)
-   Calls    IPC   LLC miss/Kcall      Cyc/call  Classification  Function
-    1600   3.65       114083934     6.897e+06  COMPUTE-BOUND   compute_stencil
-    1600   1.50       114193279     5.967e+06  COMPUTE-BOUND   check_convergence
+   Calls    IPC    MPKI      Cycles  Instructions  LLC misses  Classification  Function
+    1600   3.68    4.47   1.095e+10     4.028e+10   1.799e+08  COMPUTE-BOUND   compute_stencil
+    1600   1.51   13.28   8.997e+09     1.356e+10   1.802e+08  COMPUTE-BOUND   check_convergence
 ```
 
 Same classification rule and thresholds as sample mode's Table 2 (IPC
-and LLC-miss-per-1000-\*, just calls instead of samples). Two differences
-from sample mode's version worth knowing:
+and MPKI, just calls instead of samples). Two differences from sample
+mode's version worth knowing:
 
 - **Inclusive, not exclusive.** These counters are the entry→exit delta
   for the whole call, including any nested traced functions or plain
@@ -525,8 +525,8 @@ launcher's environment-passing convention).
 | `MINIPROF_TRACE_FUNCS` | trace | `miniprof.mpa` | Which `.mpa`-format file to read the trace function list from |
 | `MINIPROF_TRACE_OUTPUT` | trace | `miniprof_trace_report.txt` | Tracing report path |
 | `MINIPROF_IPC_COMPUTE_THRESHOLD` | both | `1.2` | IPC at/above this → COMPUTE-BOUND (hardware-counter tables) |
-| `MINIPROF_IPC_MEMORY_THRESHOLD` | both | `0.5` | IPC at/below this + high LLC misses → MEMORY-BOUND |
-| `MINIPROF_LLC_MEMORY_THRESHOLD` | both | `500` | LLC misses per 1000 samples/calls, combined with low IPC, → MEMORY-BOUND |
+| `MINIPROF_IPC_MEMORY_THRESHOLD` | both | `0.5` | IPC at/below this + high MPKI → MEMORY-BOUND |
+| `MINIPROF_MPKI_MEMORY_THRESHOLD` | both | `10` | MPKI (LLC misses per 1000 instructions) at/above this, combined with low IPC, → MEMORY-BOUND |
 | `MINIPROF_VERBOSE` | both | `0` | Set to `1` for per-rank diagnostic lines on stderr |
 
 The `.mpa` file format is plain text: one function name per line,
@@ -583,27 +583,37 @@ memory-bound:
 
 ```
 Table 2: Hardware Counter Characterisation (per function)
-------------------------------------------------------------------------------------
-      Samp     IPC  LLC miss/Ksamp    Cyc/samp  Classification  Function
-------------------------------------------------------------------------------------
-       832    1.83              12   1.140e+06  COMPUTE-BOUND   compute_viscous_dissipation
-       659    0.42             847   4.220e+06  MEMORY-BOUND    compute_stencil
-------------------------------------------------------------------------------------
-  Classification: IPC>=1.2 = COMPUTE-BOUND, IPC<=0.5 + LLC miss/Ksamp>=500 = MEMORY-BOUND, else MIXED
+------------------------------------------------------------------------------------------
+      Samp     IPC    MPKI      Cycles  Instructions  LLC misses  Classification  Function
+------------------------------------------------------------------------------------------
+       832    1.83    0.09   9.480e+08     1.734e+09   1.561e+05  COMPUTE-BOUND   compute_viscous_dissipation
+       659    0.42   28.14   2.782e+09     1.168e+09   3.288e+07  MEMORY-BOUND    compute_stencil
+------------------------------------------------------------------------------------------
+  Classification: IPC>=1.2 = COMPUTE-BOUND, IPC<=0.5 + MPKI>=10.0 = MEMORY-BOUND, else MIXED
 ```
 
 - **IPC** — instructions retired per cycle for that function, summed
   across all ranks and all samples. High IPC means the pipeline is
   staying full; low IPC means the CPU is stalled, usually waiting on
   memory.
-- **LLC miss/Ksamp** — last-level-cache misses per 1000 samples
-  attributed to that function.
-- **Classification** — a heuristic from IPC and LLC miss rate; the
-  three cutoffs are architecture-dependent and configurable via
+- **MPKI** — last-level-cache misses per 1000 instructions retired,
+  the standard architecture metric for cache-miss rate. Normalizing by
+  instructions (the same denominator IPC uses, since `IPC = instructions
+  / cycles`) rather than by sample/call count keeps the two numbers on a
+  comparable, hardware-meaningful scale — and keeps the values in a
+  human-recognizable range (single or low double digits for a
+  reasonably cache-friendly function) instead of the arbitrary
+  large numbers a per-sample or per-call normalization produces.
+- **Cycles / Instructions / LLC misses** — the raw totals IPC and MPKI
+  are computed from, summed across all ranks and all samples, shown in
+  scientific notation. Useful for sanity-checking the derived numbers,
+  or if you want a different normalization than IPC/MPKI.
+- **Classification** — a heuristic from IPC and MPKI; the three cutoffs
+  are architecture-dependent and configurable via
   `MINIPROF_IPC_COMPUTE_THRESHOLD`, `MINIPROF_IPC_MEMORY_THRESHOLD`, and
-  `MINIPROF_LLC_MEMORY_THRESHOLD` (defaults: 1.2, 0.5, 500 — tune these
-  per CPU generation; the "right" cache-miss rate to call memory-bound
-  varies a lot by memory subsystem).
+  `MINIPROF_MPKI_MEMORY_THRESHOLD` (defaults: 1.2, 0.5, 10 — tune these
+  per CPU generation; the "right" MPKI to call memory-bound varies by
+  memory subsystem and cache size).
 
 The counter deltas between consecutive samples are attributed to
 whichever leaf PC the *second* sample landed on — an approximation, not
@@ -619,11 +629,13 @@ called subroutines (a tight numerical solver loop, say), and the *whole
 window's* counter delta gets attributed to whichever one the sample
 happened to land on — not because of a bug, but because that's what
 "delta since the last sample" fundamentally measures. The tell: many
-structurally unrelated functions all showing nearly the same `Cyc/samp`,
-because none of them are really measuring their own cost anymore —
-they're all measuring "however many cycles elapsed in one sampling
-interval." Confirmed against a real MPI+OpenMP NAS Parallel Benchmark
-run, where this fired for exactly this reason.
+structurally unrelated functions all showing nearly the same cycles per
+sample (`Cycles` ÷ `Samp` — not a displayed column, but easy to check by
+eye, and exactly what the detector below computes internally), because
+none of them are really measuring their own cost anymore — they're all
+measuring "however many cycles elapsed in one sampling interval."
+Confirmed against a real MPI+OpenMP NAS Parallel Benchmark run, where
+this fired for exactly this reason.
 
 **Table 2 detects this itself** and warns instead of silently presenting
 numbers that look plausible but aren't:
@@ -636,17 +648,18 @@ numbers that look plausible but aren't:
   functions run for less time than MINIPROF_INTERVAL_MS=10, so a single
   interval spans many different calls and
   the whole interval's counter delta gets attributed to whichever one
-  the sample happened to land on. IPC/LLC-miss
+  the sample happened to land on. IPC/MPKI
   numbers above are not trustworthy for those functions. For exact
   per-function data regardless of call duration, use
   trace mode (Table 3) instead — see the two-pass profiling workflow in
   the README.
 ```
 
-The check: among functions with at least a handful of samples, take the
-median `Cyc/samp` and see how many land within 20% of it. A tight
+The check: among functions with at least a handful of samples, compute
+cycles-per-sample internally (not a displayed column) and take the
+median, then see how many functions land within 20% of it. A tight
 majority (≥60%, requiring at least 5 functions) is the smearing
-signature — but `Cyc/samp` clustering alone isn't quite sufficient
+signature — but that clustering alone isn't quite sufficient
 evidence with only a few data points, since genuinely different
 functions can coincidentally land close together by chance (caught in
 testing: two deliberately opposite kernels, IPC 1.96 vs 0.01, landed in
@@ -794,7 +807,7 @@ numbers.
   group on whichever thread called `MPI_Init` and read it from every
   thread's `SIGPROF` handler unconditionally; a sample landing in an
   OpenMP worker thread would report the `MPI_Init` thread's counters
-  instead, collapsing every worker function's IPC/LLC-miss numbers
+  instead, collapsing every worker function's IPC/MPKI numbers
   toward whatever that one thread happened to be doing — usually idling
   at a barrier. Confirmed against a real MPI+OpenMP NAS Parallel
   Benchmark run: seven structurally unrelated kernels all showed

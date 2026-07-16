@@ -42,8 +42,9 @@
  *   MINIPROF_IPC_COMPUTE_THRESHOLD  IPC above this => COMPUTE-BOUND (default: 1.2)
  *   MINIPROF_IPC_MEMORY_THRESHOLD   IPC below this + high LLC misses
  *                                   => MEMORY-BOUND                 (default: 0.5)
- *   MINIPROF_LLC_MEMORY_THRESHOLD   LLC misses per 1000 samples, combined
- *                                   with low IPC, => MEMORY-BOUND   (default: 500)
+ *   MINIPROF_MPKI_MEMORY_THRESHOLD  MPKI (LLC misses per 1000 instructions)
+ *                                   above this, combined with low IPC,
+ *                                   => MEMORY-BOUND                 (default: 10)
  */
 
 #ifdef __cplusplus
@@ -59,10 +60,10 @@ extern "C" {
 #define MINIPROF_DEFAULT_TRACE_FUNCS   "miniprof.mpa"
 #define MINIPROF_DEFAULT_TRACE_OUTPUT  "miniprof_trace_report.txt"
 
-/* ── hardware-counter classification thresholds (Table 3) ───────────────── */
+/* ── hardware-counter classification thresholds (Tables 2 and 3) ────────── */
 #define MINIPROF_DEFAULT_IPC_COMPUTE_THRESHOLD  1.2   /* IPC above → COMPUTE-BOUND */
 #define MINIPROF_DEFAULT_IPC_MEMORY_THRESHOLD   0.5   /* IPC below → candidate MEMORY-BOUND */
-#define MINIPROF_DEFAULT_LLC_MEMORY_THRESHOLD 500.0   /* + LLC miss/Ksamp above → MEMORY-BOUND */
+#define MINIPROF_DEFAULT_MPKI_MEMORY_THRESHOLD 10.0   /* + MPKI above → MEMORY-BOUND */
 
 /* ── profile store limits ────────────────────────────────────────────────── */
 #define MINIPROF_MAX_PCS        65536   /* unique PCs per rank              */

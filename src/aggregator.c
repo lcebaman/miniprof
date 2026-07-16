@@ -113,7 +113,7 @@ static int cmp_func_rankcol_desc(const void *a, const void *b)
 void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                     const char *mpa_outfile, double mpa_threshold,
                     double ipc_compute_threshold, double ipc_memory_threshold,
-                    double llc_memory_threshold, int interval_ms)
+                    double mpki_memory_threshold, int interval_ms)
 {
     int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
@@ -372,17 +372,22 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                        "(perf_event_open denied or unsupported) — skipping.\n"
                        "  See MINIPROF_IPC_COMPUTE_THRESHOLD / "
                        "MINIPROF_IPC_MEMORY_THRESHOLD / "
-                       "MINIPROF_LLC_MEMORY_THRESHOLD in miniprof.h.\n",
+                       "MINIPROF_MPKI_MEMORY_THRESHOLD in miniprof.h.\n",
                     world_size - ranks_with_hwc, world_size);
         } else {
-            fprintf(f, "  %8s  %6s  %14s  %10s  %-14s  Function\n",
-                    "Samp", "IPC", "LLC miss/Ksamp", "Cyc/samp", "Classification");
+            fprintf(f, "  %8s  %6s  %7s  %10s  %12s  %10s  %-14s  Function\n",
+                    "Samp", "IPC", "MPKI", "Cycles", "Instructions",
+                    "LLC misses", "Classification");
             hline(f, W);
 
-            /* interval-smearing detector scratch: Cyc/samp (and
-               classification, 0/1/2 = COMPUTE/MEMORY/MIXED) of every
-               well-sampled function shown below (see the check after
-               this loop for what it's looking for and why). */
+            /* interval-smearing detector scratch: Cyc/samp (not
+               displayed as its own column below — MPKI/IPC/raw counts
+               replaced it — but still the right scale-invariant
+               quantity to compare functions with different sample
+               counts on) and classification (0/1/2 = COMPUTE/MEMORY/
+               MIXED) of every well-sampled function shown below (see
+               the check after this loop for what it's looking for and
+               why). */
             double *smear_cycsamp = calloc(n_funcs, sizeof(double));
             int    *smear_class   = calloc(n_funcs, sizeof(int));
             int     smear_n = 0;
@@ -399,16 +404,17 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                     /* function had samples but never a nonzero counter
                        delta attributed to it (e.g. too short-lived
                        relative to the sampling interval) */
-                    fprintf(f, "  %8ld  %6s  %14s  %10s  %-14s  %s\n",
-                            cnt, "--", "--", "--", "--", funcs[fi].name);
+                    fprintf(f, "  %8ld  %6s  %7s  %10s  %12s  %10s  %-14s  %s\n",
+                            cnt, "--", "--", "--", "--", "--", "--",
+                            funcs[fi].name);
                     shown++;
                     continue;
                 }
 
-                double ipc          = (double)ins / (double)cyc;
-                double llc_per_ksamp = cnt > 0
-                                       ? (double)miss / ((double)cnt / 1000.0)
-                                       : 0.0;
+                double ipc  = (double)ins / (double)cyc;
+                double mpki = ins > 0
+                             ? (double)miss * 1000.0 / (double)ins
+                             : 0.0;
                 double cyc_per_samp = cnt > 0 ? (double)cyc / (double)cnt : 0.0;
 
                 const char *cls;
@@ -416,15 +422,15 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                 if (ipc >= ipc_compute_threshold) {
                     cls = "COMPUTE-BOUND"; cls_code = 0;
                 } else if (ipc <= ipc_memory_threshold &&
-                           llc_per_ksamp >= llc_memory_threshold) {
+                           mpki >= mpki_memory_threshold) {
                     cls = "MEMORY-BOUND"; cls_code = 1;
                 } else {
                     cls = "MIXED"; cls_code = 2;
                 }
 
-                fprintf(f, "  %8ld  %6.2f  %14.0f  %10.3e  %-14s  %s\n",
-                        cnt, ipc, llc_per_ksamp, cyc_per_samp, cls,
-                        funcs[fi].name);
+                fprintf(f, "  %8ld  %6.2f  %7.2f  %10.3e  %12.3e  %10.3e  %-14s  %s\n",
+                        cnt, ipc, mpki, (double)cyc, (double)ins,
+                        (double)miss, cls, funcs[fi].name);
                 shown++;
 
                 if (cnt >= SMEAR_MIN_SAMPLES) {
@@ -435,10 +441,10 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
             }
             hline(f, W);
             fprintf(f, "  Classification: IPC>=%.1f = COMPUTE-BOUND, "
-                       "IPC<=%.1f + LLC miss/Ksamp>=%.0f = MEMORY-BOUND, "
+                       "IPC<=%.1f + MPKI>=%.1f = MEMORY-BOUND, "
                        "else MIXED\n",
                     ipc_compute_threshold, ipc_memory_threshold,
-                    llc_memory_threshold);
+                    mpki_memory_threshold);
 
             /*
              * Interval-smearing check: sample-mode counter deltas are
@@ -511,7 +517,7 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                                "interval spans many different calls and\n"
                                "  the whole interval's counter delta "
                                "gets attributed to whichever one the "
-                               "sample happened to land on. IPC/LLC-miss\n"
+                               "sample happened to land on. IPC/MPKI\n"
                                "  numbers above are not trustworthy for "
                                "those functions. For exact per-function "
                                "data regardless of call duration, use\n"
