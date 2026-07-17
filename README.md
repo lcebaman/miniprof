@@ -774,13 +774,14 @@ numbers.
 
 ### Known limitations
 
-- `MPI_Wait`/`MPI_Test` family and one-sided RMA calls beyond the basics
-  wrapped in `mpi_trace.c` (`Send`, `Recv`, `Sendrecv`, `Isend`, `Irecv`,
-  `Wait`, `Barrier`, `Allreduce`, `Reduce`, `Bcast`, `Gather`,
-  `Allgather`) are not individually timed — anything not explicitly
-  wrapped falls through to the real MPI call with zero overhead and
-  zero report entry. Extending coverage is mechanical; see the pattern
-  in `mpi_trace.c`.
+- Only the MPI calls wrapped in `mpi_trace.c` are individually timed:
+  `Send`, `Recv`, `Sendrecv`, `Isend`, `Irecv`, `Wait`, `Test`,
+  `Waitall`, `Waitany`, `Testall`, `Testany`, `Barrier`, `Allreduce`,
+  `Reduce`, `Bcast`, `Gather`, `Allgather`, and the one-sided RMA calls
+  `Win_create`, `Win_free`, `Win_fence`, `Put`, `Get`, `Accumulate`.
+  Anything not explicitly wrapped falls through to the real MPI call
+  with zero overhead and zero report entry. Extending coverage is
+  mechanical; see the pattern in `mpi_trace.c`.
 - Trace mode's exclusive-time accounting for OpenMP+MPI hybrid codes
   with concurrent calls into the *same* traced function from multiple
   threads is a documented approximation (rare lost updates under heavy
