@@ -9,9 +9,14 @@
  * The report includes per-function call counts, cumulative time, and
  * message-size statistics.
  *
- * Only a representative, commonly-hot subset of MPI is wrapped here
- * (point-to-point + the collectives used in typical HPC codes). Adding
- * more is mechanical — same three-line pattern each time.
+ * Coverage: point-to-point (Send/Recv/Sendrecv/Isend/Irecv), the full
+ * Wait/Test family (Wait/Test, Waitany/Testany, Waitall/Testall),
+ * collectives used in typical HPC codes (Barrier/Allreduce/Reduce/
+ * Bcast/Gather/Allgather), and basic active-target one-sided RMA
+ * (Win_create/Win_free/Win_fence/Put/Get/Accumulate). Not wrapped:
+ * Waitsome/Testsome, passive-target RMA (lock/unlock), and
+ * Get_accumulate/Compare_and_swap/Fetch_and_op — same three-line
+ * pattern as everything else here, mechanical to add if needed.
  *
  * NOTE: these wrappers are only active in trace mode. In sample mode,
  * the linker still pulls in libmpi's real MPI_Xxx symbols directly since
@@ -27,9 +32,18 @@
 #include "../include/miniprof.h"
 #include <mpi.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <stdatomic.h>
+
+/* Fortran's MPI_STATUS_SIZE (the width of one status "block" in a Fortran
+ * INTEGER array passed to array-of-statuses calls) is a Fortran-only
+ * parameter (mpif-config.h), not exposed in the C mpi.h at all. The MPI
+ * standard mandates every implementation define it, and every mainstream
+ * one (Open MPI, MPICH, Intel MPI, Cray MPI) uses 6 — safe to hardcode
+ * rather than parse a Fortran include file from C. */
+#define MINIPROF_MPI_STATUS_SIZE 6
 
 /* ── small fixed table: one slot per distinct MPI function name ─────────── */
 typedef struct {
@@ -178,6 +192,55 @@ int MPI_Wait(MPI_Request *req, MPI_Status *status)
     return rc;
 }
 
+int MPI_Test(MPI_Request *req, int *flag, MPI_Status *status)
+{
+    if (!g_trace_mode) return PMPI_Test(req, flag, status);
+    double t0 = now_s();
+    int rc = PMPI_Test(req, flag, status);
+    record("MPI_Test", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Waitall(int count, MPI_Request array_of_requests[],
+               MPI_Status array_of_statuses[])
+{
+    if (!g_trace_mode) return PMPI_Waitall(count, array_of_requests, array_of_statuses);
+    double t0 = now_s();
+    int rc = PMPI_Waitall(count, array_of_requests, array_of_statuses);
+    record("MPI_Waitall", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Waitany(int count, MPI_Request array_of_requests[], int *index,
+               MPI_Status *status)
+{
+    if (!g_trace_mode) return PMPI_Waitany(count, array_of_requests, index, status);
+    double t0 = now_s();
+    int rc = PMPI_Waitany(count, array_of_requests, index, status);
+    record("MPI_Waitany", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Testall(int count, MPI_Request array_of_requests[], int *flag,
+                MPI_Status array_of_statuses[])
+{
+    if (!g_trace_mode) return PMPI_Testall(count, array_of_requests, flag, array_of_statuses);
+    double t0 = now_s();
+    int rc = PMPI_Testall(count, array_of_requests, flag, array_of_statuses);
+    record("MPI_Testall", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Testany(int count, MPI_Request array_of_requests[], int *index,
+                int *flag, MPI_Status *status)
+{
+    if (!g_trace_mode) return PMPI_Testany(count, array_of_requests, index, flag, status);
+    double t0 = now_s();
+    int rc = PMPI_Testany(count, array_of_requests, index, flag, status);
+    record("MPI_Testany", now_s() - t0, 0);
+    return rc;
+}
+
 int MPI_Barrier(MPI_Comm comm)
 {
     if (!g_trace_mode) return PMPI_Barrier(comm);
@@ -248,6 +311,87 @@ int MPI_Allgather(const void *sendbuf, int sendcount, MPI_Datatype sendtype,
     int rc = PMPI_Allgather(sendbuf, sendcount, sendtype,
                             recvbuf, recvcount, recvtype, comm);
     record("MPI_Allgather", now_s() - t0, (long)sendcount * dtsize);
+    return rc;
+}
+
+/* ── one-sided RMA (active-target/fence synchronization only — passive-
+ * target lock/unlock and Get_accumulate/Compare_and_swap/Fetch_and_op are
+ * not wrapped here; same "mechanical to add more" note applies) ────────── */
+
+int MPI_Win_create(void *base, MPI_Aint size, int disp_unit, MPI_Info info,
+                   MPI_Comm comm, MPI_Win *win)
+{
+    if (!g_trace_mode)
+        return PMPI_Win_create(base, size, disp_unit, info, comm, win);
+    double t0 = now_s();
+    int rc = PMPI_Win_create(base, size, disp_unit, info, comm, win);
+    record("MPI_Win_create", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Win_free(MPI_Win *win)
+{
+    if (!g_trace_mode) return PMPI_Win_free(win);
+    double t0 = now_s();
+    int rc = PMPI_Win_free(win);
+    record("MPI_Win_free", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Win_fence(int assert, MPI_Win win)
+{
+    if (!g_trace_mode) return PMPI_Win_fence(assert, win);
+    double t0 = now_s();
+    int rc = PMPI_Win_fence(assert, win);
+    record("MPI_Win_fence", now_s() - t0, 0);
+    return rc;
+}
+
+int MPI_Put(const void *origin_addr, int origin_count, MPI_Datatype origin_dt,
+           int target_rank, MPI_Aint target_disp, int target_count,
+           MPI_Datatype target_dt, MPI_Win win)
+{
+    if (!g_trace_mode)
+        return PMPI_Put(origin_addr, origin_count, origin_dt, target_rank,
+                        target_disp, target_count, target_dt, win);
+    int dtsize; MPI_Type_size(origin_dt, &dtsize);
+    double t0 = now_s();
+    int rc = PMPI_Put(origin_addr, origin_count, origin_dt, target_rank,
+                      target_disp, target_count, target_dt, win);
+    record("MPI_Put", now_s() - t0, (long)origin_count * dtsize);
+    return rc;
+}
+
+int MPI_Get(void *origin_addr, int origin_count, MPI_Datatype origin_dt,
+           int target_rank, MPI_Aint target_disp, int target_count,
+           MPI_Datatype target_dt, MPI_Win win)
+{
+    if (!g_trace_mode)
+        return PMPI_Get(origin_addr, origin_count, origin_dt, target_rank,
+                        target_disp, target_count, target_dt, win);
+    int dtsize; MPI_Type_size(origin_dt, &dtsize);
+    double t0 = now_s();
+    int rc = PMPI_Get(origin_addr, origin_count, origin_dt, target_rank,
+                      target_disp, target_count, target_dt, win);
+    record("MPI_Get", now_s() - t0, (long)origin_count * dtsize);
+    return rc;
+}
+
+int MPI_Accumulate(const void *origin_addr, int origin_count,
+                   MPI_Datatype origin_dt, int target_rank,
+                   MPI_Aint target_disp, int target_count,
+                   MPI_Datatype target_dt, MPI_Op op, MPI_Win win)
+{
+    if (!g_trace_mode)
+        return PMPI_Accumulate(origin_addr, origin_count, origin_dt,
+                               target_rank, target_disp, target_count,
+                               target_dt, op, win);
+    int dtsize; MPI_Type_size(origin_dt, &dtsize);
+    double t0 = now_s();
+    int rc = PMPI_Accumulate(origin_addr, origin_count, origin_dt,
+                             target_rank, target_disp, target_count,
+                             target_dt, op, win);
+    record("MPI_Accumulate", now_s() - t0, (long)origin_count * dtsize);
     return rc;
 }
 
@@ -398,4 +542,174 @@ void mpi_allgather_(const void *sendbuf, MPI_Fint *sendcount, MPI_Fint *sendtype
     MPI_Datatype rt = MPI_Type_f2c(*recvtype);
     MPI_Comm     cm = MPI_Comm_f2c(*comm);
     *ierr = MPI_Allgather(sendbuf, *sendcount, st, recvbuf, *recvcount, rt, cm);
+}
+
+void mpi_test_(MPI_Fint *request, MPI_Fint *flag, MPI_Fint *status, MPI_Fint *ierr)
+{
+    MPI_Request c_req = MPI_Request_f2c(*request);
+    MPI_Status  c_status;
+    int         c_flag;
+    *ierr = MPI_Test(&c_req, &c_flag, &c_status);
+    *flag    = c_flag ? 1 : 0;
+    *request = MPI_Request_c2f(c_req);
+    MPI_Status_c2f(&c_status, status);
+}
+
+/*
+ * Array-of-requests/statuses bindings (Waitall/Waitany/Testall/Testany):
+ * Fortran passes a flat INTEGER array for requests and a flat INTEGER
+ * array for statuses, one MINIPROF_MPI_STATUS_SIZE-wide block per status
+ * (see the constant's doc comment above). We heap-allocate scratch C
+ * arrays sized to the caller's `count` — a stack VLA would also work but
+ * risks stack exhaustion for codes with very large in-flight request
+ * counts, which one-sided/many-neighbor halo codes can genuinely have.
+ */
+
+void mpi_waitall_(MPI_Fint *count, MPI_Fint *array_of_requests,
+                  MPI_Fint *array_of_statuses, MPI_Fint *ierr)
+{
+    int n = (int)*count;
+    MPI_Request *reqs  = malloc((size_t)n * sizeof(MPI_Request));
+    MPI_Status  *stats = malloc((size_t)n * sizeof(MPI_Status));
+    for (int i = 0; i < n; i++) reqs[i] = MPI_Request_f2c(array_of_requests[i]);
+
+    *ierr = MPI_Waitall(n, reqs, stats);
+
+    for (int i = 0; i < n; i++) {
+        array_of_requests[i] = MPI_Request_c2f(reqs[i]);
+        MPI_Status_c2f(&stats[i], &array_of_statuses[i * MINIPROF_MPI_STATUS_SIZE]);
+    }
+    free(reqs);
+    free(stats);
+}
+
+void mpi_waitany_(MPI_Fint *count, MPI_Fint *array_of_requests, MPI_Fint *index,
+                  MPI_Fint *status, MPI_Fint *ierr)
+{
+    int n = (int)*count;
+    MPI_Request *reqs = malloc((size_t)n * sizeof(MPI_Request));
+    for (int i = 0; i < n; i++) reqs[i] = MPI_Request_f2c(array_of_requests[i]);
+
+    int        c_index;
+    MPI_Status c_status;
+    *ierr = MPI_Waitany(n, reqs, &c_index, &c_status);
+
+    for (int i = 0; i < n; i++) array_of_requests[i] = MPI_Request_c2f(reqs[i]);
+    /* Fortran indices are 1-based; MPI_UNDEFINED (all requests were
+       MPI_REQUEST_NULL) is a fixed sentinel, not a real index — leave it
+       untranslated, matching the standard's own Fortran binding. */
+    *index = (c_index == MPI_UNDEFINED) ? MPI_UNDEFINED : c_index + 1;
+    MPI_Status_c2f(&c_status, status);
+    free(reqs);
+}
+
+void mpi_testall_(MPI_Fint *count, MPI_Fint *array_of_requests, MPI_Fint *flag,
+                  MPI_Fint *array_of_statuses, MPI_Fint *ierr)
+{
+    int n = (int)*count;
+    MPI_Request *reqs  = malloc((size_t)n * sizeof(MPI_Request));
+    MPI_Status  *stats = malloc((size_t)n * sizeof(MPI_Status));
+    for (int i = 0; i < n; i++) reqs[i] = MPI_Request_f2c(array_of_requests[i]);
+
+    int c_flag;
+    *ierr = MPI_Testall(n, reqs, &c_flag, stats);
+    *flag = c_flag ? 1 : 0;
+
+    for (int i = 0; i < n; i++) {
+        array_of_requests[i] = MPI_Request_c2f(reqs[i]);
+        MPI_Status_c2f(&stats[i], &array_of_statuses[i * MINIPROF_MPI_STATUS_SIZE]);
+    }
+    free(reqs);
+    free(stats);
+}
+
+void mpi_testany_(MPI_Fint *count, MPI_Fint *array_of_requests, MPI_Fint *index,
+                  MPI_Fint *flag, MPI_Fint *status, MPI_Fint *ierr)
+{
+    int n = (int)*count;
+    MPI_Request *reqs = malloc((size_t)n * sizeof(MPI_Request));
+    for (int i = 0; i < n; i++) reqs[i] = MPI_Request_f2c(array_of_requests[i]);
+
+    int        c_index, c_flag;
+    MPI_Status c_status;
+    *ierr = MPI_Testany(n, reqs, &c_index, &c_flag, &c_status);
+
+    for (int i = 0; i < n; i++) array_of_requests[i] = MPI_Request_c2f(reqs[i]);
+    *index = (c_index == MPI_UNDEFINED) ? MPI_UNDEFINED : c_index + 1;
+    *flag  = c_flag ? 1 : 0;
+    MPI_Status_c2f(&c_status, status);
+    free(reqs);
+}
+
+/*
+ * RMA bindings. target_disp (and MPI_Win_create's `size`) are MPI_Aint —
+ * in Fortran that's INTEGER(KIND=MPI_ADDRESS_KIND), an address-sized
+ * integer distinct from the plain-INTEGER MPI_Fint used everywhere else
+ * in this file. We take it as `MPI_Aint *` directly (not `MPI_Fint *`)
+ * and dereference it as-is: unlike MPI_Comm/MPI_Request/MPI_Win, MPI_Aint
+ * is not an opaque handle needing f2c/c2f translation — it's the same
+ * integer in both languages, gfortran just widens it to match address
+ * width. MPI_Win itself IS an opaque handle and does need MPI_Win_f2c/c2f.
+ */
+
+void mpi_win_create_(void *base, MPI_Aint *size, MPI_Fint *disp_unit,
+                     MPI_Fint *info, MPI_Fint *comm, MPI_Fint *win,
+                     MPI_Fint *ierr)
+{
+    MPI_Info info_c = MPI_Info_f2c(*info);
+    MPI_Comm comm_c = MPI_Comm_f2c(*comm);
+    MPI_Win  win_c;
+    *ierr = MPI_Win_create(base, *size, (int)*disp_unit, info_c, comm_c, &win_c);
+    *win  = MPI_Win_c2f(win_c);
+}
+
+void mpi_win_free_(MPI_Fint *win, MPI_Fint *ierr)
+{
+    MPI_Win win_c = MPI_Win_f2c(*win);
+    *ierr = MPI_Win_free(&win_c);
+    *win  = MPI_Win_c2f(win_c); /* becomes MPI_WIN_NULL */
+}
+
+void mpi_win_fence_(MPI_Fint *assert, MPI_Fint *win, MPI_Fint *ierr)
+{
+    MPI_Win win_c = MPI_Win_f2c(*win);
+    *ierr = MPI_Win_fence((int)*assert, win_c);
+}
+
+void mpi_put_(const void *origin_addr, MPI_Fint *origin_count,
+             MPI_Fint *origin_datatype, MPI_Fint *target_rank,
+             MPI_Aint *target_disp, MPI_Fint *target_count,
+             MPI_Fint *target_datatype, MPI_Fint *win, MPI_Fint *ierr)
+{
+    MPI_Datatype odt   = MPI_Type_f2c(*origin_datatype);
+    MPI_Datatype tdt   = MPI_Type_f2c(*target_datatype);
+    MPI_Win      win_c = MPI_Win_f2c(*win);
+    *ierr = MPI_Put(origin_addr, *origin_count, odt, *target_rank,
+                    *target_disp, *target_count, tdt, win_c);
+}
+
+void mpi_get_(void *origin_addr, MPI_Fint *origin_count,
+             MPI_Fint *origin_datatype, MPI_Fint *target_rank,
+             MPI_Aint *target_disp, MPI_Fint *target_count,
+             MPI_Fint *target_datatype, MPI_Fint *win, MPI_Fint *ierr)
+{
+    MPI_Datatype odt   = MPI_Type_f2c(*origin_datatype);
+    MPI_Datatype tdt   = MPI_Type_f2c(*target_datatype);
+    MPI_Win      win_c = MPI_Win_f2c(*win);
+    *ierr = MPI_Get(origin_addr, *origin_count, odt, *target_rank,
+                    *target_disp, *target_count, tdt, win_c);
+}
+
+void mpi_accumulate_(const void *origin_addr, MPI_Fint *origin_count,
+                     MPI_Fint *origin_datatype, MPI_Fint *target_rank,
+                     MPI_Aint *target_disp, MPI_Fint *target_count,
+                     MPI_Fint *target_datatype, MPI_Fint *op, MPI_Fint *win,
+                     MPI_Fint *ierr)
+{
+    MPI_Datatype odt   = MPI_Type_f2c(*origin_datatype);
+    MPI_Datatype tdt   = MPI_Type_f2c(*target_datatype);
+    MPI_Op       op_c  = MPI_Op_f2c(*op);
+    MPI_Win      win_c = MPI_Win_f2c(*win);
+    *ierr = MPI_Accumulate(origin_addr, *origin_count, odt, *target_rank,
+                           *target_disp, *target_count, tdt, op_c, win_c);
 }
