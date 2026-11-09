@@ -21,3 +21,5 @@ examples/mpi_ext_validate_f
 miniprof*.txt
 miniprof*.mpa
 miniprof*.json
+examples/imbalance_validate
+examples/fortran_sentinels

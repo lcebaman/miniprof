@@ -178,10 +178,18 @@ gfortran's default mangling) that live in a separate shim library
 interception entirely. Confirmed by disassembling a real gfortran
 binary: the call site targets `mpi_init_@plt`, never `MPI_Init`.
 `src/miniprof_fortran.c` and the Fortran wrappers in `src/mpi_trace.c`
-add the matching bindings, converting Fortran's by-reference `INTEGER`
-handles to real MPI C handles via the standard `MPI_*_f2c()` /
-`MPI_*_c2f()` API and delegating to the existing C wrapper logic, so
-there's no duplicated timing code per language.
+(and the MPI-IO ones in `src/io_trace.c`) add the matching bindings. Each
+one times the call and forwards it, arguments untouched, to the MPI
+library's **own Fortran PMPI binding** (`pmpi_allreduce_`, ...).
+
+That forwarding matters. Fortran's `MPI_IN_PLACE`, `MPI_BOTTOM` and
+`MPI_STATUS(ES)_IGNORE` are addresses of library-private variables, not
+the C constants, and only the MPI library knows them. An earlier version
+converted the arguments to C and called the C API instead, which
+silently broke every sentinel: `MPI_Allreduce(MPI_IN_PLACE, x, ...)`
+returned zeros under miniprof in every mode. `make run-fortran-sentinels`
+checks the numerical results of every sentinel-accepting wrapped call
+under every mode, and that call counts aren't doubled.
 
 (The Fortran init/finalize wrappers in `src/miniprof_fortran.c` reference
 `pmpi_init_` etc., which only exist in `libmpi_mpifh.so` — a library
@@ -259,6 +267,8 @@ Build all three sample and trace variants with `make examples`.
 | `make test-units` | MPI-free unit tests: CPU microarchitecture table, JSON writer |
 | `make run-3d-snapshot` | Run `diffusion3d` in snapshot mode and validate the JSON structure |
 | `make overhead-3d` | Wall-clock overhead of snapshot mode vs `MINIPROF_MODE=off` (informational) |
+| `make run-imbalance-validate` | Snapshot known-answer test: injected imbalance, trace cross-check, exact I/O counts |
+| `make run-fortran-sentinels` | Fortran `MPI_IN_PLACE`/`MPI_STATUS_IGNORE` results correct in every mode |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
 
@@ -515,43 +525,84 @@ happen.
 ### Snapshot mode (in development)
 
 ```bash
-MINIPROF_MODE=snapshot mpirun -n 64 ./your_app     # no rebuild needed
+MINIPROF_MODE=snapshot mpirun -n 64 ./your_app       # no rebuild needed
+python3 tools/miniprof_report.py miniprof_snapshot.json
 ```
 
 Snapshot mode is a low-overhead, whole-run characterisation in the
 spirit of Intel APS and AMDuProfPcm. It records no individual samples or
 calls: each rank keeps running totals, and at `MPI_Finalize` they are
 gathered into one versioned JSON document (`miniprof_snapshot.json`).
-Every report (text verdict, HTML, comparisons between runs) is generated
-from that file, so the profiler itself stays small.
+Every report is generated from that file, so the profiler itself stays
+small. `tools/miniprof_report.py` prints a one-page summary (here for
+`make run-imbalance-validate`, 2 ranks with injected imbalance):
 
-It is being built in phases. The current version (P0) provides the
-container and the run metadata every later metric is interpreted
-against:
+```
+ Time split (average over ranks)
+   Compute      74.6%  ######################........
+   MPI          24.8%  #######.......................
+   I/O           0.6%  ..............................
 
-- **run**: command, level, rank/node counts, ranks per node, CPUs per
-  rank, `OMP_NUM_THREADS`, MPI library and thread level, Slurm job ID,
-  elapsed time (min/avg/max across ranks)
-- **nodes**: hostname, CPU vendor/family/model/stepping straight from
-  CPUID plus a microarchitecture label (`zen4`, `zen5`,
-  `granite_rapids`, ...), logical CPUs, NUMA nodes, SMT, kernel,
-  `perf_event_paranoid`, and an exclusivity hint (whether something
-  besides this job looked busy on the node at start-up — relevant once
-  node-level counters such as memory bandwidth are collected)
-- **ranks**: PID, node, CPU affinity (count and list), elapsed time
-- **overhead**: the profiler's own init/finalize cost, as a fraction
-  of the run
-- **metrics**: `parallel`, `openmp`, `counters`, `topdown`, `memory`,
-  `roofline` — present in the schema as `null` until their phase lands;
-  `metrics.collected` lists the blocks a run actually has
+ Compute imbalance      25.0%   (perfect balance would save 24.8% of elapsed)
+   slowest ranks       1 (801.7 ms), 0 (401.6 ms)
+ MPI time imbalance     50.0%   (min 288 us, max 400.5 ms)
+ CPU utilisation        98.9%   (min 98.6%, max 99.1%)
 
-`MINIPROF_SNAPSHOT` selects which counter groups a run collects
-(`basic`, `topdown`, `roofline`, `full`), so groups never compete for the
-same hardware counters; it is recorded in the JSON but has no effect yet.
-`tools/snapshot_check.py` validates a snapshot file's structure.
+ MPI by class           time%    calls        data
+   collective           24.8%        84       640 B
 
-Measured overhead in P0 is within run-to-run noise (−0.03% on a 20 s
-`diffusion3d` run, best of 3; `make overhead-3d`).
+ Top MPI functions      time%    imb%    calls   avg size
+   MPI_Allreduce        24.8%   50.0%       80        8 B
+   MPI_Barrier           0.0%   40.2%        4        0 B
+
+ Message sizes
+   collective   most calls: 8 B-16 B (95%);  most time: 8 B-16 B
+
+ I/O                    read                 write             time (avg/rank)
+   POSIX       3.0 MiB (    24 calls)    3.0 MiB (    24 calls)   3.2 ms
+   MPI-IO    512.0 KiB (     2 calls)  512.0 KiB (     2 calls)   1.6 ms
+
+ Observations
+   ! MPI takes 24.8% of the run (> 20%); largest contributor MPI_Allreduce.
+   ! Compute is imbalanced across ranks (25.0% > 10%); much of the MPI wait time is likely ranks waiting for the slowest ones.
+```
+
+What a snapshot contains so far:
+
+- **run / nodes / ranks**: command, rank and node counts, CPU
+  microarchitecture straight from CPUID (`zen4`, `zen5`,
+  `granite_rapids`, ...), NUMA, SMT, kernel, `perf_event_paranoid`, CPU
+  affinity per rank, MPI library and thread level, and a hint for
+  whether the node was shared
+- **metrics.parallel**:
+  - time split into compute, MPI and I/O per rank (compute = elapsed −
+    MPI − I/O), with min/avg/max, imbalance `(max − avg) / max`, the
+    share of elapsed time perfect balance would save, and the slowest
+    ranks
+  - MPI time by class (point-to-point, collective, wait/test, RMA) and by
+    function, with call counts, bytes and per-function imbalance
+  - message-size histograms per class (power-of-two bins: calls and time)
+  - POSIX I/O (`open`/`read`/`write`/`pread`/`pwrite`/`fread`/`fwrite`/
+    `fsync`, including `_FORTIFY_SOURCE` variants) and MPI-IO, kept
+    separate: calls, bytes, read/write/metadata time. Only files opened
+    by the application on a regular path are counted; the MPI library's
+    own I/O is excluded
+  - CPU utilisation (CPU time ÷ elapsed × CPUs the rank may run on),
+    user/system time, peak RSS, context switches
+- **overhead**: the profiler's own init/finalize cost
+
+`counters`, `topdown`, `memory` and `roofline` are still `null`; they
+arrive with the hardware-counter phases. `MINIPROF_SNAPSHOT` (`basic`,
+`topdown`, `roofline`, `full`) will select which counter groups a run
+collects, and is recorded but has no effect yet.
+
+Validation: `make run-imbalance-validate` runs a known-answer workload
+(rank r computes `base + r·delta` per step, then a fixed POSIX and MPI-IO
+volume). Per-rank compute time, the imbalance and the Allreduce wait
+match the injected values within 2%, MPI time matches trace mode within
+2%, and I/O byte and call counts are exact. Wrapper cost is about 95 ns
+per MPI call; end-to-end overhead on a 20 s `diffusion3d` run is within
+run-to-run noise (`make overhead-3d`).
 
 ### Configuration
 
@@ -825,14 +876,21 @@ numbers.
 
 ### Known limitations
 
-- Only the MPI calls wrapped in `mpi_trace.c` are individually timed:
-  `Send`, `Recv`, `Sendrecv`, `Isend`, `Irecv`, `Wait`, `Test`,
-  `Waitall`, `Waitany`, `Testall`, `Testany`, `Barrier`, `Allreduce`,
-  `Reduce`, `Bcast`, `Gather`, `Allgather`, and the one-sided RMA calls
-  `Win_create`, `Win_free`, `Win_fence`, `Put`, `Get`, `Accumulate`.
-  Anything not explicitly wrapped falls through to the real MPI call
-  with zero overhead and zero report entry. Extending coverage is
-  mechanical; see the pattern in `mpi_trace.c`.
+- Only the MPI calls wrapped in `mpi_trace.c` are individually timed
+  (C and Fortran `mpi`/`mpif.h` bindings): point-to-point `Send`,
+  `Ssend`, `Rsend`, `Bsend`, `Recv`, `Sendrecv`, `Sendrecv_replace`,
+  `Isend`, `Issend`, `Irecv`; completion `Wait`, `Waitall`, `Waitany`,
+  `Waitsome`, `Test`, `Testall`, `Testany`, `Testsome`, `Probe`,
+  `Iprobe`; collectives `Barrier`, `Bcast`, `Reduce`, `Allreduce`,
+  `Gather`, `Gatherv`, `Allgather`, `Allgatherv`, `Scatter`, `Scatterv`,
+  `Alltoall`, `Alltoallv`, `Reduce_scatter`, `Reduce_scatter_block`,
+  `Scan`, `Exscan`; and active-target RMA `Win_create`, `Win_free`,
+  `Win_fence`, `Put`, `Get`, `Accumulate`. Anything not wrapped
+  (nonblocking collectives, passive-target RMA, communicator management,
+  and the `mpi_f08` module's bindings) falls through to the real MPI call
+  with zero overhead and zero report entry; in snapshot mode its time
+  counts as compute. Extending coverage is mechanical; see the pattern
+  in `mpi_trace.c`.
 - Trace mode's exclusive-time accounting for OpenMP+MPI hybrid codes
   with concurrent calls into the *same* traced function from multiple
   threads is a documented approximation (rare lost updates under heavy
