@@ -15,7 +15,7 @@
  *   ... your code ...
  *   miniprof_finalize();
  *
- * Two modes, selected by MINIPROF_MODE:
+ * Modes, selected by MINIPROF_MODE:
  *
  *   sample (default) — statistical SIGPROF sampling, as before.
  *                       Produces miniprof_report.txt AND miniprof.mpa
@@ -29,8 +29,16 @@
  *                       -finstrument-functions (see `make example-trace`).
  *                       Produces miniprof_trace_report.txt.
  *
+ *   snapshot          — whole-run characterisation (APS/uProfPcm style):
+ *                       running totals only, written as one versioned
+ *                       JSON document at MPI_Finalize. No rebuild needed.
+ *
+ *   off               — library loaded but inactive (baseline runs).
+ *
  * Environment variables:
- *   MINIPROF_MODE          "sample" or "trace"        (default: sample)
+ *   MINIPROF_MODE          sample|trace|snapshot|off   (default: sample)
+ *   MINIPROF_SNAPSHOT      basic|topdown|roofline|full (default: basic)
+ *   MINIPROF_SNAPSHOT_OUTPUT Snapshot JSON path   (default: miniprof_snapshot.json)
  *   MINIPROF_INTERVAL_MS   Sampling interval in ms     (default: 10)
  *   MINIPROF_DEPTH         Call-stack depth to sample  (default: 8)
  *   MINIPROF_OUTPUT        Sampling report path        (default: miniprof_report.txt)
@@ -50,6 +58,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define MINIPROF_VERSION "1.1.0-dev"
 
 /* ── tunable defaults (overridden by env vars) ───────────────────────────── */
 #define MINIPROF_DEFAULT_INTERVAL_MS  10

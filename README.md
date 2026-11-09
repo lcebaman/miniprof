@@ -13,6 +13,11 @@ Two complementary modes support a sampling → selection → tracing workflow:
   the `.mpa` file, plus per-call MPI timing (call count, time, message
   size). Higher overhead, used only for the functions that matter.
 
+A third mode, **snapshot**, characterises a whole run in the style of
+Intel APS and AMDuProfPcm: running totals only, written as one versioned
+JSON document. It is under active development — see
+[Snapshot mode](#snapshot-mode-in-development).
+
 No GUI. Everything is plain text, designed to be read in a terminal or
 piped into a job log.
 
@@ -251,6 +256,9 @@ Build all three sample and trace variants with `make examples`.
 | `make run-hwc-validate-omp` | Run `hwc_validate_omp`, 1 rank, 2 OpenMP threads running the same two kernels *concurrently*; asserts they're still classified independently and correctly |
 | `make example-hwc-validate-smear` | Build `examples/hwc_validate_smear` (interval-smearing warning positive control) |
 | `make run-hwc-validate-smear` | Run `hwc_validate_smear`, 1 rank, 20 tiny functions; asserts Table 2's smearing warning fires (opposite check from the two above) |
+| `make test-units` | MPI-free unit tests: CPU microarchitecture table, JSON writer |
+| `make run-3d-snapshot` | Run `diffusion3d` in snapshot mode and validate the JSON structure |
+| `make overhead-3d` | Wall-clock overhead of snapshot mode vs `MINIPROF_MODE=off` (informational) |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
 
@@ -504,6 +512,47 @@ table is replaced by an explanatory note instead of showing zeros — see
 [Table 2](#table-2-hardware-counter-characterisation) for why that can
 happen.
 
+### Snapshot mode (in development)
+
+```bash
+MINIPROF_MODE=snapshot mpirun -n 64 ./your_app     # no rebuild needed
+```
+
+Snapshot mode is a low-overhead, whole-run characterisation in the
+spirit of Intel APS and AMDuProfPcm. It records no individual samples or
+calls: each rank keeps running totals, and at `MPI_Finalize` they are
+gathered into one versioned JSON document (`miniprof_snapshot.json`).
+Every report (text verdict, HTML, comparisons between runs) is generated
+from that file, so the profiler itself stays small.
+
+It is being built in phases. The current version (P0) provides the
+container and the run metadata every later metric is interpreted
+against:
+
+- **run**: command, level, rank/node counts, ranks per node, CPUs per
+  rank, `OMP_NUM_THREADS`, MPI library and thread level, Slurm job ID,
+  elapsed time (min/avg/max across ranks)
+- **nodes**: hostname, CPU vendor/family/model/stepping straight from
+  CPUID plus a microarchitecture label (`zen4`, `zen5`,
+  `granite_rapids`, ...), logical CPUs, NUMA nodes, SMT, kernel,
+  `perf_event_paranoid`, and an exclusivity hint (whether something
+  besides this job looked busy on the node at start-up — relevant once
+  node-level counters such as memory bandwidth are collected)
+- **ranks**: PID, node, CPU affinity (count and list), elapsed time
+- **overhead**: the profiler's own init/finalize cost, as a fraction
+  of the run
+- **metrics**: `parallel`, `openmp`, `counters`, `topdown`, `memory`,
+  `roofline` — present in the schema as `null` until their phase lands;
+  `metrics.collected` lists the blocks a run actually has
+
+`MINIPROF_SNAPSHOT` selects which counter groups a run collects
+(`basic`, `topdown`, `roofline`, `full`), so groups never compete for the
+same hardware counters; it is recorded in the JSON but has no effect yet.
+`tools/snapshot_check.py` validates a snapshot file's structure.
+
+Measured overhead in P0 is within run-to-run noise (−0.03% on a 20 s
+`diffusion3d` run, best of 3; `make overhead-3d`).
+
 ### Configuration
 
 All of these are read at `MPI_Init` time; set them in your job script or
@@ -512,7 +561,9 @@ launcher's environment-passing convention).
 
 | Variable | Mode | Default | Meaning |
 |---|---|---|---|
-| `MINIPROF_MODE` | both | `sample` | `sample` or `trace` |
+| `MINIPROF_MODE` | all | `sample` | `sample`, `trace`, `snapshot`, or `off` (library loaded but inactive) |
+| `MINIPROF_SNAPSHOT` | snapshot | `basic` | Counter groups to collect: `basic`, `topdown`, `roofline`, or `full` |
+| `MINIPROF_SNAPSHOT_OUTPUT` | snapshot | `miniprof_snapshot.json` | Snapshot JSON path |
 | `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
 | `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |
 | `MINIPROF_OUTPUT` | sample | `miniprof_report.txt` | Sampling report path |

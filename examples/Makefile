@@ -7,6 +7,11 @@
 ROOT := ..
 LIB := $(ROOT)/libminiprof.so
 
+# The $(LIB) rule below is the first rule in this file, so without this
+# it would silently become the default goal — `make -C examples` (and so
+# the root `make examples`) would rebuild nothing but the library.
+.DEFAULT_GOAL := all
+
 $(LIB):
 	$(MAKE) -C $(ROOT) lib
 
