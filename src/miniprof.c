@@ -6,7 +6,7 @@
  *   ... program runs ...
  *   MPI_Finalize() → miniprof_finalize() [PMPI wrapper]
  *
- * Two modes, selected by MINIPROF_MODE (default "sample"):
+ * Modes, selected by MINIPROF_MODE (default "sample"):
  *
  *   sample — SIGPROF statistical sampling (as before). At finalize:
  *            1. Stop sampler
@@ -20,6 +20,14 @@
  *            At finalize:
  *            1. Collect trace_store + mpi_trace tables
  *            2. Gather via MPI + write miniprof_trace_report.txt
+ *
+ *   snapshot — whole-run characterisation (APS/uProfPcm style): running
+ *            totals only, gathered at finalize into one JSON document.
+ *            See snapshot.c.
+ *
+ *   off    — load the library but do nothing (zero-overhead baseline for
+ *            `make overhead-3d`, or to disable a module-preloaded miniprof
+ *            for one job without unloading the module).
  */
 
 #define _GNU_SOURCE
@@ -33,6 +41,7 @@
 #include "trace_store.h"
 #include "trace_aggregator.h"
 #include "mpi_trace.h"
+#include "snapshot.h"
 
 #include <mpi.h>
 #include <stdio.h>
@@ -42,7 +51,7 @@
 #include <stdint.h>
 
 /* ── mode ─────────────────────────────────────────────────────────────────── */
-typedef enum { MODE_SAMPLE, MODE_TRACE } miniprof_mode_t;
+typedef enum { MODE_SAMPLE, MODE_TRACE, MODE_SNAPSHOT, MODE_OFF } miniprof_mode_t;
 
 /* ── global state ────────────────────────────────────────────────────────── */
 static int             g_initialized  = 0;
@@ -150,7 +159,21 @@ void miniprof_init(int interval_ms)
 
     /* mode selection */
     const char *mode_s = getenv("MINIPROF_MODE");
-    g_mode = (mode_s && strcmp(mode_s, "trace") == 0) ? MODE_TRACE : MODE_SAMPLE;
+    g_mode = MODE_SAMPLE;
+    if (mode_s && *mode_s) {
+        if      (strcmp(mode_s, "sample")   == 0) g_mode = MODE_SAMPLE;
+        else if (strcmp(mode_s, "trace")    == 0) g_mode = MODE_TRACE;
+        else if (strcmp(mode_s, "snapshot") == 0) g_mode = MODE_SNAPSHOT;
+        else if (strcmp(mode_s, "off")      == 0) g_mode = MODE_OFF;
+        else {
+            int rank = 0; PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            if (rank == 0)
+                fprintf(stderr, "[miniprof] unknown MINIPROF_MODE='%s' "
+                                "(expected sample|trace|snapshot|off); using sample\n",
+                        mode_s);
+        }
+    }
+    if (g_mode == MODE_OFF) return;
 
     g_verbose = env_int("MINIPROF_VERBOSE", 0);
 
@@ -177,7 +200,9 @@ void miniprof_init(int interval_ms)
     symbolizer_init();
     clock_gettime(CLOCK_MONOTONIC, &g_t_start);
 
-    if (g_mode == MODE_SAMPLE) {
+    if (g_mode == MODE_SNAPSHOT) {
+        snapshot_init(g_verbose);
+    } else if (g_mode == MODE_SAMPLE) {
         g_interval_ms = env_int("MINIPROF_INTERVAL_MS", interval_ms > 0
                                                          ? interval_ms
                                                          : MINIPROF_DEFAULT_INTERVAL_MS);
@@ -323,8 +348,12 @@ void miniprof_finalize(void)
     double elapsed = (t_end.tv_sec  - g_t_start.tv_sec) +
                      (t_end.tv_nsec - g_t_start.tv_nsec) * 1e-9;
 
-    if (g_mode == MODE_SAMPLE) miniprof_finalize_sample(elapsed);
-    else                       miniprof_finalize_trace(elapsed);
+    switch (g_mode) {
+    case MODE_SAMPLE:   miniprof_finalize_sample(elapsed); break;
+    case MODE_TRACE:    miniprof_finalize_trace(elapsed);  break;
+    case MODE_SNAPSHOT: snapshot_finalize(elapsed);        break;
+    case MODE_OFF:      break;
+    }
 }
 
 /* ── PMPI wrappers ───────────────────────────────────────────────────────── */

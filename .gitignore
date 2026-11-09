@@ -1,0 +1,23 @@
+# build products
+*.o
+libminiprof.so
+mpa-check
+tests/test_units
+tests/test_units_out.json
+examples/heat2d
+examples/heat2d+trace
+examples/heat1d
+examples/heat1d+trace
+examples/diffusion3d
+examples/diffusion3d+trace
+examples/hwc_validate
+examples/hwc_validate_omp
+examples/hwc_validate_smear
+examples/mpi_ext_validate
+examples/mpi_ext_validate_f
+*.mod
+
+# run outputs
+miniprof*.txt
+miniprof*.mpa
+miniprof*.json

@@ -32,6 +32,9 @@
 #                      family + one-sided RMA wrapper sanity check, C+Fortran
 #   run-ext-trace  — trace-mode check that every new MPI wrapper above
 #                      is actually recorded, for both languages
+#   test-units     — MPI-free unit tests (uarch table, JSON writer)
+#   run-3d-snapshot — snapshot mode on diffusion3d + JSON structural check
+#   overhead-3d    — wall-clock overhead of snapshot vs off (informational)
 #   check          — full test suite, one pass/fail exit code (what CI runs)
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
@@ -96,6 +99,9 @@ LIB_SRCS := src/profile_store.c    \
             src/instrument.c       \
             src/mpi_trace.c        \
             src/trace_aggregator.c \
+            src/json_writer.c      \
+            src/sysinfo.c          \
+            src/snapshot.c         \
             src/miniprof.c         \
             src/miniprof_fortran.c
 
@@ -121,7 +127,8 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         example-mpi-ext-validate mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
-        run-ext-trace mpa check clean
+        run-ext-trace run-3d-snapshot test-units overhead-3d \
+        mpa check clean
 
 all: lib examples
 
@@ -467,6 +474,48 @@ run-ext-trace: $(EXAMPLE_MPI_EXT_VALIDATE) $(EXAMPLE_MPI_EXT_VALIDATE_F)
 	done; \
 	exit $$FAIL
 
+# ── test-units: MPI-free unit tests ──────────────────────────────────────────
+# Compiled with the host compiler straight from the sources it tests (no
+# libminiprof.so, no MPI), so it runs anywhere in well under a second. The
+# JSON it writes is re-parsed by Python's json module as an independent
+# check that the writer's output is valid JSON, not just self-consistent.
+tests/test_units: tests/test_units.c src/sysinfo.c src/json_writer.c \
+                  src/sysinfo.h src/json_writer.h
+	$(CC_HOST) -O2 -g -Wall -Wextra -o $@ tests/test_units.c src/sysinfo.c src/json_writer.c -lm
+
+test-units: tests/test_units
+	./tests/test_units tests/test_units_out.json
+	python3 tests/check_units_json.py tests/test_units_out.json
+
+# ── run-3d-snapshot: snapshot mode + JSON structural check ──────────────────
+# No rebuild needed — the normal diffusion3d binary, MINIPROF_MODE=snapshot.
+# SNAPSHOT_MAX_OVERHEAD is deliberately lenient here: CI runs a tiny grid
+# for well under a second under --oversubscribe, where fixed init/finalize
+# cost is a large share of the run. The real <1% target is measured on a
+# production-sized run with `make overhead-3d`.
+SNAPSHOT_MAX_OVERHEAD ?= 0.05
+
+run-3d-snapshot: $(EXAMPLE_3D)
+	@echo "Running diffusion3d (SNAPSHOT mode) with $(NRANKS) MPI ranks..."
+	MINIPROF_MODE=snapshot \
+	MINIPROF_SNAPSHOT=basic \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_3d.json \
+	MINIPROF_VERBOSE=1 \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./$(EXAMPLE_3D)
+	@echo ""
+	python3 tools/snapshot_check.py miniprof_snapshot_3d.json \
+		--nranks $(NRANKS) --max-overhead $(SNAPSHOT_MAX_OVERHEAD)
+
+# ── overhead-3d: snapshot vs off, wall clock (informational, not in check) ──
+# Uses whatever diffusion3d was last built — build it at a realistic size
+# first, e.g.  make example-3d NX=256 NY=256 NZ=128 NSTEPS_3D=400
+OVERHEAD_REPS ?= 5
+OVERHEAD_MODE ?= snapshot
+
+overhead-3d: $(EXAMPLE_3D)
+	./tools/overhead.sh $(NRANKS) $(OVERHEAD_REPS) $(OVERHEAD_MODE) \
+		./$(EXAMPLE_3D) $(MPIRUN_FLAGS)
+
 # ── check: full test suite, one pass/fail exit code ──────────────────────────
 # What this actually tests, in two tiers:
 #   - The three hwc_validate targets assert on report *content* (correct
@@ -486,6 +535,7 @@ check: lib examples mpa-check
 	@echo " miniprof test suite"
 	@echo "=========================================="
 	@FAIL=0; \
+	$(MAKE) test-units             || FAIL=1; \
 	$(MAKE) run-hwc-validate       || FAIL=1; \
 	$(MAKE) run-hwc-validate-omp   || FAIL=1; \
 	$(MAKE) run-hwc-validate-smear || FAIL=1; \
@@ -496,6 +546,7 @@ check: lib examples mpa-check
 	$(MAKE) run-3d       || FAIL=1; \
 	$(MAKE) run-3d-trace || FAIL=1; \
 	$(MAKE) run-ext-trace || FAIL=1; \
+	$(MAKE) run-3d-snapshot || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -520,4 +571,6 @@ clean:
 	      miniprof_hwc_validate_report.txt miniprof_hwc_validate.mpa \
 	      miniprof_hwc_validate_omp_report.txt miniprof_hwc_validate_omp.mpa \
 	      miniprof_hwc_validate_smear_report.txt miniprof_hwc_validate_smear.mpa \
-	      miniprof_ext_trace_c.txt miniprof_ext_trace_f.txt
+	      miniprof_ext_trace_c.txt miniprof_ext_trace_f.txt \
+	      miniprof_snapshot.json miniprof_snapshot_3d.json \
+	      tests/test_units tests/test_units_out.json
