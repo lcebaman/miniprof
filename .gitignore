@@ -23,3 +23,4 @@ miniprof*.mpa
 miniprof*.json
 examples/imbalance_validate
 examples/fortran_sentinels
+pmu_probe_*.txt
