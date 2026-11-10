@@ -199,14 +199,15 @@ def report(doc: dict, args) -> str:
             if mem["nodes_measured"] > 1:
                 p(f"   all nodes           {mem['total_gb_s_all_nodes']:.1f} GB/s; per node "
                   f"min {pn['total_gb_s']['min']:.1f} / max {pn['total_gb_s']['max']:.1f}")
-            p(f"   Remote-socket reads {mem['remote_read_share_pct_avg']:5.1f}%  of socket reads (NUMA placement)")
+            p(f"   Remote-socket reads {mem['remote_read_share_pct']:5.1f}%  of core reads, all sockets (NUMA placement)")
             p(f"   Package power       {pn['power_w_avg']:.0f} W per node, {mem['energy_j_all_nodes'] / 1e3:.2f} kJ in total")
             n0 = mem["nodes"][0]
             for so in n0["sockets"]:
                 ch = so["channels"]
                 p(f"   {n0.get('hostname') or 'node 0'} socket {so['socket']}: read {so['read_gb_s']:.1f} "
                   f"(peak {so['peak_read_gb_s']:.1f}), write {so['write_gb_s']:.1f} GB/s, "
-                  f"{ch['active']}/{ch['count']} channels active, remote {so['remote_read_share_pct']:.0f}%, "
+                  f"{ch['active']}/{ch['count']} channels active, remote "
+                  + ("-" if so["remote_read_share_pct"] is None else f"{so['remote_read_share_pct']:.0f}%") + ", "
                   f"{so['power_w']:.0f} W")
 
     # top-down
@@ -321,8 +322,8 @@ def report(doc: dict, args) -> str:
             obs.append(f"Bad speculation {tdc['bad_speculation']:.1f}% (> {args.td_badspec_pct:g}%): "
                        "branch mispredictions or pipeline restarts.")
     if mem and mem.get("available"):
-        if mem["remote_read_share_pct_avg"] > args.remote_pct:
-            obs.append(f"{mem['remote_read_share_pct_avg']:.1f}% of DRAM reads cross sockets (> {args.remote_pct:g}%): "
+        if mem["remote_read_share_pct"] > args.remote_pct:
+            obs.append(f"{mem['remote_read_share_pct']:.1f}% of DRAM reads cross sockets (> {args.remote_pct:g}%): "
                        "check binding and first-touch initialisation.")
         for so in mem["nodes"][0]["sockets"]:
             ch = so["channels"]
