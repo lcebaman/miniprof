@@ -678,7 +678,7 @@ launcher's environment-passing convention).
 | `MINIPROF_OMPT` | snapshot | `1` | `0` disables OpenMP measurement (OMPT) |
 | `MINIPROF_OMPT_DEBUG` | snapshot | unset | Set to trace every OMPT callback on stderr (debugging only; very verbose) |
 | `MINIPROF_COUNTERS_SPLIT` | snapshot | `1` | `0` stops reading counters at MPI calls: no inside/outside-MPI split, but no per-call cost either |
-| `MINIPROF_ADDR2LINE` | all | `addr2line` | addr2line used for file:line. When GNU addr2line returns no line (binutils 2.35 on RHEL/Rocky 9 cannot read every DWARF 5 line table that AOCC/clang emit), miniprof retries with `llvm-addr2line` if it is on `PATH`; setting this variable disables that retry |
+| `MINIPROF_ADDR2LINE` | all | `addr2line` | addr2line used for file:line. When GNU addr2line returns no line (binutils 2.35 on RHEL/Rocky 9 cannot read every DWARF 5 line table that AOCC/clang emit), miniprof retries with the first of `llvm-addr2line`, `llvm-symbolizer` (shipped with AOCC) or `eu-addr2line` (elfutils) on `PATH`; setting this variable disables that retry |
 | `MINIPROF_SNAPSHOT_OUTPUT` | snapshot | `miniprof_snapshot.json` | Snapshot JSON path |
 | `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
 | `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |
