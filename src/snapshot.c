@@ -38,6 +38,9 @@
 #include <sys/resource.h>
 #include <linux/perf_event.h>
 #include <dlfcn.h>
+#include <dirent.h>
+#include <math.h>
+#include <sys/stat.h>
 
 /* ── state ───────────────────────────────────────────────────────────── */
 
@@ -1041,6 +1044,108 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
     jw_end_obj(w);
 }
 
+
+/* ── P6: calibration (miniprof-calibrate output) ────────────────────── */
+
+/* MINIPROF_CALIBRATION = a calibration_<host>.json file, or a directory
+ * holding them: the file for node 0's hostname, else one whose cpu_brand
+ * matches. Only the flat "ceilings" object is read. */
+typedef struct {
+    int    loaded, quick, brand_match;
+    char   file[512], host[64], brand[96], date[32];
+    char   text[16384];
+} calib_t;
+static calib_t g_cal;
+
+static int cal_str(const char *t, const char *key, char *out, size_t n)
+{
+    char pat[96];
+    snprintf(pat, sizeof(pat), "\"%s\": \"", key);
+    const char *p = strstr(t, pat);
+    if (!p) return -1;
+    p += strlen(pat);
+    size_t k = 0;
+    while (*p && *p != '"' && k + 1 < n) out[k++] = *p++;
+    out[k] = '\0';
+    return 0;
+}
+
+/* a number from the "ceilings" object; NAN when absent */
+static double cal_num(const char *key)
+{
+    if (!g_cal.loaded) return NAN;
+    const char *c = strstr(g_cal.text, "\"ceilings\"");
+    if (!c) return NAN;
+    char pat[96];
+    snprintf(pat, sizeof(pat), "\"%s\": ", key);
+    const char *p = strstr(c, pat);
+    return p ? strtod(p + strlen(pat), NULL) : NAN;
+}
+
+static int cal_read(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return -1;
+    size_t k = fread(g_cal.text, 1, sizeof(g_cal.text) - 1, f);
+    fclose(f);
+    g_cal.text[k] = '\0';
+    if (!strstr(g_cal.text, "\"miniprof-calibration\"")) return -1;
+    snprintf(g_cal.file, sizeof(g_cal.file), "%s", path);
+    cal_str(g_cal.text, "hostname", g_cal.host, sizeof(g_cal.host));
+    cal_str(g_cal.text, "cpu_brand", g_cal.brand, sizeof(g_cal.brand));
+    cal_str(g_cal.text, "date_utc", g_cal.date, sizeof(g_cal.date));
+    g_cal.quick = strstr(g_cal.text, "\"quick\": true") != NULL;
+    g_cal.loaded = 1;
+    return 0;
+}
+
+static void cal_load(const sysinfo_node_t *n0)
+{
+    const char *env = getenv("MINIPROF_CALIBRATION");
+    if (!env || !*env || g_cal.loaded) return;
+    struct stat st;
+    if (stat(env, &st) == 0 && S_ISDIR(st.st_mode)) {
+        char p[1024];
+        snprintf(p, sizeof(p), "%s/calibration_%s.json", env, n0->hostname);
+        if (cal_read(p) != 0) {
+            DIR *d = opendir(env);
+            struct dirent *de;
+            while (d && (de = readdir(d))) {
+                if (strncmp(de->d_name, "calibration_", 12) != 0) continue;
+                snprintf(p, sizeof(p), "%s/%s", env, de->d_name);
+                if (cal_read(p) == 0 && strcmp(g_cal.brand, n0->cpu_brand) == 0) break;
+                g_cal.loaded = 0;
+            }
+            if (d) closedir(d);
+        }
+    } else {
+        cal_read(env);
+    }
+    if (g_cal.loaded) g_cal.brand_match = strcmp(g_cal.brand, n0->cpu_brand) == 0;
+}
+
+static void write_calibration_ref(jw_t *w)
+{
+    jw_begin_obj(w, "calibration");
+    jw_str(w, "file", g_cal.file);
+    jw_str(w, "host", g_cal.host);
+    jw_str(w, "date_utc", g_cal.date);
+    jw_bool(w, "same_cpu", g_cal.brand_match);
+    if (g_cal.quick) jw_str(w, "warning", "calibration made with --quick: not a measurement of the node");
+    jw_end_obj(w);
+}
+
+/* bandwidth ceiling, DRAM view: the better of read-only and triad */
+static double cal_bw(const char *scope)
+{
+    char k1[64], k2[64];
+    snprintf(k1, sizeof(k1), "dram_read_gb_s_%s", scope);
+    snprintf(k2, sizeof(k2), "dram_triad_gb_s_%s", scope);
+    double a = cal_num(k1), b = cal_num(k2);
+    if (isnan(a)) return b;
+    if (isnan(b)) return a;
+    return a > b ? a : b;
+}
 /* ── P5: memory block (socket-level counters via miniprof-nodemon) ──── */
 
 static double gbs(double bytes, double s) { return s > 0 ? bytes / s * 1e-9 : 0.0; }
@@ -1077,6 +1182,7 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
     jw_str(w, "source", "miniprof-nodemon: memory-controller CAS (amd_umc), data-fabric "
                         "remote inbound (amd_df), package energy (power)");
     jw_int(w, "interval_ms", nodes[0].mem.interval_ms);
+    if (g_cal.loaded) write_calibration_ref(w);
     jw_begin_obj(w, "definitions");
     jw_str(w, "scope", "whole node: every process on it counts, not only this job "
                        "(see nodes[].exclusivity)");
@@ -1119,6 +1225,17 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
             jw_dbl(w, "write_gb_s", gbs((double)so->wr_bytes, el));
             jw_dbl(w, "peak_read_gb_s", so->peak_rd_bps * 1e-9);
             jw_dbl(w, "peak_write_gb_s", so->peak_wr_bps * 1e-9);
+            {
+                char sk[32];
+                snprintf(sk, sizeof(sk), "socket%d", s);
+                double cb = g_cal.loaded ? cal_bw(sk) : NAN;
+                if (cb > 0) {
+                    jw_dbl(w, "pct_of_calibrated_bw",
+                           100.0 * gbs((double)(so->rd_bytes + so->wr_bytes), el) / cb);
+                    jw_dbl(w, "peak_pct_of_calibrated_bw",
+                           100.0 * (so->peak_rd_bps + so->peak_wr_bps) * 1e-9 / cb);
+                }
+            }
             jw_dbl(w, "remote_read_gb_s", gbs((double)so->remote_in_bytes, el));
             double l, r;
             core_reads(m, s, &l, &r);
@@ -1152,6 +1269,10 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
         jw_dbl(w, "write_gb_s", gbs(wr, el));
         jw_dbl(w, "total_gb_s", gbs(rd + wr, el));
         jw_dbl(w, "peak_gb_s", m->peak_node_bps * 1e-9);
+        if (g_cal.loaded && cal_bw("node") > 0) {
+            jw_dbl(w, "pct_of_calibrated_bw", 100.0 * gbs(rd + wr, el) / cal_bw("node"));
+            jw_dbl(w, "peak_pct_of_calibrated_bw", 100.0 * m->peak_node_bps * 1e-9 / cal_bw("node"));
+        }
         jw_dbl(w, "energy_j", en);
         jw_dbl(w, "power_w", el > 0 ? en / el : 0.0);
         jw_end_obj(w);
@@ -1185,6 +1306,110 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
     jw_dbl(w, "total_gb_s_all_nodes", st.sum);
     jw_dbl(w, "energy_j_all_nodes", e_tot);
     jw_dbl(w, "remote_read_share_pct", all_loc + all_rem > 0 ? 100.0 * all_rem / (all_loc + all_rem) : 0.0);
+    jw_end_obj(w);
+}
+
+/* ── P6: roofline (run level, per node) ─────────────────────────────── */
+
+static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_t *nodes, int nn)
+{
+    jw_begin_obj(w, "roofline");
+    const char *why = NULL;
+    int iF = kind_index(CK_FLOPS, g_cnt.n_active);
+    int mem_any = 0;
+    for (int i = 0; i < nn; i++) mem_any |= nodes[i].mem.available;
+    if (!g_cal.loaded)
+        why = getenv("MINIPROF_CALIBRATION") ? "MINIPROF_CALIBRATION set but no usable "
+              "calibration file found (run miniprof-calibrate -o DIR)"
+            : "no calibration: run miniprof-calibrate once per node type and set MINIPROF_CALIBRATION";
+    else if (g_cnt.nsets > 1 || iF < 0)
+        why = "needs the FLOP counter: MINIPROF_SNAPSHOT=basic (top-down and roofline-width "
+              "levels count other events)";
+    else if (!mem_any)
+        why = "needs DRAM bytes from the memory block (miniprof-nodemon)";
+    if (why) {
+        jw_bool(w, "available", 0);
+        jw_str(w, "reason", why);
+        jw_end_obj(w);
+        return;
+    }
+    /* compute roof: MINIPROF_ROOFLINE_PEAK (e.g. fp32_512) or the widest FP64 */
+    static const char *k_peaks[] = { "fp64_512", "fp64_256", "fp64_128", "fp64_scalar" };
+    char pk[64] = "", name[32] = "";
+    const char *want = getenv("MINIPROF_ROOFLINE_PEAK");
+    double peak = NAN;
+    if (want && *want) {
+        snprintf(pk, sizeof(pk), "gflops_%.20s_node", want);
+        snprintf(name, sizeof(name), "%.20s", want);
+        peak = cal_num(pk);
+    }
+    for (int i = 0; i < 4 && isnan(peak); i++) {
+        snprintf(pk, sizeof(pk), "gflops_%s_node", k_peaks[i]);
+        snprintf(name, sizeof(name), "%s", k_peaks[i]);
+        peak = cal_num(pk);
+    }
+    double bwc = cal_bw("node");
+    jw_bool(w, "available", 1);
+    write_calibration_ref(w);
+    jw_begin_obj(w, "definitions");
+    jw_str(w, "arithmetic_intensity", "FLOPs (this job's threads, user space) / DRAM bytes "
+                                      "(whole node: reads + writes, incl. write-allocate)");
+    jw_str(w, "attainable_gflops", "min(peak, arithmetic_intensity x DRAM bandwidth ceiling)");
+    jw_str(w, "peak", "calibrated all-core FMA rate; widest FP64 unless MINIPROF_ROOFLINE_PEAK "
+                      "names another (fp32_512, fp64_256, ...): the FLOP counter does not "
+                      "separate precisions");
+    jw_str(w, "scope", "whole run, per node; FLOPs include those inside MPI calls");
+    jw_end_obj(w);
+    jw_begin_obj(w, "ceilings");
+    jw_str(w, "peak_key", name);
+    jw_dbl(w, "peak_gflops", peak);
+    jw_dbl(w, "dram_gb_s", bwc);
+    jw_dbl(w, "ridge_flop_per_byte", bwc > 0 ? peak / bwc : NAN);
+    jw_begin_obj(w, "all_gflops");
+    static const char *k_all[] = { "fp64_scalar", "fp64_128", "fp64_256", "fp64_512",
+                                   "fp32_scalar", "fp32_128", "fp32_256", "fp32_512" };
+    for (int i = 0; i < 8; i++) {
+        char k[64];
+        snprintf(k, sizeof(k), "gflops_%s_node", k_all[i]);
+        double v = cal_num(k);
+        if (!isnan(v)) jw_dbl(w, k_all[i], v);
+    }
+    jw_end_obj(w);
+    jw_end_obj(w);
+
+    jw_begin_arr(w, "nodes");
+    double sum_ai_w = 0, sum_w = 0;
+    for (int i = 0; i < nn; i++) {
+        const nm_result_t *m = &nodes[i].mem;
+        if (!m->available) continue;
+        double fl = 0, el = 0;
+        for (int k = 0; k < nr; k++) {
+            if (r[k].node_index != nodes[i].node_index || !r[k].cnt_available) continue;
+            fl += (double)r[k].cnt_total[iF];
+            if (r[k].elapsed_s > el) el = r[k].elapsed_s;
+        }
+        double bytes = 0;
+        for (int s = 0; s < m->nsockets; s++) bytes += (double)(m->s[s].rd_bytes + m->s[s].wr_bytes);
+        double gfl = el > 0 ? fl / el * 1e-9 : 0;
+        double bw = m->elapsed_s > 0 ? bytes / m->elapsed_s * 1e-9 : 0;
+        double ai = bytes > 0 ? fl / bytes : NAN;
+        double att = isnan(ai) ? peak : (ai * bwc < peak ? ai * bwc : peak);
+        jw_begin_obj(w, NULL);
+        jw_int(w, "index", nodes[i].node_index);
+        jw_str_or_null(w, "hostname", nodes[i].info.hostname);
+        jw_dbl(w, "gflops_per_s", gfl);
+        jw_dbl(w, "dram_gb_s", bw);
+        jw_dbl(w, "arithmetic_intensity", ai);
+        jw_str(w, "bound", isnan(ai) || ai >= peak / bwc ? "compute" : "memory");
+        jw_dbl(w, "attainable_gflops", att);
+        jw_dbl(w, "pct_of_attainable", att > 0 ? 100.0 * gfl / att : NAN);
+        jw_dbl(w, "pct_of_peak_gflops", peak > 0 ? 100.0 * gfl / peak : NAN);
+        jw_dbl(w, "pct_of_dram_bw", bwc > 0 ? 100.0 * bw / bwc : NAN);
+        jw_end_obj(w);
+        if (!isnan(ai)) { sum_ai_w += fl; sum_w += bytes; }
+    }
+    jw_end_arr(w);
+    jw_dbl(w, "arithmetic_intensity_all_nodes", sum_w > 0 ? sum_ai_w / sum_w : NAN);
     jw_end_obj(w);
 }
 /* ── P2: OpenMP block ───────────────────────────────────────────────── */
@@ -1282,6 +1507,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
         fprintf(stderr, "[miniprof] cannot open snapshot output '%s'\n", g_outfile);
         return -1;
     }
+    if (nnodes > 0) cal_load(&nodes[0].info);   /* P6: MINIPROF_CALIBRATION */
 
     double el_min = 1e300, el_max = 0.0, el_sum = 0.0, init_max = 0.0;
     int rpn_min = 1 << 30, rpn_max = 0;
@@ -1370,6 +1596,8 @@ static int write_json(const rank_rec_t *ranks, int nranks,
         int mem_any = 0;
         for (int i = 0; i < nnodes; i++) mem_any |= nodes[i].mem.available;
         if (mem_any) jw_str(&w, NULL, "memory");
+        if (mem_any && g_cal.loaded && g_cnt.nsets <= 1 && kind_index(CK_FLOPS, g_cnt.n_active) >= 0)
+            jw_str(&w, NULL, "roofline");
     }
     jw_end_arr(&w);
     write_parallel(&w, ranks, nranks, hist);
@@ -1377,7 +1605,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     write_openmp(&w, ranks, nranks);
     write_topdown(&w, ranks, nranks);
     write_memory(&w, nodes, nnodes);
-    jw_null(&w, "roofline");
+    write_roofline(&w, ranks, nranks, nodes, nnodes);
     jw_end_obj(&w);
 
     jw_end_obj(&w);

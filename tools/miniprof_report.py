@@ -196,6 +196,10 @@ def report(doc: dict, args) -> str:
               + (f"; {mem['nodes_without']} node(s) without: {mem.get('reason_missing')}" if mem.get("nodes_without") else ""))
             p(f"   DRAM bandwidth      read {pn['read_gb_s']['avg']:.1f} + write {pn['write_gb_s']['avg']:.1f} GB/s "
               f"per node (avg); peak {pn['peak_gb_s_max']:.1f} GB/s over {mem['interval_ms']} ms")
+            n0m = mem["nodes"][0]
+            if "pct_of_calibrated_bw" in n0m:
+                p(f"   vs calibrated       {n0m['pct_of_calibrated_bw']:5.1f}% average, "
+                  f"{n0m['peak_pct_of_calibrated_bw']:.1f}% at peak (node 0)")
             if mem["nodes_measured"] > 1:
                 p(f"   all nodes           {mem['total_gb_s_all_nodes']:.1f} GB/s; per node "
                   f"min {pn['total_gb_s']['min']:.1f} / max {pn['total_gb_s']['max']:.1f}")
@@ -209,6 +213,28 @@ def report(doc: dict, args) -> str:
                   f"{ch['active']}/{ch['count']} channels active, remote "
                   + ("-" if so["remote_read_share_pct"] is None else f"{so['remote_read_share_pct']:.0f}%") + ", "
                   f"{so['power_w']:.0f} W")
+
+    # roofline
+    roof = (doc.get("metrics") or {}).get("roofline")
+    rn = {}
+    if roof:
+        p("")
+        if not roof.get("available"):
+            p(f" Roofline               not available: {roof.get('reason')}")
+        else:
+            c = roof["ceilings"]
+            rn = roof["nodes"][0] if roof["nodes"] else {}
+            cal = roof["calibration"]
+            p(f" Roofline               ceilings from {cal['host']} ({cal['date_utc'][:10]})"
+              + ("" if cal.get("same_cpu") else ", DIFFERENT CPU")
+              + (" — QUICK calibration, not a measurement" if cal.get("warning") else ""))
+            p(f"   ceilings            peak {c['peak_gflops']:.0f} GFLOP/s ({c['peak_key']}), "
+              f"DRAM {c['dram_gb_s']:.0f} GB/s, ridge {c['ridge_flop_per_byte']:.2f} FLOP/B")
+            if rn:
+                p(f"   this run (node 0)   {rn['gflops_per_s']:.1f} GFLOP/s at {rn['arithmetic_intensity']:.3g} FLOP/B: "
+                  f"{rn['bound'].upper()}-bound")
+                p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
+                  f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
 
     # top-down
     td = (doc.get("metrics") or {}).get("topdown")
@@ -308,6 +334,13 @@ def report(doc: dict, args) -> str:
                        + ": consider dynamic/guided scheduling or a finer work split.")
         if omp["lock_wait_pct"] > args.omp_imbalance_pct:
             obs.append(f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
+    if rn:
+        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < 50:
+            obs.append(f"Memory-bound but only {rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth: "
+                       "latency-bound access (pointer chasing, poor prefetching) or too few cores/channels in use.")
+        if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < 20:
+            obs.append(f"Compute-bound by intensity but at {rn['pct_of_peak_gflops']:.0f}% of peak FLOPs: "
+                       "vectorisation, dependency chains or front-end limits (see top-down).")
     if tdc:
         if tdc.get("backend_memory", 0) > args.td_memory_pct:
             obs.append(f"{tdc['backend_memory']:.1f}% of slots stall on memory (backend_memory > "

@@ -59,7 +59,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate topdown_validate membw_validate
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate topdown_validate membw_validate roofline_fma
 
 all: $(EXAMPLES)
 
@@ -125,6 +125,10 @@ counters_validate: counters_validate.c $(LIB)
 membw_validate: membw_validate.c $(LIB)
 	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Compute-bound FMA workload for the roofline check (P6).
+roofline_fma: roofline_fma.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 # Known-shape top-down workload (P4): one region per top-down category.
 topdown_validate: topdown_validate.c $(LIB)
 	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
@@ -144,4 +148,4 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
 	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
-	      counters_validate mpi_percall omp_validate topdown_validate membw_validate
+	      counters_validate mpi_percall omp_validate topdown_validate membw_validate roofline_fma
