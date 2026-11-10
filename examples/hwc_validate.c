@@ -46,6 +46,11 @@ static double now_s(void)
 }
 
 /* ── compute-bound: independent FP chains, tiny working set ─────────────── */
+/* noinline: the test greps the report for these two function names, and
+ * clang/AOCC at -O2 inlines static single-call functions into main —
+ * sampling then sees one blended "main" (classified MIXED) and both checks
+ * fail even though the counters are fine. */
+__attribute__((noinline))
 static double compute_bound_kernel(double budget_s)
 {
     double x[8] = {1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7};
@@ -92,6 +97,7 @@ static long *build_chase_buffer(long n)
     return (long *)buf;
 }
 
+__attribute__((noinline))
 static long memory_bound_kernel(long *chase_start, double budget_s)
 {
     long *p = chase_start;

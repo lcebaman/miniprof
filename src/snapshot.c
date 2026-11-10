@@ -636,6 +636,9 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
                             "L2 prefetcher brought in and all writebacks, so it is a lower "
                             "bound on DRAM traffic, not a bandwidth measurement");
     jw_str(w, "ghz_effective", "cycles / user CPU time (user-space counts)");
+    jw_str(w, "fp_ops_width", "FP-unit ops by vector width, including FP loads, stores and "
+                              "register moves: shows how much vector hardware is used, not "
+                              "the share of arithmetic that is vectorised");
     jw_end_obj(w);
 
     uint64_t tot[CNT_MAX_EVENTS] = {0}, comp[CNT_MAX_EVENTS] = {0}, mpi[CNT_MAX_EVENTS] = {0};

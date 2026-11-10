@@ -43,6 +43,9 @@ static double now_s(void)
 }
 
 /* ── compute-bound: independent FP chains, tiny working set ─────────────── */
+/* noinline: see hwc_validate.c — clang/AOCC would otherwise inline both
+ * kernels into main.omp_outlined and the per-function checks find nothing. */
+__attribute__((noinline))
 static double compute_bound_kernel(double budget_s)
 {
     double x[8] = {1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7};
@@ -84,6 +87,7 @@ static long *build_chase_buffer(long n)
     return (long *)buf;
 }
 
+__attribute__((noinline))
 static long memory_bound_kernel(long *chase_start, double budget_s)
 {
     long *p = chase_start;

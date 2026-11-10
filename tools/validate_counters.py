@@ -11,8 +11,9 @@ Checks (see the header of counters_validate.c for the expected values):
     - run total FLOPs within the known range (regions + init + checksum)
     - with --perf-flops: total within 1% of `perf stat` on the same binary
   vector group (MINIPROF_SNAPSHOT=roofline):
-    - dot_scalar: no packed FP ops, scalar ops = N*REPS (FMA) or 2*N*REPS
-    - region FLOPs exact as above
+    - dot_scalar: scalar ops = N*REPS (FMA) or 2*N*REPS (exact arithmetic)
+    - daxpy: packed ops dominate (vectorised)
+    (width events include FP loads/stores/moves, so no exact packed counts)
 Exit 0 on pass, 1 on failure, 77 (skip) if counters are unavailable.
 
 Usage:
@@ -151,24 +152,24 @@ def main() -> int:
                   f"remote_dram_fill_pct={d['remote_dram_fill_pct']:.2f} "
                   f"l2_mpki={d.get('l2_misses_per_kilo_instr', 0):.2f}")
     elif group == "vector":
-        # widths are uop counts: compare the width-weighted total against the
-        # exact FLOP count (FMA = 2 flops per lane, so allow either)
-        dx = regions["daxpy"]["totals"]
-        lanes = (dx.get("fp_scalar_ops", 0) + 2 * dx.get("fp_packed128_ops", 0)
-                 + 4 * dx.get("fp_packed256_ops", 0) + 8 * dx.get("fp_packed512_ops", 0))
-        w = want["daxpy"]
-        check(near(lanes, w / 2) or near(lanes, w),
-              f"daxpy FP64 lanes {lanes} == flops/2 (FMA) or flops ({w // 2} / {w})")
+        # fp_ops_retired_by_width counts every FP-unit uop of that width,
+        # INCLUDING loads, stores and register moves — not just arithmetic
+        # (measured on EPYC 9555: SSE2 daxpy retires ~5 packed-128 uops per
+        # 2 elements; the scalar dot product retires one packed move per
+        # element). So only arithmetic-independent properties are checked.
         dt = regions["dot_scalar"]["totals"]
-        packed = dt.get("fp_packed128_ops", 0) + dt.get("fp_packed256_ops", 0) + dt.get("fp_packed512_ops", 0)
         scalar = dt.get("fp_scalar_ops", 0)
-        check(packed <= 1e-4 * max(scalar, 1), f"dot_scalar packed FP ops {packed} ~ 0")
         ok = near(scalar, N * R * nranks) or near(scalar, 2 * N * R * nranks)
         check(ok, f"dot_scalar scalar ops {scalar} == N*REPS (FMA) or 2*N*REPS per rank")
+        dx = regions["daxpy"]["totals"]
+        packed = dx.get("fp_packed128_ops", 0) + dx.get("fp_packed256_ops", 0) + dx.get("fp_packed512_ops", 0)
+        check(packed > 100 * max(dx.get("fp_scalar_ops", 0), 1),
+              f"daxpy is vectorised: packed ops {packed} >> scalar ops {dx.get('fp_scalar_ops', 0)}")
         print("INFO: daxpy FP ops by width: " + ", ".join(
             f"{k}={dx.get(k, 0)}" for k in ("fp_scalar_ops", "fp_packed128_ops",
                                             "fp_packed256_ops", "fp_packed512_ops")))
-        print(f"INFO: packed_fp_ops_pct={d.get('packed_fp_ops_pct', 0):.1f}")
+        print(f"INFO: packed_fp_ops_pct={d.get('packed_fp_ops_pct', 0):.1f} "
+              "(FP-unit ops incl. data movement, not arithmetic only)")
 
     print(f"\n{'ALL COUNTER CHECKS PASSED' if fails == 0 else f'{fails} COUNTER CHECK(S) FAILED'}")
     return 0 if fails == 0 else 1
