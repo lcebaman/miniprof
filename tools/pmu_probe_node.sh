@@ -13,7 +13,14 @@
 #     srun -N1 -n1 --exclusive tools/pmu_probe_node.sh   # or ./tools/pmu_probe_node.sh
 # Writes pmu_probe_node_<host>.txt. No root needed; nothing is changed;
 # sudo is only queried with -n (never prompts).
+#
+#   --sudo   also run the socket-counter tests through `sudo -n perf`, to
+#            see that they count and get perf's exact encodings (configs),
+#            and test the capability route: a COPY of perf in a private
+#            temp dir gets cap_perfmon and is run as you; the copy is
+#            deleted at exit. Nothing else on the system changes.
 
+SUDO=0; [ "${1:-}" = "--sudo" ] && SUDO=1
 OUT="pmu_probe_node_$(hostname -s).txt"
 CC=${CC:-gcc}
 TMP=$(mktemp -d)
@@ -22,6 +29,7 @@ trap 'rm -rf "$TMP"' EXIT
 sec() { printf '\n==================== %s ====================\n' "$1"; }
 run() { printf '\n$ %s\n' "$*"; timeout 60 "$@" 2>&1; }
 
+chmod 755 "$TMP"
 # ~2 s of DRAM streaming on one core (triad over 3 x 256 MiB)
 cat > "$TMP/stream.c" <<'C'
 #include <stdio.h>
@@ -110,7 +118,7 @@ fi
 sec "data fabric (amd_df)"
 if [ -d /sys/bus/event_source/devices/amd_df ]; then
   # whatever DF events/metrics this perf knows (names vary by kernel and generation)
-  EV=$(perf list --no-desc 2>/dev/null | grep -oE '\b(local_processor_read_data_beats_cs[0-9]+|local_processor_write_data_beats_cs[0-9]+|dram_channel_data_controller_[0-9]+|remote_socket_[a-z_]+)\b' | sort -u | head -6 | paste -sd, -)
+  EV=$(perf list --no-desc 2>/dev/null | grep -oE 'amd_df/[a-z0-9_]+/' | sort -u | head -6 | paste -sd, -)
   if [ -n "$EV" ]; then run perf stat -a -e "$EV" -- "$S"; else echo "perf knows no named DF events"; fi
   for m in nps1_die_to_dram local_socket_inbound_data_bytes local_socket_outbound_data_bytes \
            dram_read_data_for_local_processor dram_write_data_for_local_processor; do
@@ -124,6 +132,68 @@ sec "L3 (amd_l3)"
 if [ -d /sys/bus/event_source/devices/amd_l3 ]; then
   run perf stat -a -e amd_l3/event=0x04,umask=0xff/ -- "$S"
   run perf stat -a -M l3_read_miss_latency -- "$S"
+fi
+
+if [ $SUDO = 1 ]; then
+  if ! sudo -n true 2>/dev/null; then
+    sec "sudo"; echo "--sudo given but passwordless sudo is not available"
+  else
+    U0=$(ls -d /sys/bus/event_source/devices/amd_umc_* 2>/dev/null | head -1 | xargs -r basename)
+    DF=$(perf list --no-desc 2>/dev/null | grep -oE 'amd_df/local_or_remote_socket_read_data_beats_dram_[0-9]+/' | sort -u | paste -sd, -)
+    DFW=$(perf list --no-desc 2>/dev/null | grep -oE 'amd_df/local_or_remote_socket_write_data_beats_dram_[0-9]+/' | sort -u | paste -sd, -)
+
+    sec "sudo: memory controller (all channels), named + metrics"
+    UALL=$(for d in /sys/bus/event_source/devices/amd_umc_*; do n=$(basename $d); printf '%s/umc_cas_cmd.rd/,%s/umc_cas_cmd.wr/,' $n $n; done | sed 's/,$//')
+    run sudo -n perf stat -a -e "$UALL" -- "$S"
+    run sudo -n perf stat -a -M umc_mem_read_bandwidth,umc_mem_write_bandwidth,umc_data_bus_utilization -- "$S"
+
+    sec "sudo: data fabric DRAM read/write beats"
+    [ -n "$DF" ]  && run sudo -n perf stat -a -e "$DF" -- "$S"
+    [ -n "$DFW" ] && run sudo -n perf stat -a -e "$DFW" -- "$S"
+    for m in dram_read_bandwidth_for_local_or_remote_socket dram_write_bandwidth_for_local_or_remote_socket \
+             core_inbound_data_bandwidth_for_local_socket core_inbound_data_bandwidth_for_remote_socket \
+             cross_socket_inbound_data_bandwidth_for_local_socket; do
+      perf list --no-desc metric 2>/dev/null | grep -qw "$m" && run sudo -n perf stat -a -M "$m" -- "$S"
+    done
+
+    sec "sudo: remote-NUMA stream (data on the other socket)"
+    if command -v numactl >/dev/null; then
+      LAST=$(( $(ls -d /sys/devices/system/node/node* | wc -l) - 1 ))
+      run sudo -n perf stat -a -M dram_read_bandwidth_for_local_or_remote_socket,core_inbound_data_bandwidth_for_remote_socket \
+          -- numactl --cpunodebind=0 --membind=$LAST "$S"
+    fi
+
+    sec "sudo: L3, energy"
+    run sudo -n perf stat -a -e amd_l3/event=0x04,umask=0xff,enallcores=1,enallslices=1,threadmask=3/ -- "$S"
+    run sudo -n perf stat -a -e power/energy-pkg/ -- "$S"
+    run sudo -n cat /sys/class/powercap/intel-rapl:0/energy_uj
+
+    sec "sudo: perf's encodings (perf_event_attr type/config)"
+    for ev in "$U0/umc_cas_cmd.rd/" "$U0/umc_cas_cmd.wr/" \
+              $(echo "$DF" | tr , '\n' | head -2) $(echo "$DFW" | tr , '\n' | head -2) power/energy-pkg/; do
+      [ -n "$ev" ] || continue
+      printf '\n%s\n' "$ev"
+      sudo -n perf stat -vv -a -e "$ev" -- true 2>&1 | grep -E '^\s+(type|config|config1)\s' | head -3
+    done
+    for m in umc_mem_read_bandwidth dram_read_bandwidth_for_local_or_remote_socket; do
+      printf '\n$ perf list --details metric | %s\n' "$m"
+      perf list --details metric 2>/dev/null | grep -A12 -E "^\s+$m\s*$" | head -14
+    done
+
+    sec "capability route (copy of perf + cap_perfmon, run as you)"
+    cp "$(command -v perf)" "$TMP/perf" && chmod 755 "$TMP/perf"
+    findmnt -no FSTYPE,OPTIONS -T "$TMP"
+    if sudo -n setcap cap_perfmon+ep "$TMP/perf" 2>&1; then
+      run getcap "$TMP/perf"
+      run "$TMP/perf" stat -a -e "$U0/umc_cas_cmd.rd/,$U0/umc_cas_cmd.wr/,power/energy-pkg/" -- "$S"
+      run "$TMP/perf" stat -a -M umc_mem_read_bandwidth -- "$S"
+    fi
+    printf '\nsetcap on the repository filesystem (%s):\n' "$PWD"
+    findmnt -no FSTYPE,OPTIONS -T "$PWD"
+    cp "$TMP/stream" "./.cap_probe_$$" 2>/dev/null && \
+      { sudo -n setcap cap_perfmon+ep "./.cap_probe_$$" 2>&1 && getcap "./.cap_probe_$$"; rm -f "./.cap_probe_$$"; }
+    sudo -n rm -f "$TMP/perf"
+  fi
 fi
 
 sec "done"
