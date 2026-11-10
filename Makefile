@@ -37,6 +37,10 @@
 #   overhead-3d    — wall-clock overhead of snapshot vs off (informational)
 #   run-imbalance-validate — snapshot known-answer test: injected imbalance,
 #                      trace-mode cross-check, exact I/O byte counts
+#   run-omp-validate     — snapshot OpenMP (OMPT): per-region imbalance,
+#                          team size, serial time and lock wait against
+#                          injected values; SKIP under GCC libgomp
+#   test-ompt-abi        — src/ompt_abi.h against the real <omp-tools.h>
 #   run-counters-validate — snapshot hardware counters: exact region FLOPs,
 #                      threads, compute/MPI split (SKIP without a PMU)
 #   run-fortran-sentinels — Fortran MPI_IN_PLACE/STATUS_IGNORE results
@@ -107,6 +111,7 @@ LIB_SRCS := src/profile_store.c    \
             src/trace_aggregator.c \
             src/io_trace.c         \
             src/counters.c         \
+            src/ompt.c             \
             src/json_writer.c      \
             src/sysinfo.c          \
             src/snapshot.c         \
@@ -137,6 +142,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
         run-ext-trace run-3d-snapshot test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
+        run-omp-validate test-ompt-abi \
         mpa check clean
 
 all: lib examples
@@ -545,6 +551,43 @@ run-imbalance-validate: examples/imbalance_validate
 		--steps $$1 --base-ms $$2 --delta-ms $$3 \
 		--trace-report miniprof_trace_report_iv.txt
 
+# ── run-omp-validate: snapshot OpenMP via OMPT (P2) ─────────────────────────
+# examples/omp_validate injects serial time, balanced/imbalanced regions, a
+# contended critical section and an imbalanced static loop; the validator
+# checks them within a few percent. ranks x threads is capped at nproc:
+# oversubscribed threads turn spin time into scheduler noise. OMPT needs
+# an LLVM-family runtime — build with e.g. OMPI_CC=clang (or AOCC); under
+# GCC libgomp the validator exits 77 and this reports SKIP.
+OV_NRANKS  ?= 2
+OV_THREADS ?= 4
+OV_CPUS     = $(shell nproc)
+OV_RANKS    = $(shell r=$(OV_NRANKS); [ $$((r*2)) -gt $(OV_CPUS) ] && r=1; echo $$r)
+OV_T        = $(shell t=$(OV_THREADS); m=$$(( $(OV_CPUS) / $(OV_RANKS) )); \
+                [ $$t -gt $$m ] && t=$$m; [ $$t -lt 1 ] && t=1; echo $$t)
+
+examples/omp_validate: examples/omp_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) omp_validate
+
+run-omp-validate: examples/omp_validate
+	@echo "--- omp_validate: $(OV_RANKS) ranks x $(OV_T) threads"
+	@OMP_NUM_THREADS=$(OV_T) MINIPROF_MODE=snapshot \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_omp.json \
+	mpirun $(MPIRUN_FLAGS) -n $(OV_RANKS) -x OMP_NUM_THREADS --bind-to none \
+		./examples/omp_validate || exit 1; \
+	python3 tools/validate_omp.py miniprof_snapshot_omp.json --threads $(OV_T); rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: OpenMP runtime without OMPT (build with OMPI_CC=clang/AOCC)"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi
+
+# ── test-ompt-abi: src/ompt_abi.h vs the real <omp-tools.h> ─────────────────
+# Compile-only static asserts. Uses OMPT_ABI_CC (default: clang, else cc);
+# SKIP when no compiler finds omp-tools.h.
+OMPT_ABI_CC ?= $(shell command -v clang 2>/dev/null || echo cc)
+test-ompt-abi:
+	@if echo '#include <omp-tools.h>' | $(OMPT_ABI_CC) -fopenmp -E -x c - >/dev/null 2>&1; then \
+		$(OMPT_ABI_CC) -fopenmp -fsyntax-only -Wall tests/test_ompt_abi.c && \
+		echo "test-ompt-abi: OK ($(OMPT_ABI_CC))"; \
+	else echo "SKIP: no omp-tools.h for $(OMPT_ABI_CC)"; fi
+
 # ── run-counters-validate: snapshot hardware counters (P3) ──────────────────
 # Runs examples/counters_validate in the base group (MINIPROF_SNAPSHOT=basic)
 # and the vector group (=roofline) and checks exact region FLOPs, thread
@@ -643,6 +686,8 @@ check: lib examples mpa-check
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	$(MAKE) run-counters-validate || FAIL=1; \
+	$(MAKE) test-ompt-abi || FAIL=1; \
+	$(MAKE) run-omp-validate || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -674,4 +719,5 @@ clean:
 	      miniprof_trace_report_fs.txt \
 	      examples/imbalance_validate examples/fortran_sentinels \
 	      examples/counters_validate miniprof_snapshot_cv_*.json \
+	      examples/omp_validate examples/omp_validate_clang examples/omp_validate_gcc \
 	      tests/test_units tests/test_units_out.json

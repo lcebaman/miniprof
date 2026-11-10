@@ -25,6 +25,8 @@
 #include "mpi_trace.h"
 #include "io_trace.h"
 #include "counters.h"
+#include "ompt.h"
+#include "symbolizer.h"
 #include "../include/miniprof.h"
 
 #include <mpi.h>
@@ -34,6 +36,7 @@
 #include <time.h>
 #include <sys/resource.h>
 #include <linux/perf_event.h>
+#include <dlfcn.h>
 
 /* ── state ───────────────────────────────────────────────────────────── */
 
@@ -60,6 +63,21 @@ typedef struct {
 static region_red_t g_rreg[CNT_MAX_REGIONS];
 static int          g_nrreg = 0;
 
+/* OpenMP: this rank's OMPT results; regions reduced across ranks (rank 0).
+ * Regions are keyed by "<object>+0x<offset>" of the construct's code
+ * address, so they match across ranks despite address randomisation. */
+static omp_result_t g_omp;
+#define OMP_KEY 64
+typedef struct {
+    char     key[OMP_KEY];
+    char     name[MINIPROF_SYMBOL_LEN];   /* resolved on rank 0            */
+    char     file[MINIPROF_SYMBOL_LEN];
+    int      line;
+    uint64_t ranks, calls, wall_ns, task_ns, wait_ns, tasks, max_team;
+} omp_red_t;
+static omp_red_t g_ored[OMP_MAX_REGIONS];
+static int       g_nored = 0;
+
 /* Per-rank record gathered to world rank 0. Fixed-size, sent as bytes:
  * every rank runs the same binary, so layout and padding are identical. */
 typedef struct {
@@ -85,6 +103,12 @@ typedef struct {
     uint64_t cnt_reads_rdpmc, cnt_reads_syscall;
     uint64_t cnt_total[CNT_MAX_EVENTS], cnt_compute[CNT_MAX_EVENTS],
              cnt_mpi[CNT_MAX_EVENTS];
+
+    /* P2: OpenMP (OMPT) */
+    int    omp_available, omp_threads;
+    double omp_parallel_s;                 /* initial thread in outermost regions */
+    double omp_work_s, omp_wait_s, omp_lock_s, omp_taskwait_s;  /* sum over threads */
+    double omp_work_min_s, omp_work_max_s;                      /* over threads    */
 } rank_rec_t;
 
 /* Per-node record gathered from node leaders to world rank 0. */
@@ -178,6 +202,9 @@ void snapshot_init(int verbose)
                     ok ? "on" : "unavailable", ok ? "" : ": ", ok ? "" : st.reason);
         }
     }
+
+    /* P2: OpenMP statistics from here on (no-op without an OMPT runtime) */
+    ompt_snapshot_begin();
 
     /* P1: start recording MPI and I/O, CPU-time baseline */
     mpi_trace_set_mode(MPI_TRACE_SNAPSHOT);
@@ -280,6 +307,10 @@ static void write_rank(jw_t *w, const rank_rec_t *rr)
     jw_dbl(w, "io_s", rr->io_s);
     jw_dbl(w, "cpu_util_pct", 100.0 * rr->cpu_util);
     jw_dbl(w, "cpu_util_per_core_pct", 100.0 * rr->cpu_util_core);
+    if (rr->omp_available) {
+        jw_int(w, "omp_threads", rr->omp_threads);
+        jw_dbl(w, "omp_parallel_s", rr->omp_parallel_s);
+    }
     jw_end_obj(w);
 }
 
@@ -616,6 +647,7 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     jw_int(w, "syscall", (int64_t)rd_sys);
     jw_end_obj(w);
     jw_bool(w, "user_space_only", 1);
+    jw_bool(w, "compute_mpi_split", cnt_split_enabled());
     jw_int(w, "threads_counted", threads);
     jw_int(w, "threads_dropped", dropped);
     jw_int(w, "multiplexed_ranks", mux);
@@ -744,6 +776,91 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     jw_end_obj(w);
 }
 
+/* ── P2: OpenMP block ───────────────────────────────────────────────── */
+
+static double g_omp_par (const rank_rec_t *r, int a) { (void)a; return r->omp_parallel_s; }
+static double g_omp_ser (const rank_rec_t *r, int a) { (void)a; double s = r->elapsed_s - r->omp_parallel_s; return s > 0 ? s : 0; }
+static double g_omp_thr_imb(const rank_rec_t *r, int a)
+{
+    (void)a;
+    if (r->omp_threads <= 0 || r->omp_work_max_s <= 0) return 0;
+    double avg = r->omp_work_s / r->omp_threads;
+    return 100.0 * (r->omp_work_max_s - avg) / r->omp_work_max_s;
+}
+
+static void write_openmp(jw_t *w, const rank_rec_t *r, int n)
+{
+    int avail = 0;
+    for (int i = 0; i < n; i++) avail += r[i].omp_available;
+    jw_begin_obj(w, "openmp");
+    jw_bool(w, "available", avail > 0);
+    if (!avail) {
+        jw_str(w, "reason", g_omp.reason[0] ? g_omp.reason : "unknown");
+        jw_end_obj(w);
+        return;
+    }
+    jw_int(w, "ranks_without_ompt", n - avail);
+    jw_str(w, "runtime", g_omp.runtime);
+
+    jw_begin_obj(w, "definitions");
+    jw_str(w, "parallel_s", "time the initial thread spent inside outermost parallel regions");
+    jw_str(w, "serial_s", "elapsed - parallel_s: time outside any parallel region");
+    jw_str(w, "barrier_wait", "time team members waited at barriers (explicit, implicit at the end "
+                              "of worksharing constructs and parallel regions)");
+    jw_str(w, "imbalance_pct", "barrier wait / team time: share of thread time spent waiting "
+                               "for slower team members");
+    jw_str(w, "thread_imbalance_pct", "per rank, (max - avg) / max of per-thread work time");
+    jw_end_obj(w);
+
+    double el = 0, par = 0, work = 0, wait = 0, lock = 0, tw = 0;
+    long threads = 0;
+    for (int i = 0; i < n; i++) {
+        if (!r[i].omp_available) continue;
+        el += r[i].elapsed_s; par += r[i].omp_parallel_s;
+        work += r[i].omp_work_s; wait += r[i].omp_wait_s;
+        lock += r[i].omp_lock_s; tw += r[i].omp_taskwait_s;
+        threads += r[i].omp_threads;
+    }
+    jw_int(w, "threads", threads);
+    jw_stat(w, "parallel_s", stats(r, n, g_omp_par, 0));
+    jw_stat(w, "serial_s", stats(r, n, g_omp_ser, 0));
+    jw_dbl(w, "parallel_pct_of_elapsed", pct(par, el));
+    jw_dbl(w, "serial_pct_of_elapsed", pct(el - par, el));
+    jw_begin_obj(w, "thread_time_s");
+    jw_dbl(w, "work", work);
+    jw_dbl(w, "barrier_wait", wait);
+    jw_dbl(w, "lock_wait", lock);
+    jw_dbl(w, "task_wait", tw);
+    jw_end_obj(w);
+    jw_dbl(w, "imbalance_pct", pct(wait, work + wait));
+    jw_dbl(w, "lock_wait_pct", pct(lock, work + wait));
+    jw_stat(w, "thread_imbalance_pct", stats(r, n, g_omp_thr_imb, 0));
+
+    jw_begin_arr(w, "regions");
+    for (int u = 0; u < g_nored; u++) {
+        const omp_red_t *o = &g_ored[u];
+        jw_begin_obj(w, NULL);
+        jw_str(w, "name", o->name[0] ? o->name : o->key);
+        if (o->file[0] && o->line > 0) {
+            char loc[MINIPROF_SYMBOL_LEN + 16];
+            const char *b = strrchr(o->file, '/');
+            snprintf(loc, sizeof(loc), "%s:%d", b ? b + 1 : o->file, o->line);
+            jw_str(w, "location", loc);
+        }
+        jw_str(w, "key", o->key);
+        jw_int(w, "ranks", (int64_t)o->ranks);
+        jw_int(w, "calls", (int64_t)o->calls);
+        jw_dbl(w, "wall_s_per_rank", o->ranks ? o->wall_ns * 1e-9 / o->ranks : 0.0);
+        jw_dbl(w, "avg_team", o->calls ? (double)o->tasks / o->calls : 0.0);
+        jw_int(w, "max_team", (int64_t)o->max_team);
+        jw_dbl(w, "barrier_wait_s", o->wait_ns * 1e-9);
+        jw_dbl(w, "imbalance_pct", o->task_ns ? 100.0 * (double)o->wait_ns / (double)o->task_ns : 0.0);
+        jw_end_obj(w);
+    }
+    jw_end_arr(w);
+    jw_end_obj(w);
+}
+
 static int write_json(const rank_rec_t *ranks, int nranks,
                       const node_rec_t *nodes, int nnodes,
                       const char *mpi_lib, double finalize_s,
@@ -836,10 +953,11 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_begin_arr(&w, "collected");
     jw_str(&w, NULL, "parallel");
     jw_str(&w, NULL, "counters");
+    jw_str(&w, NULL, "openmp");
     jw_end_arr(&w);
     write_parallel(&w, ranks, nranks, hist);
     write_counters(&w, ranks, nranks);
-    jw_null(&w, "openmp");
+    write_openmp(&w, ranks, nranks);
     jw_null(&w, "topdown");
     jw_null(&w, "memory");
     jw_null(&w, "roofline");
@@ -864,6 +982,18 @@ static void collect_parallel(rank_rec_t *r, double elapsed_s, mpi_snap_t *snap)
     io_trace_set_enabled(0);
     mpi_trace_snapshot_get(snap);
     mpi_trace_set_mode(MPI_TRACE_OFF);
+
+    ompt_snapshot_end();
+    ompt_collect(&g_omp);
+    r->omp_available  = g_omp.available;
+    r->omp_threads    = g_omp.threads;
+    r->omp_parallel_s = g_omp.outer_parallel_ns * 1e-9;
+    r->omp_work_s     = g_omp.work_ns * 1e-9;
+    r->omp_wait_s     = g_omp.wait_ns * 1e-9;
+    r->omp_lock_s     = g_omp.lock_ns * 1e-9;
+    r->omp_taskwait_s = g_omp.taskwait_ns * 1e-9;
+    r->omp_work_min_s = g_omp.work_min_ns * 1e-9;
+    r->omp_work_max_s = g_omp.work_max_ns * 1e-9;
 
     cnt_stop();
     cnt_result_t cr;
@@ -997,6 +1127,99 @@ static void reduce_regions(int rank, int size)
     free(counts); free(displs); free(all); free(mynames);
 }
 
+static void omp_key(const void *codeptr, char *key)
+{
+    Dl_info di;
+    memset(&di, 0, sizeof(di));
+    if (codeptr && dladdr(codeptr, &di) && di.dli_fname) {
+        const char *b = strrchr(di.dli_fname, '/');
+        snprintf(key, OMP_KEY, "%.40s+0x%lx", b ? b + 1 : di.dli_fname,
+                 (unsigned long)((const char *)codeptr - (const char *)di.dli_fbase));
+    } else {
+        snprintf(key, OMP_KEY, "%p", codeptr);
+    }
+}
+
+/* Union of OpenMP regions across ranks (same protocol as user regions). */
+static void reduce_omp_regions(int rank, int size)
+{
+    int n = g_omp.available ? g_omp.nregions : 0;
+    static char mykeys[OMP_MAX_REGIONS][OMP_KEY];
+    for (int i = 0; i < n; i++) omp_key(g_omp.regions[i].codeptr, mykeys[i]);
+
+    int *counts = NULL, *displs = NULL;
+    char *all = NULL;
+    if (rank == 0) { counts = calloc((size_t)size, sizeof(int)); displs = calloc((size_t)size, sizeof(int)); }
+    PMPI_Gather(&n, 1, MPI_INT, counts, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    int total = 0;
+    if (rank == 0 && counts && displs)
+        for (int i = 0; i < size; i++) { counts[i] *= OMP_KEY; displs[i] = total; total += counts[i]; }
+    if (rank == 0) all = malloc((size_t)(total > 0 ? total : 1));
+    PMPI_Gatherv(mykeys, n * OMP_KEY, MPI_CHAR, all, counts, displs, MPI_CHAR, 0, MPI_COMM_WORLD);
+
+    static char uni[OMP_MAX_REGIONS][OMP_KEY];
+    int nu = 0;
+    if (rank == 0 && all)
+        for (int off = 0; off + OMP_KEY <= total && nu < OMP_MAX_REGIONS; off += OMP_KEY) {
+            int dup = 0;
+            for (int u = 0; u < nu && !dup; u++) dup = strncmp(uni[u], all + off, OMP_KEY) == 0;
+            if (!dup) memcpy(uni[nu++], all + off, OMP_KEY);
+        }
+    PMPI_Bcast(&nu, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if (nu > 0) PMPI_Bcast(uni, nu * OMP_KEY, MPI_CHAR, 0, MPI_COMM_WORLD);
+
+    enum { K = 6 };   /* present, calls, wall, task, wait, tasks */
+    static uint64_t sin[OMP_MAX_REGIONS][K], sout[OMP_MAX_REGIONS][K];
+    static uint64_t min_[OMP_MAX_REGIONS], mout[OMP_MAX_REGIONS];
+    memset(sin, 0, sizeof(sin));
+    for (int u = 0; u < nu; u++) min_[u] = 0;
+    for (int u = 0; u < nu; u++)
+        for (int i = 0; i < n; i++)
+            if (strncmp(uni[u], mykeys[i], OMP_KEY) == 0) {
+                const omp_region_t *r = &g_omp.regions[i];
+                sin[u][0] = 1; sin[u][1] = r->calls; sin[u][2] = r->wall_ns;
+                sin[u][3] = r->task_ns; sin[u][4] = r->wait_ns; sin[u][5] = r->tasks;
+                min_[u] = r->max_team;
+            }
+    if (nu > 0) {
+        PMPI_Reduce(sin, sout, nu * K, MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+        PMPI_Reduce(min_, mout, nu, MPI_UINT64_T, MPI_MAX, 0, MPI_COMM_WORLD);
+    }
+    if (rank == 0) {
+        g_nored = nu;
+        /* names: resolve rank 0's own construct addresses (one batch) */
+        static miniprof_sym_t syms[OMP_MAX_REGIONS];
+        int map[OMP_MAX_REGIONS], ns = 0;
+        for (int u = 0; u < nu; u++) {
+            map[u] = -1;
+            for (int i = 0; i < n; i++)
+                if (strncmp(uni[u], mykeys[i], OMP_KEY) == 0) {
+                    memset(&syms[ns], 0, sizeof(syms[ns]));
+                    /* return address → the call site is the byte before */
+                    syms[ns].pc = (char *)g_omp.regions[i].codeptr - 1;
+                    map[u] = ns++;
+                    break;
+                }
+        }
+        if (ns > 0) symbolizer_resolve(syms, ns, 1);
+        for (int u = 0; u < nu; u++) {
+            omp_red_t *o = &g_ored[u];
+            memset(o, 0, sizeof(*o));
+            memcpy(o->key, uni[u], OMP_KEY);
+            o->key[OMP_KEY - 1] = '\0';
+            if (map[u] >= 0) {
+                snprintf(o->name, sizeof(o->name), "%s", syms[map[u]].name);
+                snprintf(o->file, sizeof(o->file), "%s", syms[map[u]].file);
+                o->line = syms[map[u]].line;
+            }
+            o->ranks = sout[u][0]; o->calls = sout[u][1]; o->wall_ns = sout[u][2];
+            o->task_ns = sout[u][3]; o->wait_ns = sout[u][4]; o->tasks = sout[u][5];
+            o->max_team = mout[u];
+        }
+    }
+    free(counts); free(displs); free(all);
+}
+
 void snapshot_finalize(double elapsed_s)
 {
     double t0 = now_s();
@@ -1044,6 +1267,7 @@ void snapshot_finalize(double elapsed_s)
                 MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
 
     reduce_regions(rank, size);
+    reduce_omp_regions(rank, size);
 
     mine.finalize_s = now_s() - t0;
 

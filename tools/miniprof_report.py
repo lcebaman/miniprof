@@ -184,6 +184,35 @@ def report(doc: dict, args) -> str:
                 p(f"   {r['name'][:20]:<20} {r['calls']:>6}  {human_time(r['time_s']['avg']):>10}  {gf}  {ipc}")
             p("   (time/rank is summed over a rank's threads for regions entered on several threads)")
 
+    # OpenMP
+    omp = (doc.get("metrics") or {}).get("openmp")
+    if omp:
+        p("")
+        if not omp.get("available"):
+            p(f" OpenMP                 not measured: {omp.get('reason')}")
+        else:
+            tt = omp["thread_time_s"]
+            nr = run.get("nranks") or 1
+            p(f" OpenMP                 {omp['runtime']}, {omp['threads'] / nr:g} threads/rank"
+              + (f", {omp['ranks_without_ompt']} rank(s) without OMPT" if omp.get("ranks_without_ompt") else ""))
+            p(f"   Serial time         {omp['serial_pct_of_elapsed']:5.1f}%   "
+              f"(outside parallel regions, avg {human_time(omp['serial_s']['avg'])}/rank)")
+            p(f"   Barrier imbalance   {omp['imbalance_pct']:5.1f}%   of thread time in parallel "
+              f"regions ({human_time(tt['barrier_wait'] / nr)}/rank)")
+            if tt["lock_wait"] > 0:
+                p(f"   Lock wait           {omp['lock_wait_pct']:5.1f}%   (critical/locks, "
+                  f"{human_time(tt['lock_wait'] / nr)}/rank)")
+            if tt["task_wait"] > 0:
+                p(f"   Taskwait            {human_time(tt['task_wait'] / nr)}/rank")
+            regs = omp.get("regions") or []
+            if regs:
+                p("")
+                p(" Parallel regions       calls/rank  wall/rank   team   imb%   location")
+                for r in sorted(regs, key=lambda r: -r["wall_s_per_rank"])[:10]:
+                    cpr = r["calls"] / r["ranks"] if r["ranks"] else 0
+                    p(f"   {r['name'][:20]:<20} {cpr:>9g}  {human_time(r['wall_s_per_rank']):>10}"
+                      f"  {r['avg_team']:5.1f}  {r['imbalance_pct']:5.1f}   {r.get('location', '')}")
+
     # observations
     obs = []
     if split["mpi"] > args.mpi_pct:
@@ -199,6 +228,18 @@ def report(doc: dict, args) -> str:
     if cpuu["avg"] < args.cpu_util_pct:
         obs.append(f"CPU utilisation is {cpuu['avg']:.1f}% (< {args.cpu_util_pct:g}%): "
                    "ranks may be bound to more cores than they use, or be idle/blocked.")
+    if omp and omp.get("available"):
+        if omp["serial_pct_of_elapsed"] > args.serial_pct:
+            obs.append(f"{omp['serial_pct_of_elapsed']:.1f}% of the run is outside OpenMP parallel "
+                       f"regions (> {args.serial_pct:g}%): only one thread per rank works there.")
+        if omp["imbalance_pct"] > args.omp_imbalance_pct:
+            worst = max(omp.get("regions") or [{}], key=lambda r: r.get("barrier_wait_s", 0))
+            obs.append(f"OpenMP threads spend {omp['imbalance_pct']:.1f}% of their time waiting at "
+                       f"barriers (> {args.omp_imbalance_pct:g}%)"
+                       + (f"; most in {worst['name']}" if worst.get("name") else "")
+                       + ": consider dynamic/guided scheduling or a finer work split.")
+        if omp["lock_wait_pct"] > args.omp_imbalance_pct:
+            obs.append(f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
     rem = cd.get("remote_dram_fill_pct")
     if rem is not None and rem > args.remote_pct:
         obs.append(f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
@@ -227,6 +268,8 @@ def main() -> int:
     ap.add_argument("--cpu-util-pct", type=float, default=80.0)
     ap.add_argument("--remote-pct", type=float, default=20.0)
     ap.add_argument("--packed-pct", type=float, default=50.0)
+    ap.add_argument("--serial-pct", type=float, default=20.0)
+    ap.add_argument("--omp-imbalance-pct", type=float, default=10.0)
     args = ap.parse_args()
     with open(args.file) as f:
         doc = json.load(f)
