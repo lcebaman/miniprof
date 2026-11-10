@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# pmu_probe_node.sh — what the P5 node-level (socket-wide) counters need:
+# the AMD data fabric (amd_df), memory controller (amd_umc_*) and L3
+# (amd_l3) PMUs, RAPL energy, and whether this user may read them.
+#
+# These counters are not per thread: perf can only open them system-wide
+# (-a, or -C <cpu> on the PMU's cpumask), which perf_event_paranoid > 0
+# forbids unless the process has CAP_PERFMON (or CAP_SYS_ADMIN). This
+# script records what is there and tries each kind of access as YOU, with
+# a memory-streaming workload so bandwidth counts are non-zero.
+#
+# Run on a COMPUTE node, ideally exclusive:
+#     srun -N1 -n1 --exclusive tools/pmu_probe_node.sh   # or ./tools/pmu_probe_node.sh
+# Writes pmu_probe_node_<host>.txt. No root needed; nothing is changed;
+# sudo is only queried with -n (never prompts).
+
+OUT="pmu_probe_node_$(hostname -s).txt"
+CC=${CC:-gcc}
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+sec() { printf '\n==================== %s ====================\n' "$1"; }
+run() { printf '\n$ %s\n' "$*"; timeout 60 "$@" 2>&1; }
+
+# ~2 s of DRAM streaming on one core (triad over 3 x 256 MiB)
+cat > "$TMP/stream.c" <<'C'
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
+int main(void){
+  long n = 32L*1024*1024;                       /* 256 MiB per array */
+  double *a=malloc(n*8),*b=malloc(n*8),*c=malloc(n*8);
+  for(long i=0;i<n;i++){a[i]=0;b[i]=1;c[i]=2;}
+  double t0=now(); int reps=0;
+  while(now()-t0<2.0){ for(long i=0;i<n;i++) a[i]=b[i]+3.0*c[i]; reps++; }
+  double dt=now()-t0;
+  printf("stream: %d reps, %.2f s, ~%.2f GB/s moved (24 B/elem incl. write-allocate: 32)\n",
+         reps, dt, reps*(double)n*24/dt*1e-9);
+  return a[n/2] < 0;
+}
+C
+$CC -O2 -o "$TMP/stream" "$TMP/stream.c" 2>&1 || echo "could not build the stream kernel with $CC"
+S="$TMP/stream"
+
+{
+sec "system"
+run date -u
+run hostname
+grep -h PRETTY_NAME /etc/os-release 2>/dev/null
+run uname -r
+lscpu | grep -E 'Model name|Socket|Core\(s\) per|Thread\(s\) per|NUMA node|L3'
+command -v numactl >/dev/null && run numactl -H
+echo; echo "NPS (NUMA nodes per socket): $(( $(ls -d /sys/devices/system/node/node* | wc -l) / $(lscpu | awk -F: '/Socket\(s\)/{gsub(/ /,"",$2);print $2}') ))"
+
+sec "access"
+for f in /proc/sys/kernel/perf_event_paranoid /proc/sys/kernel/nmi_watchdog; do
+  printf '%-45s %s\n' "$f" "$(cat "$f" 2>&1)"
+done
+run id
+command -v getpcaps >/dev/null && run getpcaps $$
+P=$(command -v perf)
+echo "perf: $P"
+command -v getcap >/dev/null && run getcap "$P"
+run perf --version
+printf '\n$ sudo -n true\n'; sudo -n true 2>&1 && echo "passwordless sudo: yes" || echo "passwordless sudo: no"
+
+sec "node-level PMUs (sysfs)"
+for d in /sys/bus/event_source/devices/*; do
+  n=$(basename "$d")
+  case $n in amd_df|amd_umc*|amd_l3|power|amd_iommu*|msr) ;; *) continue ;; esac
+  printf '\n--- %s  type=%s  cpumask=%s\n' "$n" "$(cat "$d/type" 2>/dev/null)" "$(cat "$d/cpumask" 2>/dev/null)"
+  [ -d "$d/format" ] && for f in "$d"/format/*; do printf '    format %-12s %s\n' "$(basename "$f")" "$(cat "$f")"; done
+  [ -d "$d/events" ] && ls "$d/events" | grep -v '\.\(scale\|unit\)$' | sed 's/^/    event  /' | head -40
+done
+echo; echo "amd_umc PMUs (one per memory channel): $(ls -d /sys/bus/event_source/devices/amd_umc_* 2>/dev/null | wc -l)"
+
+sec "perf event lists"
+run perf list --no-desc pmu 2>/dev/null | grep -iE 'amd_df|amd_umc|amd_l3|power/|umc_|df_' | head -60
+printf '\n$ perf list metricgroups / metrics (memory, data fabric, power)\n'
+perf list --details metric 2>/dev/null | grep -iE -A3 '^\s*(umc|dram|df_|.*bandwidth|.*memory|.*nps|.*socket|l3_|.*power|.*energy)' | head -120
+
+sec "RAPL energy"
+for z in /sys/class/powercap/*/; do
+  [ -f "$z/energy_uj" ] || continue
+  printf '%-50s name=%-10s energy_uj: %s\n' "$z" "$(cat "$z/name" 2>/dev/null)" "$(cat "$z/energy_uj" 2>&1)"
+done
+run perf stat -a -e power/energy-pkg/ -- sleep 1
+run perf stat -a -e power/energy-cores/ -- sleep 1
+
+sec "workload alone"
+run "$S"
+
+sec "system-wide (-a) access as this user"
+run perf stat -a -e cycles -- sleep 0.2
+run perf stat -C 0 -e cycles -- sleep 0.2
+
+sec "memory controller (amd_umc): DRAM read/write CAS"
+# kernel 6.x names; on older kernels only raw config works: event 0x0a = CAS commands,
+# rdwrmask 1 = read, 2 = write (amd_umc format)
+U=$(ls -d /sys/bus/event_source/devices/amd_umc_* 2>/dev/null | head -1 | xargs -r basename)
+if [ -n "$U" ]; then
+  run perf stat -a -e "$U/umc_cas_cmd.rd/,$U/umc_cas_cmd.wr/" -- "$S"
+  run perf stat -a -e "$U/event=0x0a,rdwrmask=0x1/,$U/event=0x0a,rdwrmask=0x2/" -- "$S"
+  run perf stat -a -M umc_mem_read_bandwidth,umc_mem_write_bandwidth -- "$S"
+else
+  echo "no amd_umc PMU on this kernel"
+fi
+
+sec "data fabric (amd_df)"
+if [ -d /sys/bus/event_source/devices/amd_df ]; then
+  # whatever DF events/metrics this perf knows (names vary by kernel and generation)
+  EV=$(perf list --no-desc 2>/dev/null | grep -oE '\b(local_processor_read_data_beats_cs[0-9]+|local_processor_write_data_beats_cs[0-9]+|dram_channel_data_controller_[0-9]+|remote_socket_[a-z_]+)\b' | sort -u | head -6 | paste -sd, -)
+  if [ -n "$EV" ]; then run perf stat -a -e "$EV" -- "$S"; else echo "perf knows no named DF events"; fi
+  for m in nps1_die_to_dram local_socket_inbound_data_bytes local_socket_outbound_data_bytes \
+           dram_read_data_for_local_processor dram_write_data_for_local_processor; do
+    perf list --no-desc metric 2>/dev/null | grep -qw "$m" && run perf stat -a -M "$m" -- "$S"
+  done
+else
+  echo "no amd_df PMU"
+fi
+
+sec "L3 (amd_l3)"
+if [ -d /sys/bus/event_source/devices/amd_l3 ]; then
+  run perf stat -a -e amd_l3/event=0x04,umask=0xff/ -- "$S"
+  run perf stat -a -M l3_read_miss_latency -- "$S"
+fi
+
+sec "done"
+echo "If the system-wide runs above say 'Permission denied' / 'Access to performance"
+echo "monitoring ... is limited': socket counters need perf_event_paranoid <= 0, or"
+echo "CAP_PERFMON on the profiler (e.g. setcap cap_perfmon+ep on a small helper)."
+} > "$OUT" 2>&1
+
+echo "wrote $OUT"
