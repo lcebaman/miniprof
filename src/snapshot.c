@@ -25,6 +25,7 @@
 #include "mpi_trace.h"
 #include "io_trace.h"
 #include "counters.h"
+#include "nodemon.h"
 #include "ompt.h"
 #include "symbolizer.h"
 #include "../include/miniprof.h"
@@ -53,6 +54,8 @@ static struct rusage  g_ru0;             /* baseline at init                */
 static char           g_cnt_reason[160] = "";
 static const cnt_group_t *g_cnt_group = NULL;
 static cnt_result_t       g_cnt;           /* this rank's result: set layout */
+static int                g_node_leader = 0;   /* runs miniprof-nodemon      */
+static nm_result_t        g_nm;
 
 /* Regions reduced across ranks (rank 0 only): union of names, then
  * per-name sums / min / max. */
@@ -123,6 +126,7 @@ typedef struct {
     int            ranks_on_node;
     int            first_world_rank;
     sysinfo_node_t info;
+    nm_result_t    mem;          /* P5: socket-level memory/energy counters */
 } node_rec_t;
 
 static double now_s(void)
@@ -208,6 +212,17 @@ void snapshot_init(int verbose)
             fprintf(stderr, "[miniprof] rank %d: hardware counters %s%s%s\n", rank,
                     ok ? "on" : "unavailable", ok ? "" : ": ", ok ? "" : st.reason);
         }
+    }
+
+    /* P5: one rank per node runs the socket-counter helper */
+    {
+        MPI_Comm nc;
+        int nr = 0;
+        PMPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, rank, MPI_INFO_NULL, &nc);
+        PMPI_Comm_rank(nc, &nr);
+        PMPI_Comm_free(&nc);
+        g_node_leader = (nr == 0);
+        if (g_node_leader) nodemon_start(g_node.uarch, g_verbose);
     }
 
     /* P2: OpenMP statistics from here on (no-op without an OMPT runtime) */
@@ -1025,6 +1040,146 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
     jw_end_arr(w);
     jw_end_obj(w);
 }
+
+/* ── P5: memory block (socket-level counters via miniprof-nodemon) ──── */
+
+static double gbs(double bytes, double s) { return s > 0 ? bytes / s * 1e-9 : 0.0; }
+
+/* Share of socket s's core reads that came from another socket. The
+ * helper counts, per socket, DRAM reads served by its memory (rd) and
+ * data arriving at its cores from other sockets (remote_in). Reads by
+ * socket s's cores from its own memory = its DRAM reads minus what the
+ * other sockets' cores fetched from it (exact for two sockets). */
+static double remote_share(const nm_result_t *m, int s)
+{
+    double others = 0;
+    for (int o = 0; o < m->nsockets; o++) if (o != s) others += (double)m->s[o].remote_in_bytes;
+    double local = (double)m->s[s].rd_bytes - others;
+    if (local < 0) local = 0;
+    double rin = (double)m->s[s].remote_in_bytes;
+    return local + rin > 0 ? 100.0 * rin / (local + rin) : 0.0;
+}
+
+static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
+{
+    int avail = 0;
+    for (int i = 0; i < nn; i++) avail += nodes[i].mem.available;
+    jw_begin_obj(w, "memory");
+    jw_bool(w, "available", avail > 0);
+    if (!avail) {
+        jw_str(w, "reason", nn > 0 && nodes[0].mem.reason[0] ? nodes[0].mem.reason : "not measured");
+        jw_end_obj(w);
+        return;
+    }
+    jw_int(w, "nodes_measured", avail);
+    jw_int(w, "nodes_without", nn - avail);
+    for (int i = 0; i < nn; i++)
+        if (!nodes[i].mem.available) { jw_str(w, "reason_missing", nodes[i].mem.reason); break; }
+    jw_str(w, "source", "miniprof-nodemon: memory-controller CAS (amd_umc), data-fabric "
+                        "remote inbound (amd_df), package energy (power)");
+    jw_int(w, "interval_ms", nodes[0].mem.interval_ms);
+    jw_begin_obj(w, "definitions");
+    jw_str(w, "scope", "whole node: every process on it counts, not only this job "
+                       "(see nodes[].exclusivity)");
+    jw_str(w, "read_gb_s", "DRAM read bandwidth over the run, includes write-allocate "
+                           "reads and prefetches");
+    jw_str(w, "peak_gb_s", "highest bandwidth over one sampling interval");
+    jw_str(w, "remote_read_share_pct", "share of the socket's core reads served by "
+                                       "another socket (NUMA placement)");
+    jw_str(w, "channels_active", "channels carrying at least 2% of the busiest "
+                                 "channel's traffic");
+    jw_end_obj(w);
+
+    double nrd[4096] = {0}, nwr[4096] = {0};
+    double e_tot = 0, pw_sum = 0, peak_max = 0, rsh_sum = 0;
+    int k = 0, nsh = 0;
+    jw_begin_arr(w, "nodes");
+    for (int i = 0; i < nn; i++) {
+        const nm_result_t *m = &nodes[i].mem;
+        if (!m->available) continue;
+        double el = m->elapsed_s, rd = 0, wr = 0, en = 0;
+        jw_begin_obj(w, NULL);
+        jw_int(w, "index", nodes[i].node_index);
+        jw_str_or_null(w, "hostname", nodes[i].info.hostname);
+        jw_dbl(w, "elapsed_s", el);
+        jw_int(w, "samples", m->samples);
+        jw_bool(w, "multiplexed", m->multiplexed);
+        jw_begin_arr(w, "sockets");
+        for (int s = 0; s < m->nsockets; s++) {
+            const nm_socket_t *so = &m->s[s];
+            rd += (double)so->rd_bytes; wr += (double)so->wr_bytes; en += so->energy_uj * 1e-6;
+            jw_begin_obj(w, NULL);
+            jw_int(w, "socket", s);
+            jw_dbl(w, "read_gb_s", gbs((double)so->rd_bytes, el));
+            jw_dbl(w, "write_gb_s", gbs((double)so->wr_bytes, el));
+            jw_dbl(w, "peak_read_gb_s", so->peak_rd_bps * 1e-9);
+            jw_dbl(w, "peak_write_gb_s", so->peak_wr_bps * 1e-9);
+            jw_dbl(w, "remote_read_gb_s", gbs((double)so->remote_in_bytes, el));
+            double sh = remote_share(m, s);
+            jw_dbl(w, "remote_read_share_pct", sh);
+            if (so->rd_bytes + so->remote_in_bytes > 0) { rsh_sum += sh; nsh++; }
+            jw_dbl(w, "energy_j", so->energy_uj * 1e-6);
+            jw_dbl(w, "power_w", el > 0 ? so->energy_uj * 1e-6 / el : 0.0);
+            double busiest = 0;
+            for (int c = 0; c < so->nchans; c++) {
+                double t = (double)(so->chan_rd[c] + so->chan_wr[c]);
+                if (t > busiest) busiest = t;
+            }
+            int active = 0;
+            for (int c = 0; c < so->nchans; c++)
+                if (busiest > 0 && (double)(so->chan_rd[c] + so->chan_wr[c]) >= 0.02 * busiest) active++;
+            jw_begin_obj(w, "channels");
+            jw_int(w, "count", so->nchans);
+            jw_int(w, "active", active);
+            jw_begin_arr(w, "read_gb_s");
+            for (int c = 0; c < so->nchans; c++) jw_dbl(w, NULL, gbs((double)so->chan_rd[c], el));
+            jw_end_arr(w);
+            jw_begin_arr(w, "write_gb_s");
+            for (int c = 0; c < so->nchans; c++) jw_dbl(w, NULL, gbs((double)so->chan_wr[c], el));
+            jw_end_arr(w);
+            jw_end_obj(w);
+            jw_end_obj(w);
+        }
+        jw_end_arr(w);
+        jw_dbl(w, "read_gb_s", gbs(rd, el));
+        jw_dbl(w, "write_gb_s", gbs(wr, el));
+        jw_dbl(w, "total_gb_s", gbs(rd + wr, el));
+        jw_dbl(w, "peak_gb_s", m->peak_node_bps * 1e-9);
+        jw_dbl(w, "energy_j", en);
+        jw_dbl(w, "power_w", el > 0 ? en / el : 0.0);
+        jw_end_obj(w);
+        if (k < 4096) { nrd[k] = gbs(rd, el); nwr[k] = gbs(wr, el); }
+        k++;
+        e_tot += en; pw_sum += el > 0 ? en / el : 0.0;
+        if (m->peak_node_bps * 1e-9 > peak_max) peak_max = m->peak_node_bps * 1e-9;
+    }
+    jw_end_arr(w);
+
+    int kk = k < 4096 ? k : 4096;
+    stat_t sr = { 0, 0, 0, 0 }, sw = { 0, 0, 0, 0 }, st = { 0, 0, 0, 0 };
+    for (int i = 0; i < kk; i++) {
+        double t = nrd[i] + nwr[i];
+        if (i == 0 || nrd[i] < sr.min) sr.min = nrd[i];
+        if (i == 0 || nrd[i] > sr.max) sr.max = nrd[i];
+        if (i == 0 || nwr[i] < sw.min) sw.min = nwr[i];
+        if (i == 0 || nwr[i] > sw.max) sw.max = nwr[i];
+        if (i == 0 || t < st.min) st.min = t;
+        if (i == 0 || t > st.max) st.max = t;
+        sr.sum += nrd[i]; sw.sum += nwr[i]; st.sum += t;
+    }
+    if (kk) { sr.avg = sr.sum / kk; sw.avg = sw.sum / kk; st.avg = st.sum / kk; }
+    jw_begin_obj(w, "per_node");
+    jw_stat(w, "read_gb_s", sr);
+    jw_stat(w, "write_gb_s", sw);
+    jw_stat(w, "total_gb_s", st);
+    jw_dbl(w, "peak_gb_s_max", peak_max);
+    jw_dbl(w, "power_w_avg", k ? pw_sum / k : 0.0);
+    jw_end_obj(w);
+    jw_dbl(w, "total_gb_s_all_nodes", st.sum);
+    jw_dbl(w, "energy_j_all_nodes", e_tot);
+    jw_dbl(w, "remote_read_share_pct_avg", nsh ? rsh_sum / nsh : 0.0);
+    jw_end_obj(w);
+}
 /* ── P2: OpenMP block ───────────────────────────────────────────────── */
 
 static double g_omp_par (const rank_rec_t *r, int a) { (void)a; return r->omp_parallel_s; }
@@ -1204,12 +1359,17 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_str(&w, NULL, "counters");
     jw_str(&w, NULL, "openmp");
     if (g_level == SNAPSHOT_TOPDOWN) jw_str(&w, NULL, "topdown");
+    {
+        int mem_any = 0;
+        for (int i = 0; i < nnodes; i++) mem_any |= nodes[i].mem.available;
+        if (mem_any) jw_str(&w, NULL, "memory");
+    }
     jw_end_arr(&w);
     write_parallel(&w, ranks, nranks, hist);
     write_counters(&w, ranks, nranks);
     write_openmp(&w, ranks, nranks);
     write_topdown(&w, ranks, nranks);
-    jw_null(&w, "memory");
+    write_memory(&w, nodes, nnodes);
     jw_null(&w, "roofline");
     jw_end_obj(&w);
 
@@ -1482,6 +1642,10 @@ static void reduce_omp_regions(int rank, int size)
 void snapshot_finalize(double elapsed_s)
 {
     double t0 = now_s();
+    if (g_node_leader) nodemon_stop(&g_nm);   /* first: end of the measured window */
+    if (g_verbose && g_node_leader)
+        fprintf(stderr, "[miniprof] nodemon: %s (%d sockets, %d samples)\n",
+                g_nm.available ? "ok" : g_nm.reason, g_nm.nsockets, g_nm.samples);
 
     rank_rec_t mine;
     memset(&mine, 0, sizeof(mine));
@@ -1552,6 +1716,7 @@ void snapshot_finalize(double elapsed_s)
         nmine.ranks_on_node    = node_size;
         nmine.first_world_rank = rank;
         nmine.info             = g_node;
+        nmine.mem              = g_nm;
         if (rank == 0) all_nodes = calloc((size_t)nnodes, sizeof(node_rec_t));
         node_rec_t nscratch;
         PMPI_Gather(&nmine, (int)sizeof(nmine), MPI_BYTE,

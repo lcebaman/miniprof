@@ -114,6 +114,7 @@ LIB_SRCS := src/profile_store.c    \
             src/io_trace.c         \
             src/counters.c         \
             src/ompt.c             \
+            src/nodemon_client.c   \
             src/json_writer.c      \
             src/sysinfo.c          \
             src/snapshot.c         \
@@ -121,6 +122,9 @@ LIB_SRCS := src/profile_store.c    \
             src/miniprof_fortran.c
 
 LIB_OBJS := $(LIB_SRCS:.c=.o)
+# Every object depends on every header: the snapshot records are shared
+# structs, and an object built against an older layout corrupts them.
+$(LIB_OBJS): $(wildcard src/*.h include/*.h)
 LIB      := libminiprof.so
 
 EXAMPLE       := $(EXAMPLE_DIR)/heat2d
@@ -145,11 +149,28 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run-ext-trace run-3d-snapshot test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
         run-omp-validate test-ompt-abi run-topdown-validate \
+        nodemon nodemon-setcap run-memory-validate \
         mpa check clean
 
-all: lib examples
+all: lib nodemon examples
 
 lib: $(LIB)
+
+# ── nodemon: the P5 node-level counter helper (no MPI) ──────────────────────
+# Socket-wide memory-controller, data-fabric and energy counters need
+# CAP_PERFMON; only this small helper gets it, once per build:
+#     sudo setcap cap_perfmon+ep ./miniprof-nodemon      (make nodemon-setcap)
+# libminiprof looks for it next to itself (or $$MINIPROF_NODEMON).
+NODEMON := miniprof-nodemon
+nodemon: $(NODEMON)
+$(NODEMON): src/nodemon.c src/nodemon.h
+	$(CC_HOST) -O2 -Wall -Wextra -o $@ src/nodemon.c
+# Owner-only execute first: with the capability, the helper reads
+# node-wide energy and memory traffic, which the kernel otherwise keeps
+# from unprivileged users (RAPL is root-only since the PLATYPUS side
+# channel). Widen to a group deliberately, e.g. chgrp benchmark + 0750.
+nodemon-setcap: $(NODEMON)
+	chmod 0700 $(NODEMON) && sudo setcap cap_perfmon+ep $(NODEMON) && getcap $(NODEMON)
 
 examples:
 	$(MAKE) -C $(EXAMPLE_DIR)
@@ -590,6 +611,36 @@ test-ompt-abi:
 		echo "test-ompt-abi: OK ($(OMPT_ABI_CC))"; \
 	else echo "SKIP: no omp-tools.h for $(OMPT_ABI_CC)"; fi
 
+# ── run-memory-validate: socket-level memory counters (P5) ──────────────────
+# 1. plumbing: miniprof-nodemon in its software-event test mode
+#    (MINIPROF_NODEMON_TEST=1): the pipe protocol and the memory block;
+# 2. if ./miniprof-nodemon holds CAP_PERFMON: examples/membw_validate on
+#    2 ranks against the known triad traffic (needs ~1.5 GB). Otherwise
+#    SKIP: grant it with `make nodemon-setcap`. The full on-node check
+#    (local and remote-socket runs) is tools/validate_memory.sh.
+MV_N    ?= 33554432
+MV_REPS ?= 40
+
+examples/membw_validate: examples/membw_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) membw_validate
+
+run-memory-validate: $(NODEMON) examples/membw_validate
+	@echo "--- memory block plumbing (helper test mode, MINIPROF_NODEMON_TEST=1)"
+	@MINIPROF_MODE=snapshot MINIPROF_NODEMON_TEST=1 MINIPROF_MEMORY_INTERVAL_MS=10 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem_swtest.json \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
+	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest.json --plumbing; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here (perf_event_paranoid)"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi; \
+	if ! getcap ./$(NODEMON) 2>/dev/null | grep -q cap_perfmon; then \
+		echo "SKIP: ./$(NODEMON) has no CAP_PERFMON (make nodemon-setcap) — real counters not tested"; exit 0; fi; \
+	echo "--- memory block, real counters (2 ranks, N=$(MV_N), $(MV_REPS) reps)"; \
+	MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem.json \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate $(MV_N) $(MV_REPS) || exit 1; \
+	python3 tools/validate_memory.py miniprof_snapshot_mem.json --ranks 2 --n $(MV_N) --reps $(MV_REPS); rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: memory counters unavailable here"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi
+
 # ── run-topdown-validate: snapshot top-down (P4) ────────────────────────────
 # 1. plumbing with software events (any machine): the three event sets
 #    rotate over 3 ranks, per-set totals and regions reach the JSON;
@@ -698,7 +749,7 @@ overhead-3d: $(EXAMPLE_3D)
 #
 # Override MPIRUN_FLAGS/NRANKS for constrained environments, e.g.:
 #   make check MPIRUN_FLAGS=--oversubscribe NRANKS=2
-check: lib examples mpa-check
+check: lib nodemon examples mpa-check
 	@echo "=========================================="
 	@echo " miniprof test suite"
 	@echo "=========================================="
@@ -721,6 +772,7 @@ check: lib examples mpa-check
 	$(MAKE) test-ompt-abi || FAIL=1; \
 	$(MAKE) run-omp-validate || FAIL=1; \
 	$(MAKE) run-topdown-validate || FAIL=1; \
+	$(MAKE) run-memory-validate || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -733,7 +785,7 @@ check: lib examples mpa-check
 
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -f $(LIB_OBJS) $(LIB) $(EXAMPLE) $(EXAMPLE_TRACE) \
+	rm -f $(LIB_OBJS) $(LIB) $(NODEMON) $(EXAMPLE) $(EXAMPLE_TRACE) \
 	      $(EXAMPLE_F) $(EXAMPLE_F_TRACE) \
 	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) \
 	      $(EXAMPLE_HWC_VALIDATE) $(EXAMPLE_HWC_VALIDATE_OMP) \
@@ -753,5 +805,5 @@ clean:
 	      examples/imbalance_validate examples/fortran_sentinels \
 	      examples/counters_validate miniprof_snapshot_cv_*.json \
 	      examples/omp_validate examples/omp_validate_clang examples/omp_validate_gcc \
-	      examples/topdown_validate \
+	      examples/topdown_validate examples/membw_validate \
 	      tests/test_units tests/test_units_out.json

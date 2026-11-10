@@ -270,6 +270,8 @@ Build all three sample and trace variants with `make examples`.
 | `make run-imbalance-validate` | Snapshot known-answer test: injected imbalance, trace cross-check, exact I/O counts |
 | `make run-counters-validate` | Snapshot hardware counters: exact region FLOPs, threads, compute/MPI split (SKIP without a PMU) |
 | `make run-omp-validate` | Snapshot OpenMP (OMPT): per-region imbalance, team size, serial time and lock wait vs injected values (SKIP under GCC libgomp; build with `OMPI_CC=clang` or AOCC) |
+| `make nodemon` / `make nodemon-setcap` | Build the socket-counter helper / grant it CAP_PERFMON (sudo) |
+| `make run-memory-validate` | Snapshot memory block: helper protocol (test mode, any machine), then known DRAM traffic if the helper has CAP_PERFMON (SKIP otherwise) |
 | `make run-topdown-validate` | Snapshot top-down: event-set rotation (software events, any machine), then per-region shapes on a real PMU (SKIP without one) |
 | `make test-ompt-abi` | miniprof's built-in OMPT definitions vs the compiler's `<omp-tools.h>` (compile-time) |
 | `make run-fortran-sentinels` | Fortran `MPI_IN_PLACE`/`MPI_STATUS_IGNORE` results correct in every mode |
@@ -678,7 +680,46 @@ What a snapshot contains so far:
     `tools/validate_topdown.sh` on a node also checks every raw encoding
     against perf's and compares with `perf stat -M PipelineL1/L2`
 
-`memory` and `roofline` are still `null`; they arrive in later phases.
+- **metrics.memory** (AMD Zen 4 / Zen 5, any `MINIPROF_SNAPSHOT` level):
+  socket-level counters, per node and per socket:
+  - DRAM read and write bandwidth from the memory controllers, average
+    and peak (best 100 ms interval), per channel and how many channels
+    carry traffic
+  - the share of each socket's reads that came from the other socket
+    (data fabric): NUMA placement
+  - package energy and average power
+  - these counters see the **whole node**, not just this job; the node's
+    `exclusivity` hint says whether something else was running
+  - they need CAP_PERFMON (or `perf_event_paranoid <= 0`). Only a small
+    helper gets it, never the application: build it and grant it once
+    per build:
+    ```bash
+    make nodemon
+    sudo setcap cap_perfmon+ep ./miniprof-nodemon     # or: make nodemon-setcap
+    ```
+    One rank per node starts it at `MPI_Init`; it opens a fixed set of
+    events, drops every capability, samples, and returns totals over a
+    pipe at `MPI_Finalize`. It is looked for next to `libminiprof.so`
+    (`MINIPROF_NODEMON` overrides). Without it the block says why and the
+    rest of the snapshot is unaffected. `make nodemon-setcap` also makes
+    the helper owner-only (`chmod 0700`): with the capability it reads
+    node-wide energy and memory traffic, which the kernel otherwise
+    keeps from unprivileged users (RAPL has been root-only since the
+    PLATYPUS side channel). It only ever reports run totals and peaks
+    over >= 10 ms intervals; widen access to a group deliberately (e.g.
+    `chgrp benchmark` + `chmod 0750`). File capabilities work on GPFS
+    (checked on the Lenovo benchmark nodes); a `nosuid` mount ignores them
+  - bytes per memory-controller count were measured against a known
+    stream: 64 on Zen 5, **32 on Zen 4**, where each line shows up as
+    two counts on a pair of PMUs. perf's own `umc_mem_read_bandwidth`
+    metric uses 64 everywhere and so reads twice the real bandwidth on
+    Zen 4 (EPYC 9754, RHEL 9 kernel); the data-fabric counters confirm it
+  - validation: `make run-memory-validate` (protocol everywhere; real
+    counters when the helper has its capability) and
+    `tools/validate_memory.sh` on a node: known triad traffic within a
+    few percent, and a remote-memory run reading ~100% remote
+
+`roofline` is still `null`; it arrives in P6.
 `MINIPROF_SNAPSHOT=full` currently collects the `basic` group.
 
 Counter validation on a real node: `tools/pmu_probe.sh` records what the
@@ -710,6 +751,9 @@ launcher's environment-passing convention).
 | `MINIPROF_OMPT_DEBUG` | snapshot | unset | Set to trace every OMPT callback on stderr (debugging only; very verbose) |
 | `MINIPROF_COUNTERS_SPLIT` | snapshot | `1` | `0` stops reading counters at MPI calls: no inside/outside-MPI split, but no per-call cost either |
 | `MINIPROF_ADDR2LINE` | all | `addr2line` | addr2line used for file:line. When GNU addr2line returns no line (binutils 2.35 on RHEL/Rocky 9 cannot read every DWARF 5 line table that AOCC/clang emit), miniprof retries with the first of `llvm-addr2line`, `llvm-symbolizer` (shipped with AOCC) or `eu-addr2line` (elfutils) on `PATH`; setting this variable disables that retry |
+| `MINIPROF_MEMORY` | snapshot | `1` | `0` skips the socket-level memory/energy helper |
+| `MINIPROF_MEMORY_INTERVAL_MS` | snapshot | `100` | Sampling interval for peak memory bandwidth (10–10000) |
+| `MINIPROF_NODEMON` | snapshot | next to `libminiprof.so` | Path of `miniprof-nodemon` |
 | `MINIPROF_SNAPSHOT_OUTPUT` | snapshot | `miniprof_snapshot.json` | Snapshot JSON path |
 | `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
 | `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |
