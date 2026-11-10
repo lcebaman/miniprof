@@ -709,11 +709,16 @@ What a snapshot contains so far:
     over >= 10 ms intervals; widen access to a group deliberately (e.g.
     `chgrp benchmark` + `chmod 0750`). File capabilities work on GPFS
     (checked on the Lenovo benchmark nodes); a `nosuid` mount ignores them
-  - bytes per memory-controller count were measured against a known
-    stream: 64 on Zen 5, **32 on Zen 4**, where each line shows up as
-    two counts on a pair of PMUs. perf's own `umc_mem_read_bandwidth`
-    metric uses 64 everywhere and so reads twice the real bandwidth on
-    Zen 4 (EPYC 9754, RHEL 9 kernel); the data-fabric counters confirm it
+  - DRAM traffic comes from the memory controllers on Zen 5 (one PMU per
+    channel) and from the data fabric's DRAM-channel counters on Zen 4.
+    On Zen 4 (EPYC 9754, RHEL 9 kernel) the memory-controller PMUs are
+    DDR5 sub-channels and only 12 per socket are exposed: they see 6 of
+    the 12 channels (NUMA nodes 0,1,4,5 of 8 in NPS4) and count each line
+    twice. perf's `umc_mem_read_bandwidth`/`umc_mem_write_bandwidth`
+    metrics on those nodes therefore read 2x on half the memory and
+    nothing on the rest. On Zen 4 the 32 data-fabric events share 16
+    counters per socket, so the kernel time-multiplexes them (marked
+    `multiplexed`; totals are scaled)
   - validation: `make run-memory-validate` (protocol everywhere; real
     counters when the helper has its capability) and
     `tools/validate_memory.sh` on a node: known triad traffic within a

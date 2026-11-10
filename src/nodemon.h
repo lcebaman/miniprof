@@ -15,11 +15,14 @@
  * block says why and the rest of the snapshot is unaffected.
  *
  * What is counted, per socket (AMD Zen 4 / Zen 5):
- *   - DRAM read/write CAS commands per memory channel (amd_umc_N). Bytes
- *     per CAS, measured against a known stream: 64 on Zen 5 (EPYC 9555),
- *     32 on Zen 4 (EPYC 9754, where every line shows as two CAS on a
- *     pair of PMUs — the DDR5 sub-channels; perf's own
- *     umc_mem_read_bandwidth metric, which uses 64, reads 2x there)
+ *   - DRAM reads/writes per memory channel. Zen 5: memory-controller
+ *     CAS commands (amd_umc_N, one PMU per channel, 64 B each). Zen 4:
+ *     data-fabric DRAM-channel beats (64 B), because there the amd_umc
+ *     PMUs are DDR5 sub-channels (a line = two CAS of 32 B on a PMU pair)
+ *     and the kernel exposes only 12 per socket: 6 of the 12 channels,
+ *     NUMA nodes 0,1,4,5 of 8 in NPS4 (tools/diag_umc_coverage.sh). perf's
+ *     umc_mem_*_bandwidth metrics there read 2x on half the channels and
+ *     nothing on the rest.
  *   - data arriving at the socket's cores from the OTHER socket (amd_df,
  *     32 B per beat): with the socket's DRAM reads this gives the share
  *     of reads that crossed sockets (NUMA placement)

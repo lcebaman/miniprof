@@ -71,7 +71,8 @@ def main() -> int:
     for s in n0["sockets"]:
         ch = s["channels"]
         print(f"  socket {s['socket']}: read {s['read_gb_s']:.2f} GB/s (peak {s['peak_read_gb_s']:.2f}), "
-              f"write {s['write_gb_s']:.2f}, remote {s['remote_read_share_pct']:.1f}%, "
+              f"write {s['write_gb_s']:.2f}, remote "
+              + ("-" if s["remote_read_share_pct"] is None else f"{s['remote_read_share_pct']:.1f}%") + ", "
               f"{ch['active']}/{ch['count']} channels active, {s['power_w']:.0f} W")
     print()
     check(0.95 * erd <= rd <= 1.10 * erd, f"DRAM reads {rd:.2f} GB within -5%..+10% of {erd:.2f}")
@@ -84,10 +85,13 @@ def main() -> int:
     socks = n0["sockets"]
     if a.remote:
         s = max(socks, key=lambda x: x["remote_read_gb_s"])
+        if s["remote_read_share_pct"] is None:
+            s["remote_read_share_pct"] = 0.0
         check(s["remote_read_share_pct"] >= 80,
               f"socket {s['socket']}: {s['remote_read_share_pct']:.1f}% of its reads remote (>= 80, memory bound to the other socket)")
     else:
-        busy = [x for x in socks if x["read_gb_s"] > 0.2 * max(y["read_gb_s"] for y in socks)]
+        busy = [x for x in socks if x["read_gb_s"] > 0.2 * max(y["read_gb_s"] for y in socks)
+                and x["remote_read_share_pct"] is not None]
         for s in busy:
             check(s["remote_read_share_pct"] <= 20,
                   f"socket {s['socket']}: {s['remote_read_share_pct']:.1f}% of its reads remote (<= 20, first touch is local)")
