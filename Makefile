@@ -629,7 +629,9 @@ run-memory-validate: $(NODEMON) examples/membw_validate
 	@MINIPROF_MODE=snapshot MINIPROF_NODEMON_TEST=1 MINIPROF_MEMORY_INTERVAL_MS=10 \
 	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem_swtest.json \
 	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
-	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest.json --plumbing || exit 1; \
+	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest.json --plumbing; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here (perf_event_paranoid)"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi; \
 	if ! getcap ./$(NODEMON) 2>/dev/null | grep -q cap_perfmon; then \
 		echo "SKIP: ./$(NODEMON) has no CAP_PERFMON (make nodemon-setcap) — real counters not tested"; exit 0; fi; \
 	echo "--- memory block, real counters (2 ranks, N=$(MV_N), $(MV_REPS) reps)"; \

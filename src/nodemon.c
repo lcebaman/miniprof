@@ -152,6 +152,9 @@ static void open_ev(int type, uint64_t config, int cpu, ev_kind_t kind, int sock
                          : (int)syscall(__NR_perf_event_open, &a, -1, cpu, -1, 0);
     if (fd < 0) {
         int e = errno;
+        if (g_self_only)   /* swtest: plain per-process software events */
+            die("cannot open %s: %s (software perf events blocked: perf_event_paranoid?)",
+                what, strerror(e));
         die("cannot open %s on cpu %d: %s%s", what, cpu, strerror(e),
             (e == EACCES || e == EPERM)
                 ? " — system-wide counters need CAP_PERFMON: sudo setcap cap_perfmon+ep "
