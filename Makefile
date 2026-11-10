@@ -37,6 +37,8 @@
 #   overhead-3d    — wall-clock overhead of snapshot vs off (informational)
 #   run-imbalance-validate — snapshot known-answer test: injected imbalance,
 #                      trace-mode cross-check, exact I/O byte counts
+#   run-counters-validate — snapshot hardware counters: exact region FLOPs,
+#                      threads, compute/MPI split (SKIP without a PMU)
 #   run-fortran-sentinels — Fortran MPI_IN_PLACE/STATUS_IGNORE results
 #                      correct in every mode, call counts not doubled
 #   check          — full test suite, one pass/fail exit code (what CI runs)
@@ -104,6 +106,7 @@ LIB_SRCS := src/profile_store.c    \
             src/mpi_trace.c        \
             src/trace_aggregator.c \
             src/io_trace.c         \
+            src/counters.c         \
             src/json_writer.c      \
             src/sysinfo.c          \
             src/snapshot.c         \
@@ -133,7 +136,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
         run-ext-trace run-3d-snapshot test-units overhead-3d \
-        run-imbalance-validate run-fortran-sentinels \
+        run-imbalance-validate run-fortran-sentinels run-counters-validate \
         mpa check clean
 
 all: lib examples
@@ -542,6 +545,38 @@ run-imbalance-validate: examples/imbalance_validate
 		--steps $$1 --base-ms $$2 --delta-ms $$3 \
 		--trace-report miniprof_trace_report_iv.txt
 
+# ── run-counters-validate: snapshot hardware counters (P3) ──────────────────
+# Runs examples/counters_validate in the base group (MINIPROF_SNAPSHOT=basic)
+# and the vector group (=roofline) and checks exact region FLOPs, thread
+# coverage and the compute/MPI split. Exit 77 from the validator = counters
+# unavailable (VM, paranoid) → reported as SKIP, not a failure. The cross-
+# check against `perf stat` lives in tools/validate_counters.sh.
+CV_ARGS ?= 2097152 20
+
+examples/counters_validate: examples/counters_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) counters_validate
+
+run-counters-validate: examples/counters_validate
+	@FAIL=0; \
+	echo "--- counter engine plumbing (software events, MINIPROF_COUNTERS_TEST=1)"; \
+	MINIPROF_MODE=snapshot MINIPROF_COUNTERS_TEST=1 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_cv_swtest.json \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./examples/counters_validate $(CV_ARGS) || FAIL=1; \
+	set -- $(CV_ARGS); python3 tools/validate_counters.py \
+		miniprof_snapshot_cv_swtest.json --n $$1 --reps $$2; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable"; \
+	elif [ $$rc -ne 0 ]; then FAIL=1; fi; \
+	for lvl in basic roofline; do \
+		echo "--- MINIPROF_SNAPSHOT=$$lvl"; \
+		MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=$$lvl \
+		MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_cv_$$lvl.json \
+		mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./examples/counters_validate $(CV_ARGS) || FAIL=1; \
+		set -- $(CV_ARGS); python3 tools/validate_counters.py \
+			miniprof_snapshot_cv_$$lvl.json --n $$1 --reps $$2; rc=$$?; \
+		if [ $$rc -eq 77 ]; then echo "SKIP: hardware counters unavailable on this system"; \
+		elif [ $$rc -ne 0 ]; then FAIL=1; fi; \
+	done; exit $$FAIL
+
 # ── run-fortran-sentinels: Fortran sentinel regression, every mode ──────────
 examples/fortran_sentinels: examples/fortran_sentinels.f90 $(LIB)
 	$(MAKE) -C $(EXAMPLE_DIR) fortran_sentinels
@@ -607,6 +642,7 @@ check: lib examples mpa-check
 	$(MAKE) run-3d-snapshot || FAIL=1; \
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
+	$(MAKE) run-counters-validate || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -637,4 +673,5 @@ clean:
 	      miniprof_snapshot_fs.json miniprof_report_fs.txt miniprof_fs.mpa \
 	      miniprof_trace_report_fs.txt \
 	      examples/imbalance_validate examples/fortran_sentinels \
+	      examples/counters_validate miniprof_snapshot_cv_*.json \
 	      tests/test_units tests/test_units_out.json

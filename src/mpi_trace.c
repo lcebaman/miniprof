@@ -37,6 +37,11 @@
  * Bytes are therefore "this rank's share of the data", documented per
  * call below. For receives it is the posted (maximum) size.
  *
+ * In snapshot mode each recorded call is also a counter boundary
+ * (cnt_mpi_enter/exit, counters.c): counts between calls are attributed to
+ * "compute", counts inside to "mpi". The reads sit outside the timed
+ * window, so they never inflate measured MPI time.
+ *
  * ── Nesting guard ────────────────────────────────────────────────────────
  * g_miniprof_tool_depth (thread-local) is raised for the duration of each
  * recorded call; any wrapper entered while it is raised passes straight
@@ -52,6 +57,7 @@
 
 #include "mpi_trace.h"
 #include "trace_store.h"
+#include "counters.h"
 #include "../include/miniprof.h"
 #include <mpi.h>
 #include <stdio.h>
@@ -242,9 +248,11 @@ static inline long fsum_counts(const MPI_Fint *counts, int n)
     do {                                                           \
         if (!g_mode || g_miniprof_tool_depth) return CALL;         \
         g_miniprof_tool_depth++;                                   \
+        if (g_mode == MPI_TRACE_SNAPSHOT) cnt_mpi_enter();         \
         uint64_t t0_ = now_ns();                                   \
         int rc_ = CALL;                                            \
         uint64_t dt_ = now_ns() - t0_;                             \
+        if (g_mode == MPI_TRACE_SNAPSHOT) cnt_mpi_exit();          \
         g_miniprof_tool_depth--;                                   \
         record(MPIF_##ID, dt_, (BYTES));                           \
         return rc_;                                                \
@@ -254,9 +262,11 @@ static inline long fsum_counts(const MPI_Fint *counts, int n)
     do {                                                           \
         if (!g_mode || g_miniprof_tool_depth) { CALL; return; }    \
         g_miniprof_tool_depth++;                                   \
+        if (g_mode == MPI_TRACE_SNAPSHOT) cnt_mpi_enter();         \
         uint64_t t0_ = now_ns();                                   \
         CALL;                                                      \
         uint64_t dt_ = now_ns() - t0_;                             \
+        if (g_mode == MPI_TRACE_SNAPSHOT) cnt_mpi_exit();          \
         g_miniprof_tool_depth--;                                   \
         record(MPIF_##ID, dt_, (BYTES));                           \
     } while (0)
