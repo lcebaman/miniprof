@@ -119,7 +119,9 @@ static const cnt_group_t k_groups[] = {
      * counts one set for the whole run (see cnt_init). L2 shares from
      * td_febe/td_rbs are applied to the L1 fractions from td_l1.
  * Encodings checked against perf on EPYC 9754 (tools/validate_topdown.sh);
- * ex_ret_ucode_ops is event 0x1c2. */
+ * ex_ret_ucode_ops is event 0x1c2. Zen 5 has no resyncs_or_nc_redirects
+ * (perf rejects the name on EPYC 9555); its PipelineL2 splits bad
+ * speculation with bp_redirects.resync instead. */
     { "zen4", "td_l1", 5, 6, {
         { CK_CYCLES,         "ls_not_halted_cyc",                            RAW(0x076, 0x00) },
         { CK_RET_OPS,        "ex_ret_ops",                                   RAW(0x0c1, 0x00) },
@@ -162,7 +164,7 @@ static const cnt_group_t k_groups[] = {
         { CK_RET_OPS,  "ex_ret_ops",              RAW(0x0c1, 0x00) },
         { CK_UCODE_OPS,"ex_ret_ucode_ops",        RAW(0x1c2, 0x00) },
         { CK_BR_MISP,  "ex_ret_brn_misp",         RAW(0x0c3, 0x00) },
-        { CK_RESYNCS,  "resyncs_or_nc_redirects", RAW(0x096, 0x00) },
+        { CK_RESYNCS,  "bp_redirects.resync",     RAW(0x09f, 0x01) },
     } },
     /* Test-only top-down sets: software events, to exercise the set
      * rotation, per-set results and regions without a PMU. The metrics

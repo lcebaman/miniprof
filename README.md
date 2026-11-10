@@ -657,7 +657,11 @@ What a snapshot contains so far:
   - reading it on Zen: bad speculation counts only the squashed ops; the
     refetch bubble after a mispredict shows as frontend bound (latency),
     so very branchy code looks frontend bound. Level 1 can sum to less
-    than 100% in strongly latency-bound code (a pointer chase: ~85%)
+    than 100% in strongly latency-bound code (a pointer chase: ~85%).
+    Zen 4 and Zen 5 can classify the same stall differently: a dependent
+    FP chain is backend (cpu) bound on Zen 4 but ~90% frontend latency on
+    Zen 5, and `perf stat -M` agrees on both. Compare top-down profiles
+    within one generation
   - reported outside MPI (`compute`, the application's own code), inside
     MPI (`mpi`, mostly the library polling), and per user region
   - the 12 events do not fit in one thread's 5 free counters, so they are

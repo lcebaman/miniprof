@@ -9,7 +9,10 @@ Checks (real counters):
     model leaves some empty slots unattributed in extreme latency-bound
     code: a pointer chase reads ~85% on EPYC 9754)
   - alu      retiring is the largest level-1 category, >= 40%
-  - fpchain  backend >= 40%, and more backend_cpu than backend_memory
+  - fpchain  latency-bound, not memory: backend_memory < 10% and
+             retiring < 30%. Zen 4 calls it backend (cpu) bound; Zen 5
+             calls the same loop ~90% frontend bound (latency) — perf
+             stat -M agrees on EPYC 9555 — so only Zen 4 checks backend
   - chase    backend >= 60%, of which >= 70% backend_memory
   - stream   backend >= 40%, more backend_memory than backend_cpu
   - branch   bad speculation >= 5%, of which >= 70% mispredicts. On Zen
@@ -102,10 +105,14 @@ def main() -> int:
               f"alu: retiring {x['retiring']:.1f}% is the largest category (got {top})")
     x, y = l1("fpchain"), l2("fpchain")
     if x:
-        check(x["backend_bound"] >= 40, f"fpchain: backend {x['backend_bound']:.1f}% >= 40")
-        if "backend_cpu" in y:
-            check(y["backend_cpu"] > y["backend_memory"],
-                  f"fpchain: backend_cpu {y['backend_cpu']:.1f}% > backend_memory {y['backend_memory']:.1f}%")
+        check(x["retiring"] < 30, f"fpchain: retiring {x['retiring']:.1f}% < 30 (latency-bound)")
+        if "backend_memory" in y:
+            check(y["backend_memory"] < 10, f"fpchain: backend_memory {y['backend_memory']:.1f}% < 10")
+        if td.get("uarch") == "zen4":
+            check(x["backend_bound"] >= 40, f"fpchain: backend {x['backend_bound']:.1f}% >= 40 (Zen 4)")
+            if "backend_cpu" in y:
+                check(y["backend_cpu"] > y["backend_memory"],
+                      f"fpchain: backend_cpu {y['backend_cpu']:.1f}% > backend_memory {y['backend_memory']:.1f}%")
     x, y = l1("chase"), l2("chase")
     if x:
         check(x["backend_bound"] >= 60, f"chase: backend {x['backend_bound']:.1f}% >= 60")
