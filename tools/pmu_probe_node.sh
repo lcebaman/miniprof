@@ -147,21 +147,48 @@ if [ $SUDO = 1 ]; then
     run sudo -n perf stat -a -e "$UALL" -- "$S"
     run sudo -n perf stat -a -M umc_mem_read_bandwidth,umc_mem_write_bandwidth,umc_data_bus_utilization -- "$S"
 
-    sec "sudo: data fabric DRAM read/write beats"
-    [ -n "$DF" ]  && run sudo -n perf stat -a -e "$DF" -- "$S"
-    [ -n "$DFW" ] && run sudo -n perf stat -a -e "$DFW" -- "$S"
+    sec "sudo: data fabric (whichever events and metrics this generation has)"
+    # Zen 5: local_or_remote_socket_{read,write}_data_beats_dram_N, *_socket_inbound_data_beats_cfi_N
+    # Zen 4: {local,remote}_processor_{read,write}_data_beats_csN, *_socket_inf{0,1}_inbound_data_beats_ccmN
+    for pat in 'local_or_remote_socket_read_data_beats_dram_[0-9]+' 'local_or_remote_socket_write_data_beats_dram_[0-9]+' \
+               'local_processor_read_data_beats_cs[0-9]+' 'local_processor_write_data_beats_cs[0-9]+' \
+               'remote_processor_read_data_beats_cs[0-9]+'; do
+      EV=$(perf list --no-desc 2>/dev/null | grep -oE "amd_df/$pat/" | sort -u | paste -sd, -)
+      [ -n "$EV" ] && run sudo -n perf stat -a -e "$EV" -- "$S"
+    done
+    MET=""
     for m in dram_read_bandwidth_for_local_or_remote_socket dram_write_bandwidth_for_local_or_remote_socket \
              core_inbound_data_bandwidth_for_local_socket core_inbound_data_bandwidth_for_remote_socket \
-             cross_socket_inbound_data_bandwidth_for_local_socket; do
-      perf list --no-desc metric 2>/dev/null | grep -qw "$m" && run sudo -n perf stat -a -M "$m" -- "$S"
+             cross_socket_inbound_data_bandwidth_for_local_socket \
+             dram_read_data_for_local_processor dram_read_data_for_remote_processor \
+             dram_write_data_for_local_processor dram_write_data_for_remote_processor \
+             local_socket_inbound_data_to_cpu remote_socket_inbound_data_to_cpu \
+             local_socket_outbound_data_from_all_links; do
+      perf list --no-desc metric 2>/dev/null | grep -qw "$m" && MET="$MET $m"
     done
+    echo; echo "data-fabric metrics on this node:$MET"
+    for m in $MET; do run sudo -n perf stat -a -M "$m" -- "$S"; done
 
     sec "sudo: remote-NUMA stream (data on the other socket)"
     if command -v numactl >/dev/null; then
       LAST=$(( $(ls -d /sys/devices/system/node/node* | wc -l) - 1 ))
-      run sudo -n perf stat -a -M dram_read_bandwidth_for_local_or_remote_socket,core_inbound_data_bandwidth_for_remote_socket \
-          -- numactl --cpunodebind=0 --membind=$LAST "$S"
+      for m in $MET; do
+        case $m in *remote*|*inbound*|*dram_read*) ;; *) continue ;; esac
+        run sudo -n perf stat -a -M "$m" -- numactl --cpunodebind=0 --membind=$LAST "$S"
+      done
     fi
+
+    sec "sudo: data-fabric encodings"
+    for pat in 'local_or_remote_socket_read_data_beats_dram_[0-9]+' 'local_or_remote_socket_write_data_beats_dram_[0-9]+' \
+               'local_processor_read_data_beats_cs[0-9]+' 'local_processor_write_data_beats_cs[0-9]+' \
+               'remote_processor_read_data_beats_cs[0-9]+' 'remote_processor_write_data_beats_cs[0-9]+' \
+               'local_socket_inf0_inbound_data_beats_ccm[0-9]+' 'remote_socket_inf0_inbound_data_beats_ccm[0-9]+' \
+               'local_socket_inbound_data_beats_cfi_[0-9]+' 'remote_socket_inbound_data_beats_cfi_[0-9]+' \
+               'local_socket_outbound_data_beats_link[0-9]+'; do
+      for ev in $(perf list --no-desc 2>/dev/null | grep -oE "amd_df/$pat/" | sort -uV); do
+        printf '%-58s %s\n' "$ev" "$(sudo -n perf stat -vv -a -e "$ev" -- true 2>&1 | awk '$1=="config"{print $2; exit}')"
+      done
+    done
 
     sec "sudo: L3, energy"
     run sudo -n perf stat -a -e amd_l3/event=0x04,umask=0xff,enallcores=1,enallslices=1,threadmask=3/ -- "$S"
@@ -170,12 +197,12 @@ if [ $SUDO = 1 ]; then
 
     sec "sudo: perf's encodings (perf_event_attr type/config)"
     for ev in "$U0/umc_cas_cmd.rd/" "$U0/umc_cas_cmd.wr/" \
-              $(echo "$DF" | tr , '\n' | head -2) $(echo "$DFW" | tr , '\n' | head -2) power/energy-pkg/; do
+              power/energy-pkg/; do
       [ -n "$ev" ] || continue
       printf '\n%s\n' "$ev"
       sudo -n perf stat -vv -a -e "$ev" -- true 2>&1 | grep -E '^\s+(type|config|config1)\s' | head -3
     done
-    for m in umc_mem_read_bandwidth dram_read_bandwidth_for_local_or_remote_socket; do
+    for m in umc_mem_read_bandwidth $MET; do
       printf '\n$ perf list --details metric | %s\n' "$m"
       perf list --details metric 2>/dev/null | grep -A12 -E "^\s+$m\s*$" | head -14
     done
