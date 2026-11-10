@@ -3,8 +3,8 @@
 #
 # For every NUMA node n: one process streams with cores AND memory on n
 # (numactl -N n -m n), ~8 GB of loop reads, while miniprof-nodemon counts.
-# Prints what the memory-controller counters saw per socket against the
-# known traffic, then (sudo) compares the data-fabric DRAM-channel events
+# Prints what miniprof-nodemon counted per socket (Zen 5: memory
+# controllers; Zen 4: data fabric — see nodemon.c) against the known traffic, then (sudo) compares the data-fabric DRAM-channel events
 # for the last NUMA node: local / remote / both requester umasks.
 #
 # Usage (repo root, helper built and granted):  tools/diag_umc_coverage.sh
@@ -18,7 +18,7 @@ NN=$(ls -d /sys/devices/system/node/node* | wc -l)
 N=33554432; K=10
 EXP=$(awk -v n=$N -v k=$K 'BEGIN{printf "%.2f", 24*n*k/1e9}')
 echo "uarch $UA, $NN NUMA nodes; each run: loop reads $EXP GB from its own node"
-printf '\n%-6s %-34s %s\n' node "memory-controller reads (GB) per socket" "workload"
+printf '\n%-6s %-34s %s\n' node "DRAM reads counted (GB) per socket" "workload"
 for n in $(seq 0 $((NN - 1))); do
     { sleep 0.3
       MINIPROF_MODE=off numactl -N $n -m $n ./examples/membw_validate $N $K > /tmp/diag_w.$$ 2>&1

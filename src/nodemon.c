@@ -23,6 +23,12 @@
  *
  * Encodings were checked against perf's own (perf stat -vv) on EPYC 9754
  * (Zen 4) and 9555 (Zen 5) with tools/pmu_probe_node.sh --sudo.
+ *
+ * DRAM traffic: Zen 5 from the memory controllers (amd_umc_N, one per
+ * channel, 64 B per CAS); Zen 4 from the data fabric (see
+ * setup_zen4_dram: its amd_umc PMUs cover only half the channels). On
+ * Zen 4 that is 24 DRAM + 8 remote events on 16 DF counters per socket,
+ * so the kernel time-multiplexes them (reported; totals are scaled).
  */
 
 #define _GNU_SOURCE
@@ -193,11 +199,35 @@ static void setup_swtest(void)
     open_ev(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_MIGRATIONS, -1, EV_DF_REMOTE_IN, s, 0, 32.0, "mig");
 }
 
+/* Zen 4 DRAM traffic from the data fabric. On EPYC 9754 / RHEL 9 the
+ * amd_umc PMUs are DDR5 sub-channels and the kernel exposes 12 per
+ * socket: they cover 6 of the 12 channels (NUMA nodes 0,1,4,5 of 8 in
+ * NPS4; tools/diag_umc_coverage.sh). The DF counts every channel: DRAM
+ * channel cs N = event 0x1f + 0x40 N, umask 0xffe (reads requested by
+ * any socket = 0x7fe local + 0xbfe remote, checked to the count) or
+ * 0xfff (writes); 64 B per beat. */
+static void setup_zen4_dram(void)
+{
+    int dtype = pmu_type("amd_df"), dcpus[NM_MAX_SOCKETS];
+    int nd = dtype >= 0 ? pmu_cpus("amd_df", dcpus, NM_MAX_SOCKETS) : 0;
+    if (nd == 0) die("no amd_df PMU");
+    for (int k = 0; k < nd; k++) {
+        int s = sock_index(cpu_socket(dcpus[k]));
+        for (int cs = 0; cs < 12; cs++) {
+            unsigned ev = 0x1f + 0x40 * (unsigned)cs;
+            g_nchans[s] = cs + 1;
+            open_ev(dtype, df_config(ev, 0xffe), dcpus[k], EV_UMC_RD, s, cs, 64.0, "amd_df dram read");
+            open_ev(dtype, df_config(ev, 0xfff), dcpus[k], EV_UMC_WR, s, cs, 64.0, "amd_df dram write");
+        }
+    }
+}
+
 static void setup(const char *uarch)
 {
     if (strcmp(uarch, "swtest") == 0) { setup_swtest(); return; }
     int zen5 = strcmp(uarch, "zen5") == 0;
-    double umc_bytes = zen5 ? 64.0 : 32.0;
+    double umc_bytes = 64.0;
+    if (!zen5) { setup_zen4_dram(); goto df_remote; }
 
     /* memory controllers: one PMU per channel, cpumask = a CPU of its socket */
     static char names[64][32];
@@ -221,6 +251,7 @@ static void setup(const char *uarch)
         open_ev(type, 0x20a, cpu, EV_UMC_WR, s, c, umc_bytes, names[i]);   /* umc_cas_cmd.wr */
     }
 
+df_remote:;
     /* data fabric: data into this socket's cores from the other socket,
      * 32 B per beat. Zen 5: remote_socket_inbound_data_beats_cfi_0..15;
      * Zen 4: remote_socket_inf0_inbound_data_beats_ccm0..7 (the inf1 half
