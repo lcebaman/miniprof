@@ -35,6 +35,10 @@
 #   test-units     — MPI-free unit tests (uarch table, JSON writer)
 #   run-3d-snapshot — snapshot mode on diffusion3d + JSON structural check
 #   overhead-3d    — wall-clock overhead of snapshot vs off (informational)
+#   run-imbalance-validate — snapshot known-answer test: injected imbalance,
+#                      trace-mode cross-check, exact I/O byte counts
+#   run-fortran-sentinels — Fortran MPI_IN_PLACE/STATUS_IGNORE results
+#                      correct in every mode, call counts not doubled
 #   check          — full test suite, one pass/fail exit code (what CI runs)
 #   mpa            — full two-pass workflow (heat2d, clean→build→sample→trace)
 #   clean          — remove build artefacts
@@ -99,6 +103,7 @@ LIB_SRCS := src/profile_store.c    \
             src/instrument.c       \
             src/mpi_trace.c        \
             src/trace_aggregator.c \
+            src/io_trace.c         \
             src/json_writer.c      \
             src/sysinfo.c          \
             src/snapshot.c         \
@@ -128,6 +133,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
         run-ext-trace run-3d-snapshot test-units overhead-3d \
+        run-imbalance-validate run-fortran-sentinels \
         mpa check clean
 
 all: lib examples
@@ -505,6 +511,58 @@ run-3d-snapshot: $(EXAMPLE_3D)
 	@echo ""
 	python3 tools/snapshot_check.py miniprof_snapshot_3d.json \
 		--nranks $(NRANKS) --max-overhead $(SNAPSHOT_MAX_OVERHEAD)
+	@echo ""
+	python3 tools/miniprof_report.py miniprof_snapshot_3d.json
+
+# ── run-imbalance-validate: snapshot known-answer test (P1 exit criteria) ───
+# examples/imbalance_validate injects a known per-rank compute imbalance and
+# a fixed I/O volume; validate_imbalance.py checks the snapshot against the
+# analytic answer and against trace mode's Table 2 for the same workload.
+# Needs one core per rank — busy-polling ranks on an oversubscribed core
+# steal time from the spinning ones and genuinely change the answer — so
+# the rank count is capped at the core count.
+IV_NRANKS ?= 2
+IV_ARGS   ?= 40 10 10
+IV_RANKS   = $(shell n=$$(nproc); [ $$n -lt $(IV_NRANKS) ] && echo $$n || echo $(IV_NRANKS))
+
+examples/imbalance_validate: examples/imbalance_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) imbalance_validate
+
+run-imbalance-validate: examples/imbalance_validate
+	@echo "Running imbalance_validate (SNAPSHOT mode) with $(IV_RANKS) MPI ranks..."
+	MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_iv.json \
+	mpirun $(MPIRUN_FLAGS) -n $(IV_RANKS) ./examples/imbalance_validate $(IV_ARGS)
+	@echo "Running imbalance_validate (TRACE mode) for the cross-check..."
+	MINIPROF_MODE=trace MINIPROF_TRACE_FUNCS=/dev/null \
+	MINIPROF_TRACE_OUTPUT=miniprof_trace_report_iv.txt \
+	mpirun $(MPIRUN_FLAGS) -n $(IV_RANKS) ./examples/imbalance_validate $(IV_ARGS)
+	@echo ""
+	python3 tools/miniprof_report.py miniprof_snapshot_iv.json
+	set -- $(IV_ARGS); python3 tools/validate_imbalance.py miniprof_snapshot_iv.json \
+		--steps $$1 --base-ms $$2 --delta-ms $$3 \
+		--trace-report miniprof_trace_report_iv.txt
+
+# ── run-fortran-sentinels: Fortran sentinel regression, every mode ──────────
+examples/fortran_sentinels: examples/fortran_sentinels.f90 $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) fortran_sentinels
+
+run-fortran-sentinels: examples/fortran_sentinels
+	@FAIL=0; for m in off sample trace snapshot; do \
+		echo "--- MINIPROF_MODE=$$m"; \
+		MINIPROF_MODE=$$m MINIPROF_TRACE_FUNCS=/dev/null \
+		MINIPROF_OUTPUT=miniprof_report_fs.txt MINIPROF_MPA_OUTPUT=miniprof_fs.mpa \
+		MINIPROF_TRACE_OUTPUT=miniprof_trace_report_fs.txt \
+		MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_fs.json \
+		mpirun $(MPIRUN_FLAGS) -n $(NRANKS) ./examples/fortran_sentinels \
+			&& echo "PASS: results correct under MINIPROF_MODE=$$m" \
+			|| { echo "FAIL: wrong results under MINIPROF_MODE=$$m"; FAIL=1; }; \
+	done; \
+	python3 -c "import json,sys; \
+	c={f['name']:f['calls'] for f in json.load(open('miniprof_snapshot_fs.json'))['metrics']['parallel']['mpi']['by_function']}; \
+	ok=c.get('MPI_Allreduce')==2*$(NRANKS) and c.get('MPI_Isend')==2*$(NRANKS) and c.get('MPI_Bcast')==$(NRANKS); \
+	print(('PASS' if ok else 'FAIL')+': Fortran call counts not doubled (Allreduce %s, Isend %s, Bcast %s)' % (c.get('MPI_Allreduce'), c.get('MPI_Isend'), c.get('MPI_Bcast'))); \
+	sys.exit(0 if ok else 1)" || FAIL=1; \
+	exit $$FAIL
 
 # ── overhead-3d: snapshot vs off, wall clock (informational, not in check) ──
 # Uses whatever diffusion3d was last built — build it at a realistic size
@@ -547,6 +605,8 @@ check: lib examples mpa-check
 	$(MAKE) run-3d-trace || FAIL=1; \
 	$(MAKE) run-ext-trace || FAIL=1; \
 	$(MAKE) run-3d-snapshot || FAIL=1; \
+	$(MAKE) run-imbalance-validate || FAIL=1; \
+	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -573,4 +633,8 @@ clean:
 	      miniprof_hwc_validate_smear_report.txt miniprof_hwc_validate_smear.mpa \
 	      miniprof_ext_trace_c.txt miniprof_ext_trace_f.txt \
 	      miniprof_snapshot.json miniprof_snapshot_3d.json \
+	      miniprof_snapshot_iv.json miniprof_trace_report_iv.txt \
+	      miniprof_snapshot_fs.json miniprof_report_fs.txt miniprof_fs.mpa \
+	      miniprof_trace_report_fs.txt \
+	      examples/imbalance_validate examples/fortran_sentinels \
 	      tests/test_units tests/test_units_out.json

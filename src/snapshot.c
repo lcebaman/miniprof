@@ -22,6 +22,8 @@
 #include "snapshot.h"
 #include "sysinfo.h"
 #include "json_writer.h"
+#include "mpi_trace.h"
+#include "io_trace.h"
 #include "../include/miniprof.h"
 
 #include <mpi.h>
@@ -29,6 +31,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/resource.h>
 
 /* ── state ───────────────────────────────────────────────────────────── */
 
@@ -41,6 +44,7 @@ static char   g_cmdline[512]    = "";    /* rank 0 only                     */
 static int    g_thread_level    = -1;
 static sysinfo_node_t g_node;            /* collected at init               */
 static sysinfo_rank_t g_rank;
+static struct rusage  g_ru0;             /* baseline at init                */
 
 /* Per-rank record gathered to world rank 0. Fixed-size, sent as bytes:
  * every rank runs the same binary, so layout and padding are identical. */
@@ -51,6 +55,14 @@ typedef struct {
     double init_s;
     double finalize_s;      /* this rank's finalize time up to the gather */
     sysinfo_rank_t info;
+
+    /* P1: parallel runtime layer */
+    double mpi_s, io_s, compute_s;
+    double class_s[MPIC_COUNT];
+    double cpu_user_s, cpu_sys_s, cpu_util;   /* util: fraction of allowed CPUs */
+    long   max_rss_kb, vcsw, ivcsw;
+    uint64_t f_calls[MPIF_COUNT], f_bytes[MPIF_COUNT], f_ns[MPIF_COUNT];
+    io_snap_t io;
 } rank_rec_t;
 
 /* Per-node record gathered from node leaders to world rank 0. */
@@ -131,6 +143,11 @@ void snapshot_init(int verbose)
     sysinfo_collect_node(&g_node);
     sysinfo_collect_rank(&g_rank);
     if (rank == 0) read_cmdline(g_cmdline, sizeof(g_cmdline));
+
+    /* P1: start recording MPI and I/O, CPU-time baseline */
+    mpi_trace_set_mode(MPI_TRACE_SNAPSHOT);
+    io_trace_set_enabled(1);
+    getrusage(RUSAGE_SELF, &g_ru0);
 
     g_init_s = now_s() - t0;
 
@@ -222,12 +239,258 @@ static void write_rank(jw_t *w, const rank_rec_t *rr)
     jw_int_or_null(w, "cpus_allowed", rr->info.cpus_allowed);
     jw_str_or_null(w, "cpus_allowed_list", rr->info.cpus_allowed_list);
     jw_dbl(w, "elapsed_s", rr->elapsed_s);
+    jw_dbl(w, "compute_s", rr->compute_s);
+    jw_dbl(w, "mpi_s", rr->mpi_s);
+    jw_dbl(w, "io_s", rr->io_s);
+    jw_dbl(w, "cpu_util_pct", 100.0 * rr->cpu_util);
     jw_end_obj(w);
+}
+
+/* ── P1: parallel runtime block ──────────────────────────────────────── */
+
+typedef struct { double min, avg, max, sum; } stat_t;
+
+/* Accessor-based reduction over the gathered rank records. `arg` selects
+ * an element for array-valued fields (function or class index). */
+typedef double (*rank_get_t)(const rank_rec_t *, int arg);
+
+static stat_t stats(const rank_rec_t *r, int n, rank_get_t get, int arg)
+{
+    stat_t s = { 0, 0, 0, 0 };
+    for (int i = 0; i < n; i++) {
+        double v = get(&r[i], arg);
+        if (i == 0 || v < s.min) s.min = v;
+        if (i == 0 || v > s.max) s.max = v;
+        s.sum += v;
+    }
+    s.avg = n > 0 ? s.sum / n : 0.0;
+    return s;
+}
+
+static void jw_stat(jw_t *w, const char *key, stat_t s)
+{
+    jw_begin_obj(w, key);
+    jw_dbl(w, "min", s.min);
+    jw_dbl(w, "avg", s.avg);
+    jw_dbl(w, "max", s.max);
+    jw_end_obj(w);
+}
+
+/* (max - avg) / max, in percent; 0 when max is 0 */
+static double imbalance_pct(stat_t s) { return s.max > 0 ? 100.0 * (s.max - s.avg) / s.max : 0.0; }
+static double pct(double part, double whole) { return whole > 0 ? 100.0 * part / whole : 0.0; }
+
+static double g_elapsed (const rank_rec_t *r, int a) { (void)a; return r->elapsed_s; }
+static double g_compute (const rank_rec_t *r, int a) { (void)a; return r->compute_s; }
+static double g_mpi     (const rank_rec_t *r, int a) { (void)a; return r->mpi_s; }
+static double g_io      (const rank_rec_t *r, int a) { (void)a; return r->io_s; }
+static double g_class   (const rank_rec_t *r, int c) { return r->class_s[c]; }
+static double g_func_s  (const rank_rec_t *r, int f) { return r->f_ns[f] * 1e-9; }
+static double g_cpu_util(const rank_rec_t *r, int a) { (void)a; return 100.0 * r->cpu_util; }
+static double g_cpu_user(const rank_rec_t *r, int a) { (void)a; return r->cpu_user_s; }
+static double g_cpu_sys (const rank_rec_t *r, int a) { (void)a; return r->cpu_sys_s; }
+static double g_rss_mb  (const rank_rec_t *r, int a) { (void)a; return r->max_rss_kb / 1024.0; }
+
+/* I/O accessors: arg = 0 posix, 1 mpiio */
+static const io_counters_t *ioc(const rank_rec_t *r, int k) { return k ? &r->io.mpiio : &r->io.posix; }
+static double g_io_read_s (const rank_rec_t *r, int k) { return ioc(r, k)->read_ns  * 1e-9; }
+static double g_io_write_s(const rank_rec_t *r, int k) { return ioc(r, k)->write_ns * 1e-9; }
+static double g_io_meta_s (const rank_rec_t *r, int k) { return ioc(r, k)->meta_ns  * 1e-9; }
+
+static void write_io_kind(jw_t *w, const char *key, const rank_rec_t *r, int n, int k)
+{
+    uint64_t oc = 0, cc = 0, rc = 0, wc = 0, sc = 0, rb = 0, wb = 0;
+    for (int i = 0; i < n; i++) {
+        const io_counters_t *c = ioc(&r[i], k);
+        oc += c->open_calls;  cc += c->close_calls; rc += c->read_calls;
+        wc += c->write_calls; sc += c->sync_calls;
+        rb += c->read_bytes;  wb += c->write_bytes;
+    }
+    jw_begin_obj(w, key);
+    jw_begin_obj(w, "calls");
+    jw_int(w, "open", (int64_t)oc);  jw_int(w, "close", (int64_t)cc);
+    jw_int(w, "read", (int64_t)rc);  jw_int(w, "write", (int64_t)wc);
+    jw_int(w, "sync", (int64_t)sc);
+    jw_end_obj(w);
+    jw_begin_obj(w, "bytes");
+    jw_int(w, "read", (int64_t)rb);
+    jw_int(w, "write", (int64_t)wb);
+    jw_end_obj(w);
+    jw_begin_obj(w, "time_s");
+    jw_stat(w, "read",  stats(r, n, g_io_read_s,  k));
+    jw_stat(w, "write", stats(r, n, g_io_write_s, k));
+    jw_stat(w, "meta",  stats(r, n, g_io_meta_s,  k));
+    jw_end_obj(w);
+    jw_end_obj(w);
+}
+
+static const rank_rec_t *g_sort_ranks;   /* qsort context (single-threaded) */
+static int cmp_rank_compute_desc(const void *a, const void *b)
+{
+    double x = g_sort_ranks[*(const int *)a].compute_s;
+    double y = g_sort_ranks[*(const int *)b].compute_s;
+    return (x < y) - (x > y);
+}
+
+typedef struct { int id; uint64_t ns; } func_order_t;
+static int cmp_func_desc(const void *a, const void *b)
+{
+    uint64_t x = ((const func_order_t *)a)->ns, y = ((const func_order_t *)b)->ns;
+    return (x < y) - (x > y);
+}
+
+static void write_parallel(jw_t *w, const rank_rec_t *r, int n, const mpi_snap_t *hist)
+{
+    stat_t el   = stats(r, n, g_elapsed, 0);
+    stat_t comp = stats(r, n, g_compute, 0);
+    stat_t mpi  = stats(r, n, g_mpi, 0);
+    stat_t io   = stats(r, n, g_io, 0);
+
+    jw_begin_obj(w, "parallel");
+
+    jw_begin_obj(w, "definitions");
+    jw_str(w, "compute_s", "elapsed - MPI time - I/O time, per rank");
+    jw_str(w, "imbalance_pct", "(max - avg) / max over ranks");
+    jw_str(w, "imbalance_cost_pct",
+           "(max - avg) compute time as a share of elapsed: what perfect balance would save");
+    jw_str(w, "bytes", "this rank's share of each call's data; receives count the posted size");
+    jw_str(w, "message_sizes", "bin 0 = 0 bytes; bin b = [2^(b-1), 2^b) bytes");
+    jw_end_obj(w);
+
+    jw_begin_obj(w, "time_split_pct");
+    jw_dbl(w, "compute", pct(comp.avg, el.avg));
+    jw_dbl(w, "mpi",     pct(mpi.avg,  el.avg));
+    jw_dbl(w, "io",      pct(io.avg,   el.avg));
+    jw_end_obj(w);
+
+    /* compute */
+    jw_begin_obj(w, "compute");
+    jw_stat(w, "time_s", comp);
+    jw_dbl(w, "imbalance_pct", imbalance_pct(comp));
+    jw_dbl(w, "imbalance_cost_pct", pct(comp.max - comp.avg, el.max));
+    {
+        int *idx = malloc((size_t)n * sizeof(int));
+        jw_begin_arr(w, "slowest_ranks");
+        if (idx) {
+            for (int i = 0; i < n; i++) idx[i] = i;
+            g_sort_ranks = r;
+            qsort(idx, (size_t)n, sizeof(int), cmp_rank_compute_desc);
+            for (int i = 0; i < n && i < 5; i++) {
+                jw_begin_obj(w, NULL);
+                jw_int(w, "rank", r[idx[i]].rank);
+                jw_dbl(w, "compute_s", r[idx[i]].compute_s);
+                jw_end_obj(w);
+            }
+            free(idx);
+        }
+        jw_end_arr(w);
+    }
+    jw_end_obj(w);
+
+    /* MPI */
+    jw_begin_obj(w, "mpi");
+    jw_stat(w, "time_s", mpi);
+    jw_dbl(w, "pct_of_elapsed", pct(mpi.avg, el.avg));
+    jw_dbl(w, "imbalance_pct", imbalance_pct(mpi));
+
+    jw_begin_obj(w, "by_class");
+    for (int c = 0; c < MPIC_COUNT; c++) {
+        uint64_t calls = 0, bytes = 0;
+        for (int i = 0; i < n; i++)
+            for (int f = 0; f < MPIF_COUNT; f++)
+                if (mpi_trace_func_class(f) == c) { calls += r[i].f_calls[f]; bytes += r[i].f_bytes[f]; }
+        stat_t cs = stats(r, n, g_class, c);
+        jw_begin_obj(w, mpi_trace_class_name(c));
+        jw_stat(w, "time_s", cs);
+        jw_dbl(w, "pct_of_elapsed", pct(cs.avg, el.avg));
+        jw_int(w, "calls", (int64_t)calls);
+        jw_int(w, "bytes", (int64_t)bytes);
+        jw_end_obj(w);
+    }
+    jw_end_obj(w);
+
+    /* functions, most expensive (summed over ranks) first */
+    func_order_t order[MPIF_COUNT];
+    int nf = 0;
+    for (int f = 0; f < MPIF_COUNT; f++) {
+        uint64_t calls = 0, ns = 0;
+        for (int i = 0; i < n; i++) { calls += r[i].f_calls[f]; ns += r[i].f_ns[f]; }
+        if (calls) { order[nf].id = f; order[nf].ns = ns; nf++; }
+    }
+    qsort(order, (size_t)nf, sizeof(order[0]), cmp_func_desc);
+    jw_begin_arr(w, "by_function");
+    for (int k = 0; k < nf; k++) {
+        int f = order[k].id;
+        uint64_t calls = 0, bytes = 0;
+        for (int i = 0; i < n; i++) { calls += r[i].f_calls[f]; bytes += r[i].f_bytes[f]; }
+        stat_t fs = stats(r, n, g_func_s, f);
+        jw_begin_obj(w, NULL);
+        jw_str(w, "name", mpi_trace_func_name(f));
+        jw_str(w, "class", mpi_trace_class_name(mpi_trace_func_class(f)));
+        jw_int(w, "calls", (int64_t)calls);
+        jw_int(w, "bytes", (int64_t)bytes);
+        jw_dbl(w, "avg_bytes_per_call", calls ? (double)bytes / calls : 0.0);
+        jw_stat(w, "time_s", fs);
+        jw_dbl(w, "pct_of_elapsed", pct(fs.avg, el.avg));
+        jw_dbl(w, "imbalance_pct", imbalance_pct(fs));
+        jw_end_obj(w);
+    }
+    jw_end_arr(w);
+
+    /* message-size histogram, trimmed after the last non-empty bin */
+    int last = 0;
+    for (int c = 0; c < MPIC_COUNT; c++)
+        for (int b = 0; b < MPI_HIST_BINS; b++)
+            if (hist->hist_calls[c][b] && b > last) last = b;
+    jw_begin_obj(w, "message_sizes");
+    jw_begin_arr(w, "bin_lower_bytes");
+    for (int b = 0; b <= last; b++) jw_int(w, NULL, b == 0 ? 0 : (int64_t)1 << (b - 1));
+    jw_end_arr(w);
+    for (int c = 0; c < MPIC_COUNT; c++) {
+        uint64_t any = 0;
+        for (int b = 0; b <= last; b++) any |= hist->hist_calls[c][b];
+        if (!any) continue;
+        jw_begin_obj(w, mpi_trace_class_name(c));
+        jw_begin_arr(w, "calls");
+        for (int b = 0; b <= last; b++) jw_int(w, NULL, (int64_t)hist->hist_calls[c][b]);
+        jw_end_arr(w);
+        jw_begin_arr(w, "time_s");
+        for (int b = 0; b <= last; b++) jw_dbl(w, NULL, hist->hist_ns[c][b] * 1e-9);
+        jw_end_arr(w);
+        jw_end_obj(w);
+    }
+    jw_end_obj(w);
+    jw_end_obj(w);   /* mpi */
+
+    /* I/O */
+    jw_begin_obj(w, "io");
+    jw_stat(w, "time_s", io);
+    jw_dbl(w, "pct_of_elapsed", pct(io.avg, el.avg));
+    write_io_kind(w, "posix", r, n, 0);
+    write_io_kind(w, "mpiio", r, n, 1);
+    jw_end_obj(w);
+
+    /* CPU */
+    long vcsw = 0, ivcsw = 0;
+    for (int i = 0; i < n; i++) { vcsw += r[i].vcsw; ivcsw += r[i].ivcsw; }
+    jw_begin_obj(w, "cpu");
+    jw_stat(w, "utilisation_pct", stats(r, n, g_cpu_util, 0));
+    jw_stat(w, "user_s", stats(r, n, g_cpu_user, 0));
+    jw_stat(w, "sys_s",  stats(r, n, g_cpu_sys, 0));
+    jw_stat(w, "max_rss_mb", stats(r, n, g_rss_mb, 0));
+    jw_int(w, "voluntary_ctx_switches", vcsw);
+    jw_int(w, "involuntary_ctx_switches", ivcsw);
+    jw_str(w, "note", "utilisation = CPU time / (elapsed x CPUs the rank may run on); "
+                      "MPI libraries usually busy-poll while waiting, so MPI time counts as busy");
+    jw_end_obj(w);
+
+    jw_end_obj(w);   /* parallel */
 }
 
 static int write_json(const rank_rec_t *ranks, int nranks,
                       const node_rec_t *nodes, int nnodes,
-                      const char *mpi_lib, double finalize_s)
+                      const char *mpi_lib, double finalize_s,
+                      const mpi_snap_t *hist)
 {
     FILE *f = fopen(g_outfile, "w");
     if (!f) {
@@ -314,8 +577,9 @@ static int write_json(const rank_rec_t *ranks, int nranks,
      * consumers never have to infer it from nulls. */
     jw_begin_obj(&w, "metrics");
     jw_begin_arr(&w, "collected");
+    jw_str(&w, NULL, "parallel");
     jw_end_arr(&w);
-    jw_null(&w, "parallel");
+    write_parallel(&w, ranks, nranks, hist);
     jw_null(&w, "openmp");
     jw_null(&w, "counters");
     jw_null(&w, "topdown");
@@ -333,9 +597,55 @@ static int write_json(const rank_rec_t *ranks, int nranks,
 
 /* ── finalize ────────────────────────────────────────────────────────── */
 
+/* Fill this rank's P1 fields: stop recording first, so nothing miniprof
+ * does from here on (gathers, writing the JSON) is counted. */
+static void collect_parallel(rank_rec_t *r, double elapsed_s, mpi_snap_t *snap)
+{
+    io_snap_t io;
+    io_trace_get(&io);
+    io_trace_set_enabled(0);
+    mpi_trace_snapshot_get(snap);
+    mpi_trace_set_mode(MPI_TRACE_OFF);
+
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+#define TV(t) ((t).tv_sec + (t).tv_usec * 1e-6)
+    r->cpu_user_s = TV(ru.ru_utime) - TV(g_ru0.ru_utime);
+    r->cpu_sys_s  = TV(ru.ru_stime) - TV(g_ru0.ru_stime);
+#undef TV
+    r->max_rss_kb = ru.ru_maxrss;
+    r->vcsw       = ru.ru_nvcsw  - g_ru0.ru_nvcsw;
+    r->ivcsw      = ru.ru_nivcsw - g_ru0.ru_nivcsw;
+    int ncpu = r->info.cpus_allowed > 0 ? r->info.cpus_allowed : 1;
+    r->cpu_util = elapsed_s > 0
+                ? (r->cpu_user_s + r->cpu_sys_s) / (elapsed_s * ncpu) : 0.0;
+
+    double mpi = 0.0;
+    for (int f = 0; f < MPIF_COUNT; f++) {
+        r->f_calls[f] = snap->calls[f];
+        r->f_bytes[f] = snap->bytes[f];
+        r->f_ns[f]    = snap->ns[f];
+        double t = snap->ns[f] * 1e-9;
+        r->class_s[mpi_trace_func_class(f)] += t;
+        mpi += t;
+    }
+    r->io  = io;
+    r->mpi_s = mpi;
+    r->io_s  = (io.posix.read_ns + io.posix.write_ns + io.posix.meta_ns +
+                io.mpiio.read_ns + io.mpiio.write_ns + io.mpiio.meta_ns) * 1e-9;
+    r->compute_s = elapsed_s - r->mpi_s - r->io_s;
+    if (r->compute_s < 0) r->compute_s = 0;
+}
+
 void snapshot_finalize(double elapsed_s)
 {
     double t0 = now_s();
+
+    rank_rec_t mine;
+    memset(&mine, 0, sizeof(mine));
+    mine.info = g_rank;
+    mpi_snap_t snap;
+    collect_parallel(&mine, elapsed_s, &snap);
 
     int rank = 0, size = 1;
     PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -360,13 +670,19 @@ void snapshot_finalize(double elapsed_s)
     }
     PMPI_Bcast(&node_index, 1, MPI_INT, 0, node_comm);
 
-    rank_rec_t mine;
-    memset(&mine, 0, sizeof(mine));
     mine.rank       = rank;
     mine.node_index = node_index;
     mine.elapsed_s  = elapsed_s;
     mine.init_s     = g_init_s;
-    mine.info       = g_rank;
+
+    /* message-size histograms: summed over ranks, only rank 0 needs them */
+    static mpi_snap_t hist_sum;   /* static: ~2 KB, keep it off the stack */
+    memset(&hist_sum, 0, sizeof(hist_sum));
+    PMPI_Reduce(snap.hist_calls, hist_sum.hist_calls, MPIC_COUNT * MPI_HIST_BINS,
+                MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+    PMPI_Reduce(snap.hist_ns, hist_sum.hist_ns, MPIC_COUNT * MPI_HIST_BINS,
+                MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
+
     mine.finalize_s = now_s() - t0;
 
     rank_rec_t *all_ranks = NULL;
@@ -410,7 +726,8 @@ void snapshot_finalize(double elapsed_s)
             if (nl) *nl = '\0';
         }
         double finalize_s = now_s() - t0;
-        if (write_json(all_ranks, size, all_nodes, nnodes, lib, finalize_s) == 0
+        if (write_json(all_ranks, size, all_nodes, nnodes, lib, finalize_s,
+                       &hist_sum) == 0
             && g_verbose) {
             fprintf(stderr, "[miniprof] snapshot written to %s (%d ranks, %d nodes)\n",
                     g_outfile, size, nnodes);
