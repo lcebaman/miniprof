@@ -43,10 +43,23 @@ typedef enum {
     CK_FP_128,
     CK_FP_256,
     CK_FP_512,
+    /* top-down (P4); "slots" = dispatch slots, W per cycle (Zen 4: 6, Zen 5: 8) */
+    CK_RET_OPS,            /* retired macro-ops                             */
+    CK_DISP_OPS,           /* dispatched ops (retired + squashed)           */
+    CK_FE_EMPTY_SLOTS,     /* slots left empty: no ops from the frontend    */
+    CK_BE_STALL_SLOTS,     /* slots left empty: backend resources full      */
+    CK_SMT_SLOTS,          /* slots given to the sibling SMT thread         */
+    CK_FE_LAT_CYCLES,      /* cycles with ALL slots empty from the frontend */
+    CK_NORET_LOAD,         /* cycles not retiring: oldest op is a load      */
+    CK_NORET_NOTCOMPLETE,  /* cycles not retiring: oldest op not complete   */
+    CK_UCODE_OPS,          /* retired microcoded ops                        */
+    CK_BR_MISP,            /* retired mispredicted branches                 */
+    CK_RESYNCS,            /* pipeline restarts (resyncs, non-cond. redirects) */
     CK_COUNT
 } cnt_kind_t;
 
 #define CNT_MAX_EVENTS 6
+#define CNT_MAX_SETS   3   /* event sets rotated over threads (top-down)   */
 
 typedef struct {
     cnt_kind_t  kind;
@@ -76,6 +89,10 @@ static inline uint64_t cnt_amd_raw(unsigned event, unsigned umask)
 
 const char *cnt_kind_name(cnt_kind_t k);
 
+/* Dispatch width of a microarchitecture (top-down slots per cycle);
+ * 0 if top-down is not supported for it. */
+int cnt_dispatch_width(const char *uarch);
+
 /* Table lookup: uarch from sysinfo ("zen4", ...), group "base"/"vector".
  * Unknown uarch → the generic table (cycles + instructions). Never NULL. */
 const cnt_group_t *cnt_lookup(const char *uarch, const char *group);
@@ -83,8 +100,16 @@ const cnt_group_t *cnt_lookup(const char *uarch, const char *group);
 /* ── lifecycle (snapshot mode) ───────────────────────────────────────── */
 
 /* Select the group and open it for the calling thread. Returns 1 if
- * counting, 0 if unavailable (reason via cnt_status()). Never fatal. */
-int  cnt_init(const char *uarch, const char *group);
+ * counting, 0 if unavailable (reason via cnt_collect()). Never fatal.
+ *
+ * group "topdown" selects CNT_MAX_SETS event sets instead of one group:
+ * td_l1, td_febe, td_rbs. Each thread counts ONE set for the whole run,
+ * set = (rank + thread slot) % sets, so with >= 3 counted threads across
+ * the job every set is measured without time multiplexing; ratios are
+ * only ever formed within one set. */
+int  cnt_init(const char *uarch, const char *group, int rank);
+/* Why a requested top-down set is missing ("" if none is). */
+const char *cnt_set_note(void);
 void cnt_stop(void);   /* stop boundary reads (start of finalize) */
 
 typedef struct {
@@ -98,10 +123,18 @@ typedef struct {
     int      threads;            /* thread groups opened on this rank       */
     int      threads_dropped;    /* threads beyond the slot table           */
     int      multiplexed;        /* some group was not on the PMU all along */
-    uint64_t total  [CNT_MAX_EVENTS];   /* sum over threads, this rank      */
+    uint64_t total  [CNT_MAX_EVENTS];   /* set 0: sum over threads, this rank */
     uint64_t compute[CNT_MAX_EVENTS];
     uint64_t mpi    [CNT_MAX_EVENTS];
     uint64_t main_thread[CNT_MAX_EVENTS];  /* MPI_Init thread only         */
+    /* every set (nsets == 1 except for top-down) */
+    int      nsets;
+    const cnt_group_t *set_group[CNT_MAX_SETS];
+    int      set_nev[CNT_MAX_SETS];      /* events fitted, per set          */
+    int      set_threads[CNT_MAX_SETS];  /* threads that counted the set    */
+    uint64_t set_total  [CNT_MAX_SETS][CNT_MAX_EVENTS];
+    uint64_t set_compute[CNT_MAX_SETS][CNT_MAX_EVENTS];
+    uint64_t set_mpi    [CNT_MAX_SETS][CNT_MAX_EVENTS];
 } cnt_result_t;
 
 /* Final read of every thread on this rank; fills *out. */
@@ -127,7 +160,7 @@ typedef struct {
     char     name[CNT_REGION_NAME];
     uint64_t calls;
     uint64_t ns;
-    uint64_t ev[CNT_MAX_EVENTS];
+    uint64_t ev[CNT_MAX_SETS][CNT_MAX_EVENTS];   /* per set; set 0 = the group */
 } cnt_region_t;
 
 /* Copy this rank's regions; returns the count. */
