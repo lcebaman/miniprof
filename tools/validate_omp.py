@@ -5,6 +5,8 @@ analytic answer (see the header of omp_validate.c).
 
 Exit criteria for phase P2 (T threads per rank, R ranks):
   - the OpenMP block is available and every region has its own name;
+    the first region (warmup_phase) carries the runtime's thread start-up
+    and is reported, not checked;
   - every region ran with a team of T threads;
   - per-region wall time per rank matches the injected spin times (5%);
   - per-region imbalance (barrier wait / team time) within 3 points of:
@@ -24,7 +26,7 @@ import json
 import sys
 
 SERIAL_MS, BAL_MS, BASE_MS, DELTA_MS = 200.0, 100.0, 50.0, 50.0
-CRIT_MS, CRIT_ITERS, LOOP_MS = 2.0, 20, 5.0
+CRIT_MS, CRIT_ITERS, LOOP_MS, WARM_MS = 2.0, 20, 5.0, 20.0
 REL = 0.05          # wall-time tolerance
 ABS_MS = 3.0        # ... with a floor
 IMB_PTS = 3.0       # imbalance tolerance, percentage points
@@ -63,6 +65,12 @@ def main() -> int:
         "critical_phase":   (T * CRIT_ITERS * CRIT_MS, None, False),
         "loop_phase":       (4 * LOOP_MS * T, imb, True),
     }
+    w = regions.get("warmup_phase")
+    check(w is not None, "region warmup_phase present")
+    if w:
+        print(f"  info  warmup_phase (first region, includes thread start-up): "
+              f"wall {w['wall_s_per_rank'] * 1e3:.1f} ms/rank vs {WARM_MS:.0f} spun, "
+              f"imbalance {w['imbalance_pct']:.1f}% (not checked)")
     for name, (wall, eimb, chk) in expect.items():
         r = regions.get(name)
         if r is None:
@@ -76,8 +84,6 @@ def main() -> int:
         if chk:
             check(abs(r["imbalance_pct"] - eimb) <= IMB_PTS,
                   f"{name}: imbalance {r['imbalance_pct']:.1f}% vs {eimb:.1f}%")
-        if "location" not in r:
-            print(f"  note  {name}: no file:line (built without -g?)")
 
     ser = omp["serial_s"]["min"] * 1e3
     check(ser >= 0.95 * SERIAL_MS, f"serial {ser:.1f} ms >= 95% of {SERIAL_MS:.0f}")
@@ -90,6 +96,9 @@ def main() -> int:
     else:
         check(lock < 1.0, f"lock wait {lock:.2f} ms/rank ~ 0 with one thread")
 
+    if any("location" not in r for r in regions.values()):
+        print("  note  regions without file:line: is llvm-addr2line on PATH? "
+              "(old GNU addr2line cannot read clang's DWARF 5; see MINIPROF_ADDR2LINE)")
     print("PASS" if not fails else f"FAIL ({len(fails)} checks)")
     return 0 if not fails else 1
 

@@ -122,6 +122,73 @@ static int resolve_dladdr(void *pc, miniprof_sym_t *out,
 /* ── addr2line batch resolution ──────────────────────────────────────────── */
 #define ADDR2LINE_BATCH 64
 
+/* The addr2line to run: MINIPROF_ADDR2LINE, else GNU addr2line. */
+static const char *addr2line_tool(void)
+{
+    const char *t = getenv("MINIPROF_ADDR2LINE");
+    return (t && *t) ? t : "addr2line";
+}
+
+/* Is `prog` an executable on PATH? */
+static int on_path(const char *prog)
+{
+    const char *path = getenv("PATH");
+    if (!path) return 0;
+    char dir[4096];
+    while (*path) {
+        size_t n = strcspn(path, ":");
+        if (n > 0 && n < sizeof(dir) - 64) {
+            snprintf(dir, sizeof(dir), "%.*s/%s", (int)n, path, prog);
+            if (access(dir, X_OK) == 0) return 1;
+        }
+        path += n;
+        if (*path == ':') path++;
+    }
+    return 0;
+}
+
+/* File:line with llvm-addr2line for symbols GNU addr2line left without
+ * one. Old binutils (2.35, RHEL/Rocky 9) cannot read every DWARF 5 line
+ * table that recent clang-based compilers (AOCC 5+, LLVM 17+) emit by
+ * default: function names resolve from .symtab, file:line comes back ??:0. */
+static void resolve_lines_llvm(miniprof_sym_t *syms, void **fbases,
+                               const char *dso_path, int n)
+{
+    if (getenv("MINIPROF_ADDR2LINE") || !on_path("llvm-addr2line")) return;
+    int idx[ADDR2LINE_BATCH], m = 0;
+    char cmd[8192];
+    int pos = snprintf(cmd, sizeof(cmd), "llvm-addr2line -e '%s' -f -C 2>/dev/null", dso_path);
+    for (int i = 0; i < n && m < ADDR2LINE_BATCH && pos < (int)sizeof(cmd) - 32; i++) {
+        if (syms[i].line > 0) continue;
+        uintptr_t pc = (uintptr_t)syms[i].pc - (fbases[i] ? (uintptr_t)fbases[i] : 0);
+        pos += snprintf(cmd + pos, sizeof(cmd) - pos, " 0x%lx", (unsigned long)pc);
+        idx[m++] = i;
+    }
+    if (!m) return;
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return;
+    char func[MINIPROF_SYMBOL_LEN], fl[MINIPROF_SYMBOL_LEN];
+    for (int k = 0; k < m; k++) {
+        if (!fgets(func, sizeof(func), fp) || !fgets(fl, sizeof(fl), fp)) break;
+        fl[strcspn(fl, "\n")] = '\0';
+        /* file:line, or file:line:column */
+        char *c2 = strrchr(fl, ':');
+        if (!c2) continue;
+        *c2 = '\0';
+        int line = atoi(c2 + 1);
+        char *c1 = strrchr(fl, ':');
+        if (c1 && c1[1] >= '0' && c1[1] <= '9' && strspn(c1 + 1, "0123456789") == strlen(c1 + 1)) {
+            line = atoi(c1 + 1);            /* the last field was the column */
+            *c1 = '\0';
+        }
+        if (line <= 0 || strcmp(fl, "??") == 0) continue;
+        const char *b = strrchr(fl, '/');
+        snprintf(syms[idx[k]].file, MINIPROF_SYMBOL_LEN, "%s", b ? b + 1 : fl);
+        syms[idx[k]].line = line;
+    }
+    pclose(fp);
+}
+
 static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
                                     const char *dso_path, int n)
 {
@@ -132,7 +199,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
      * most systems. */
     char cmd[8192];
     int  pos = snprintf(cmd, sizeof(cmd),
-                        "addr2line -e '%s' -f -C 2>/dev/null", dso_path);
+                        "%s -e '%s' -f -C 2>/dev/null", addr2line_tool(), dso_path);
 
     for (int i = 0; i < n && pos < (int)sizeof(cmd)-32; i++) {
         uintptr_t runtime_pc = (uintptr_t)syms[i].pc;
@@ -199,7 +266,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
 
     if (n_still_unknown > 0) {
         pos = snprintf(cmd, sizeof(cmd),
-                       "addr2line -e '%s' -f -C 2>/dev/null", dso_path);
+                       "%s -e '%s' -f -C 2>/dev/null", addr2line_tool(), dso_path);
         /* only the unknowns, but we need to track which indices they map to */
         int retry_idx[ADDR2LINE_BATCH];
         int retry_n = 0;
@@ -246,6 +313,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
             }
         }
     }
+    resolve_lines_llvm(syms, fbases, dso_path, n);
 }
 
 /* ── nm-based fallback for the main executable ───────────────────────────── *
