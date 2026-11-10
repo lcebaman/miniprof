@@ -34,7 +34,8 @@ typedef enum {
     CK_L2_MISSES,          /* demand L2 misses (data + instruction)         */
     CK_DRAM_FILLS,         /* L1D fills sourced from DRAM/IO, any node      */
     CK_DRAM_FILLS_REMOTE,  /* ... from DRAM/IO on another NUMA node         */
-    CK_FP_SCALAR,          /* retired FP ops by width                       */
+    CK_FP_SCALAR,          /* retired FP-unit ops by width — includes FP
+                              loads, stores and moves, not only arithmetic  */
     CK_FP_128,
     CK_FP_256,
     CK_FP_512,

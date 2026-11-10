@@ -609,7 +609,9 @@ What a snapshot contains so far:
   - derived: IPC (overall, outside MPI, inside MPI), effective clock,
     GFLOP/s, FLOPs per cycle, L2 misses per 1000 instructions, DRAM fill
     rate (a lower bound: lines the L2 prefetcher brings in are not seen)
-    and remote-NUMA share, FP width mix
+    and remote-NUMA share, FP width mix (the width events count every
+    FP-unit uop including loads, stores and moves, so the mix shows vector
+    instruction usage rather than the vectorised share of arithmetic)
   - **regions**: bracket code with `miniprof_region_begin("name")` /
     `miniprof_region_end("name")` (Fortran: `CALL
     MINIPROF_REGION_BEGIN('name')`) to get calls, time and counters per

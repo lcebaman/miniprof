@@ -170,7 +170,7 @@ def report(doc: dict, args) -> str:
                   f"lower bound)" + (f"; {rem:.1f}% from a remote NUMA node" if rem is not None else ""))
             if "fp_ops_width_pct" in cd:
                 w = cd["fp_ops_width_pct"]
-                p(f"   FP ops by width     scalar {w['scalar']:.1f}% | 128-bit {w['packed128']:.1f}% | "
+                p(f"   FP-unit ops/width   scalar {w['scalar']:.1f}% | 128-bit {w['packed128']:.1f}% | "
                   f"256-bit {w['packed256']:.1f}% | 512-bit {w['packed512']:.1f}%")
         regs = cnt.get("regions") or []
         if regs:
@@ -203,8 +203,8 @@ def report(doc: dict, args) -> str:
         obs.append(f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
                    "check process/thread binding and first-touch initialisation.")
     if "packed_fp_ops_pct" in cd and cd["packed_fp_ops_pct"] < args.packed_pct:
-        obs.append(f"Only {cd['packed_fp_ops_pct']:.1f}% of FP ops are packed (< {args.packed_pct:g}%): "
-                   "most floating-point work is not vectorised.")
+        obs.append(f"Only {cd['packed_fp_ops_pct']:.1f}% of FP-unit ops are packed (< {args.packed_pct:g}%): "
+                   "little use of vector instructions (includes FP data movement).")
     p("")
     p(" Observations")
     if obs:
