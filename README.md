@@ -268,6 +268,7 @@ Build all three sample and trace variants with `make examples`.
 | `make run-3d-snapshot` | Run `diffusion3d` in snapshot mode and validate the JSON structure |
 | `make overhead-3d` | Wall-clock overhead of snapshot mode vs `MINIPROF_MODE=off` (informational) |
 | `make run-imbalance-validate` | Snapshot known-answer test: injected imbalance, trace cross-check, exact I/O counts |
+| `make run-counters-validate` | Snapshot hardware counters: exact region FLOPs, threads, compute/MPI split (SKIP without a PMU) |
 | `make run-fortran-sentinels` | Fortran `MPI_IN_PLACE`/`MPI_STATUS_IGNORE` results correct in every mode |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
@@ -591,10 +592,39 @@ What a snapshot contains so far:
     user/system time, peak RSS, context switches
 - **overhead**: the profiler's own init/finalize cost
 
-`counters`, `topdown`, `memory` and `roofline` are still `null`; they
-arrive with the hardware-counter phases. `MINIPROF_SNAPSHOT` (`basic`,
-`topdown`, `roofline`, `full`) will select which counter groups a run
-collects, and is recorded but has no effect yet.
+- **metrics.counters** (hardware counters, AMD Zen 4 / Zen 5; other CPUs
+  get cycles and instructions only):
+  - one counter group per run, chosen by `MINIPROF_SNAPSHOT`: `basic`
+    collects cycles, instructions and FLOPs, plus (if they fit) L1D fills
+    from DRAM, from a remote NUMA node, and L2 misses; `roofline` collects
+    FP operations by width (scalar, 128, 256, 512-bit) and cycles
+  - Zen has 6 general-purpose counters per thread, the FLOP event takes
+    two, and the NMI watchdog (on by default on RHEL-family systems)
+    takes one more. Optional events are dropped from the end of the group
+    until it fits, and the JSON says which were dropped
+  - counts are user-space only (works at `perf_event_paranoid=2`), per
+    thread, including threads created after `MPI_Init`, and split into
+    outside-MPI and inside-MPI using reads at every MPI call (`rdpmc`
+    when allowed, about 20 ns; `read()` otherwise)
+  - derived: IPC (overall, outside MPI, inside MPI), effective clock,
+    GFLOP/s, FLOPs per cycle, L2 misses per 1000 instructions, DRAM fill
+    rate (a lower bound: lines the L2 prefetcher brings in are not seen)
+    and remote-NUMA share, FP width mix
+  - **regions**: bracket code with `miniprof_region_begin("name")` /
+    `miniprof_region_end("name")` (Fortran: `CALL
+    MINIPROF_REGION_BEGIN('name')`) to get calls, time and counters per
+    region, reduced across ranks. No-ops outside snapshot mode
+
+`topdown`, `memory` and `roofline` are still `null`; they arrive in later
+phases. `MINIPROF_SNAPSHOT=topdown` and `full` currently collect the
+`basic` group.
+
+Counter validation on a real node: `tools/pmu_probe.sh` records what the
+node's PMU and perf support; `tools/validate_counters.sh` checks exact
+region FLOP counts, thread coverage and the compute/MPI split against a
+known-answer workload and `perf stat`. `make run-counters-validate` runs
+the same checks plus a software-event test of the engine that works on
+machines without a PMU (CI).
 
 Validation: `make run-imbalance-validate` runs a known-answer workload
 (rank r computes `base + r·delta` per step, then a fixed POSIX and MPI-IO

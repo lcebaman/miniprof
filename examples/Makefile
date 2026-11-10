@@ -59,7 +59,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall
 
 all: $(EXAMPLES)
 
@@ -112,6 +112,15 @@ mpi_ext_validate_f: mpi_ext_validate.f90 $(LIB)
 imbalance_validate: imbalance_validate.c $(LIB)
 	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Per-call cost of the MPI wrappers (off vs snapshot, rdpmc vs read()).
+mpi_percall: mpi_percall.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
+# Known-FLOP workload for snapshot-mode hardware counters (regions,
+# worker threads, MPI phase) — see the file header.
+counters_validate: counters_validate.c $(LIB)
+	$(CC) $(CFLAGS) -pthread $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 # Regression test for Fortran MPI sentinels (MPI_IN_PLACE,
 # MPI_STATUS(ES)_IGNORE) passing through the Fortran wrappers intact.
 fortran_sentinels: fortran_sentinels.f90 $(LIB)
@@ -119,4 +128,5 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
-	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels
+	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
+	      counters_validate mpi_percall

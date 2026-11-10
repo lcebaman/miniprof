@@ -61,6 +61,16 @@ extern "C" {
 
 #define MINIPROF_VERSION "1.1.0-dev"
 
+/* ── user regions (snapshot mode) ─────────────────────────────────────────
+ * Bracket a code region to get its time and hardware counters reported
+ * separately in the snapshot JSON (metrics.counters.regions). Regions nest
+ * (up to 16 deep per thread) and are inclusive; up to 64 distinct names.
+ * No-ops outside snapshot mode, so they can stay in production code.
+ * Fortran: CALL MINIPROF_REGION_BEGIN('name') / MINIPROF_REGION_END('name').
+ */
+void miniprof_region_begin(const char *name);
+void miniprof_region_end(const char *name);
+
 /* ── tunable defaults (overridden by env vars) ───────────────────────────── */
 #define MINIPROF_DEFAULT_INTERVAL_MS  10
 #define MINIPROF_DEFAULT_DEPTH         8
