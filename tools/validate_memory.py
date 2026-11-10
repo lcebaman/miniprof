@@ -78,6 +78,11 @@ def main() -> int:
     check(0.95 * erd <= rd <= 1.10 * erd, f"DRAM reads {rd:.2f} GB within -5%..+10% of {erd:.2f}")
     check(0.95 * ewr <= wr <= 1.25 * ewr, f"DRAM writes {wr:.2f} GB within -5%..+25% of {ewr:.2f}")
     check(n0["peak_gb_s"] >= n0["total_gb_s"], f"peak {n0['peak_gb_s']:.1f} >= average {n0['total_gb_s']:.1f} GB/s")
+    # no 2-socket node of this generation moves 2 TB/s; anything above is a counting error
+    check(n0["peak_gb_s"] <= 2000, f"peak {n0['peak_gb_s']:.1f} GB/s plausible (<= 2000)")
+    for s in n0["sockets"]:
+        check(s["peak_read_gb_s"] <= 1000 and s["peak_write_gb_s"] <= 1000,
+              f"socket {s['socket']}: peaks {s['peak_read_gb_s']:.1f} / {s['peak_write_gb_s']:.1f} GB/s plausible (<= 1000)")
     check(20 <= n0["power_w"] <= 2000, f"package power {n0['power_w']:.0f} W plausible")
 
     # the socket whose cores did the work: the one with most remote reads

@@ -202,6 +202,9 @@ void miniprof_init(int interval_ms)
 
     if (g_mode == MODE_SNAPSHOT) {
         snapshot_init(g_verbose);
+        /* the application's clock starts after miniprof's own set-up, which
+         * snapshot reports separately as overhead (init_s) */
+        clock_gettime(CLOCK_MONOTONIC, &g_t_start);
     } else if (g_mode == MODE_SAMPLE) {
         g_interval_ms = env_int("MINIPROF_INTERVAL_MS", interval_ms > 0
                                                          ? interval_ms

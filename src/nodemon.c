@@ -60,7 +60,8 @@ typedef struct {
     ev_kind_t kind;
     int       socket, chan;
     double    scale;               /* bytes (or uJ) per count */
-    uint64_t  v0, last;            /* first and previous (scaled) values */
+    uint64_t  raw0, ena0, run0;    /* at start: count, time enabled, time running */
+    uint64_t  raw, ena, run;       /* at the previous sample */
 } ev_t;
 
 static ev_t g_ev[MAX_EV];
@@ -295,13 +296,30 @@ static void drop_caps(void)
     prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 }
 
-static uint64_t read_ev(ev_t *v)
+/* Read count, time enabled, time running. On a time-multiplexed event the
+ * estimate for a span is raw_delta * enabled_delta / running_delta, from
+ * that span's OWN deltas: never negative. (Differencing two scaled
+ * running totals is not: the scale factor drifts and the unsigned
+ * difference wrapped to ~1e19 B/s peaks on Zen 4, where 32 DF events
+ * share 16 counters.) */
+static void read_ev(ev_t *v, uint64_t *raw, uint64_t *ena, uint64_t *run)
 {
     uint64_t r[3] = {0, 0, 0};
-    if (read(v->fd, r, sizeof(r)) != (ssize_t)sizeof(r)) return v->last;
-    double val = (double)r[0];
-    if (r[2] > 0 && r[2] < r[1]) { val *= (double)r[1] / (double)r[2]; g_mux = 1; }
-    return (uint64_t)(val * v->scale);
+    if (read(v->fd, r, sizeof(r)) != (ssize_t)sizeof(r)) { *raw = v->raw; *ena = v->ena; *run = v->run; return; }
+    *raw = r[0]; *ena = r[1]; *run = r[2];
+}
+
+/* scaled estimate (bytes or uJ) of what happened between two readings */
+static double span(const ev_t *v, uint64_t raw0, uint64_t ena0, uint64_t run0,
+                   uint64_t raw1, uint64_t ena1, uint64_t run1)
+{
+    if (raw1 < raw0 || run1 <= run0) return 0.0;
+    double d = (double)(raw1 - raw0);
+    if (ena1 > ena0 && run1 - run0 < ena1 - ena0) {
+        d *= (double)(ena1 - ena0) / (double)(run1 - run0);
+        g_mux = 1;
+    }
+    return d * v->scale;
 }
 
 int main(int argc, char **argv)
@@ -326,7 +344,11 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < g_nev; i++) ioctl(g_ev[i].fd, PERF_EVENT_IOC_ENABLE, 0);
     uint64_t t0 = now_ns(), tprev = t0;
-    for (int i = 0; i < g_nev; i++) g_ev[i].v0 = g_ev[i].last = read_ev(&g_ev[i]);
+    for (int i = 0; i < g_nev; i++) {
+        ev_t *v = &g_ev[i];
+        read_ev(v, &v->raw0, &v->ena0, &v->run0);
+        v->raw = v->raw0; v->ena = v->ena0; v->run = v->run0;
+    }
     int maxc = 0;
     for (int s = 0; s < g_nsockets; s++) if (g_nchans[s] > maxc) maxc = g_nchans[s];
     printf("ok sockets=%d chans=%d interval_ms=%d events=%d\n", g_nsockets, maxc, interval, g_nev);
@@ -349,9 +371,10 @@ int main(int argc, char **argv)
         double rd[NM_MAX_SOCKETS] = {0}, wr[NM_MAX_SOCKETS] = {0};
         for (int i = 0; i < g_nev; i++) {
             ev_t *v = &g_ev[i];
-            uint64_t x = read_ev(v);
-            double dlt = (double)(x - v->last);
-            v->last = x;
+            uint64_t raw, ena, run;
+            read_ev(v, &raw, &ena, &run);
+            double dlt = span(v, v->raw, v->ena, v->run, raw, ena, run);
+            v->raw = raw; v->ena = ena; v->run = run;
             if (v->kind == EV_UMC_RD) rd[v->socket] += dlt;
             if (v->kind == EV_UMC_WR) wr[v->socket] += dlt;
         }
@@ -377,7 +400,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < g_nev; i++) {
             ev_t *v = &g_ev[i];
             if (v->socket != s) continue;
-            uint64_t d = v->last - v->v0;
+            uint64_t d = (uint64_t)span(v, v->raw0, v->ena0, v->run0, v->raw, v->ena, v->run);
             if (v->kind == EV_UMC_RD) rd += d;
             if (v->kind == EV_UMC_WR) wr += d;
             if (v->kind == EV_DF_REMOTE_IN) rin += d;
@@ -391,8 +414,9 @@ int main(int argc, char **argv)
             for (int i = 0; i < g_nev; i++) {
                 ev_t *v = &g_ev[i];
                 if (v->socket != s || v->chan != c) continue;
-                if (v->kind == EV_UMC_RD) crd = v->last - v->v0;
-                if (v->kind == EV_UMC_WR) cwr = v->last - v->v0;
+                uint64_t d = (uint64_t)span(v, v->raw0, v->ena0, v->run0, v->raw, v->ena, v->run);
+                if (v->kind == EV_UMC_RD) crd = d;
+                if (v->kind == EV_UMC_WR) cwr = d;
             }
             printf("chan %d %d rd=%llu wr=%llu\n", s, c, (unsigned long long)crd,
                    (unsigned long long)cwr);

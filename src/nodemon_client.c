@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -72,8 +73,8 @@ static void reap(void)
     if (g_out >= 0) close(g_out);
     g_in = g_out = -1;
     if (g_pid > 0) {
-        int st;
-        for (int i = 0; i < 50 && waitpid(g_pid, &st, WNOHANG) == 0; i++) usleep(10000);
+        int st;   /* it exits right after its last line: poll in 1 ms steps, <= 0.5 s */
+        for (int i = 0; i < 500 && waitpid(g_pid, &st, WNOHANG) == 0; i++) usleep(1000);
         if (waitpid(g_pid, &st, WNOHANG) == 0) { kill(g_pid, SIGKILL); waitpid(g_pid, &st, 0); }
     }
     g_pid = -1;
@@ -116,6 +117,22 @@ void nodemon_start(const char *uarch, int verbose)
                  "CAP_PERFMON (sudo setcap cap_perfmon+ep <path>), or set MINIPROF_NODEMON",
                  path);
         return;
+    }
+
+    /* Do not start a helper that cannot work: without CAP_PERFMON on the
+     * file (security.capability xattr), root, or perf_event_paranoid <= 0,
+     * it would only fail — and starting it costs rank 0 time. */
+    if (strcmp(ua, "swtest") != 0 && geteuid() != 0 &&
+        getxattr(path, "security.capability", NULL, 0) <= 0) {
+        int par = 2;
+        FILE *f = fopen("/proc/sys/kernel/perf_event_paranoid", "r");
+        if (f) { if (fscanf(f, "%d", &par) != 1) par = 2; fclose(f); }
+        if (par > 0) {
+            snprintf(g_reason, sizeof(g_reason),
+                     "helper %.200s has no CAP_PERFMON (perf_event_paranoid=%d): "
+                     "sudo setcap cap_perfmon+ep <path> (make nodemon-setcap)", path, par);
+            return;
+        }
     }
 
     int pin[2], pout[2];
