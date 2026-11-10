@@ -190,8 +190,15 @@ if [ $SUDO = 1 ]; then
     fi
     printf '\nsetcap on the repository filesystem (%s):\n' "$PWD"
     findmnt -no FSTYPE,OPTIONS -T "$PWD"
-    cp "$TMP/stream" "./.cap_probe_$$" 2>/dev/null && \
-      { sudo -n setcap cap_perfmon+ep "./.cap_probe_$$" 2>&1 && getcap "./.cap_probe_$$"; rm -f "./.cap_probe_$$"; }
+    # store AND use: a capability-holding copy of perf on this filesystem,
+    # run as you (a mount with nosuid, or a filesystem without xattrs,
+    # would store or honour nothing)
+    G="./.cap_perf_$$"
+    if cp "$(command -v perf)" "$G" 2>/dev/null && chmod 755 "$G" && sudo -n setcap cap_perfmon+ep "$G" 2>&1; then
+      run getcap "$G"
+      run "$G" stat -a -e "$U0/umc_cas_cmd.rd/,power/energy-pkg/" -- "$S"
+    fi
+    sudo -n rm -f "$G"
     sudo -n rm -f "$TMP/perf"
   fi
 fi
