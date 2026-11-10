@@ -637,6 +637,10 @@ What a snapshot contains so far:
     `MINIPROF_OMPT=0` to leave OpenMP alone. A process has one OMPT
     tool: if another tool is already listed in `OMP_TOOL_LIBRARIES` and
     accepts, it wins and the block reports why OpenMP was not measured.
+  - the first parallel region of a run includes the runtime creating
+    its worker threads, which they finish at different times, so it can
+    show imbalance even if its work is balanced (~27 ms and 6-11% on a
+    256-CPU Zen 4 node)
   - validation: `make run-omp-validate` injects serial time, balanced and
     imbalanced regions, a contended critical section and an imbalanced
     static loop; imbalance per region is within 3 points of the analytic
@@ -674,6 +678,7 @@ launcher's environment-passing convention).
 | `MINIPROF_OMPT` | snapshot | `1` | `0` disables OpenMP measurement (OMPT) |
 | `MINIPROF_OMPT_DEBUG` | snapshot | unset | Set to trace every OMPT callback on stderr (debugging only; very verbose) |
 | `MINIPROF_COUNTERS_SPLIT` | snapshot | `1` | `0` stops reading counters at MPI calls: no inside/outside-MPI split, but no per-call cost either |
+| `MINIPROF_ADDR2LINE` | all | `addr2line` | addr2line used for file:line. When GNU addr2line returns no line (binutils 2.35 on RHEL/Rocky 9 cannot read every DWARF 5 line table that AOCC/clang emit), miniprof retries with `llvm-addr2line` if it is on `PATH`; setting this variable disables that retry |
 | `MINIPROF_SNAPSHOT_OUTPUT` | snapshot | `miniprof_snapshot.json` | Snapshot JSON path |
 | `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
 | `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |

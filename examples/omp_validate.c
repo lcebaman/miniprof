@@ -4,6 +4,13 @@
  * Phases (each in its own noinline function, so OMPT regions get distinct
  * names), with T OpenMP threads per rank:
  *
+ *   warmup_phase      parallel: every thread spins WARM_MS. The runtime
+ *                     creates its worker threads at the first parallel
+ *                     region (and miniprof opens their counters), so the
+ *                     first region carries a start-up cost that threads
+ *                     pay at different times — on a 256-CPU Zen 4 node,
+ *                     ~27 ms and 6-11% apparent imbalance. Real, but not
+ *                     what the phases below test; not validated.
  *   serial_phase      main thread spins SERIAL_MS outside any parallel region
  *   balanced_phase    parallel: every thread spins BAL_MS
  *                     → imbalance ~0
@@ -42,6 +49,7 @@
 #define CRIT_MS      2.0
 #define CRIT_ITERS  20
 #define LOOP_MS      5.0
+#define WARM_MS     20.0
 #define NO_TAIL_CALL() __asm__ volatile("" ::: "memory")
 
 static double now(void)
@@ -59,6 +67,13 @@ static void spin_ms(double ms)
 }
 
 __attribute__((noinline)) static void serial_phase(void) { spin_ms(SERIAL_MS); NO_TAIL_CALL(); }
+
+__attribute__((noinline)) static void warmup_phase(void)
+{
+#pragma omp parallel
+    spin_ms(WARM_MS);
+    NO_TAIL_CALL();
+}
 
 __attribute__((noinline)) static void balanced_phase(void)
 {
@@ -100,11 +115,18 @@ int main(int argc, char **argv)
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
 
-    serial_phase();
-    balanced_phase();
-    imbalanced_phase();
-    critical_phase();
-    loop_phase();
+    /* phase wall times as the program sees them, for comparison with the
+     * snapshot (and with MINIPROF_MODE=off, to isolate miniprof's cost) */
+    static const char *names[] = { "warmup", "serial", "balanced", "imbalanced",
+                                   "critical", "loop" };
+    void (*phases[])(void) = { warmup_phase, serial_phase, balanced_phase,
+                               imbalanced_phase, critical_phase, loop_phase };
+    double ms[6];
+    for (int k = 0; k < 6; k++) {
+        double t0 = now();
+        phases[k]();
+        ms[k] = (now() - t0) * 1e3;
+    }
 
     int one = 1, sum = 0;
     MPI_Allreduce(&one, &sum, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
@@ -112,6 +134,11 @@ int main(int argc, char **argv)
         printf("omp_validate: %d ranks x %d threads, serial %.0f ms, bal %.0f ms, "
                "imbalanced %.0f+t*%.0f ms\n", sum, omp_get_max_threads(),
                SERIAL_MS, BAL_MS, BASE_MS, DELTA_MS);
+    if (rank == 0) {
+        printf("omp_validate: rank 0 phase wall (ms):");
+        for (int k = 0; k < 6; k++) printf(" %s %.1f", names[k], ms[k]);
+        printf("\n");
+    }
     MPI_Finalize();
     return 0;
 }
