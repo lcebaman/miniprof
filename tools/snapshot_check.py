@@ -92,6 +92,15 @@ def main() -> int:
     check(not missing, f"all metric blocks present in schema (missing: {missing or 'none'})")
     for k in metrics.get("collected", []):
         check(metrics.get(k) is not None, f"collected block {k!r} is non-null")
+    omp = metrics.get("openmp")
+    if isinstance(omp, dict):
+        check(isinstance(omp.get("available"), bool), "openmp.available is a bool")
+        if omp.get("available"):
+            check(all(k in omp for k in ("threads", "parallel_s", "serial_s", "thread_time_s",
+                                         "imbalance_pct", "regions")),
+                  "openmp has threads/parallel_s/serial_s/thread_time_s/imbalance_pct/regions")
+        else:
+            check(bool(omp.get("reason")), "openmp.reason explains why it is unavailable")
 
     print(f"\n{'ALL SNAPSHOT CHECKS PASSED' if failures == 0 else f'{failures} SNAPSHOT CHECK(S) FAILED'}")
     return 0 if failures == 0 else 1

@@ -19,9 +19,13 @@
  * Threads: the MPI_Init thread opens its group at init; threads created
  * afterwards open theirs at start via a pthread_create interposer; any
  * other thread opens lazily the first time it reaches a boundary.
- * Threads that existed before MPI_Init and never call MPI or a region
- * are not counted (OpenMP pools created before MPI_Init — phase P2's OMPT
- * hooks cover those).
+ * Threads that existed before MPI_Init are attached by thread id when
+ * counters start, if the OMPT tool (ompt.c) reported them; other
+ * pre-MPI_Init threads that never call MPI or a region are not counted.
+ *
+ * MINIPROF_COUNTERS_SPLIT=0 skips the reads at MPI calls (no compute/MPI
+ * split, every count lands in "compute"): for sites where rdpmc is
+ * disabled and each read() costs microseconds. Regions still read.
  */
 
 #include <stdint.h>
@@ -103,9 +107,16 @@ typedef struct {
 /* Final read of every thread on this rank; fills *out. */
 void cnt_collect(cnt_result_t *out);
 
+/* Called by the OMPT tool when an OpenMP thread starts. If counters are
+ * running, opens the calling thread's group now; otherwise remembers the
+ * thread so cnt_init() can attach to it (OpenMP pools created before
+ * MPI_Init). Safe to call from any thread, any time. */
+void cnt_thread_hook(void);
+
 /* ── boundaries (hot path: called from MPI wrappers) ─────────────────── */
 void cnt_mpi_enter(void);
 void cnt_mpi_exit(void);
+int  cnt_split_enabled(void);   /* 0 if MINIPROF_COUNTERS_SPLIT=0 */
 
 /* ── user regions ────────────────────────────────────────────────────── */
 #define CNT_MAX_REGIONS   64

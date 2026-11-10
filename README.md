@@ -269,6 +269,8 @@ Build all three sample and trace variants with `make examples`.
 | `make overhead-3d` | Wall-clock overhead of snapshot mode vs `MINIPROF_MODE=off` (informational) |
 | `make run-imbalance-validate` | Snapshot known-answer test: injected imbalance, trace cross-check, exact I/O counts |
 | `make run-counters-validate` | Snapshot hardware counters: exact region FLOPs, threads, compute/MPI split (SKIP without a PMU) |
+| `make run-omp-validate` | Snapshot OpenMP (OMPT): per-region imbalance, team size, serial time and lock wait vs injected values (SKIP under GCC libgomp; build with `OMPI_CC=clang` or AOCC) |
+| `make test-ompt-abi` | miniprof's built-in OMPT definitions vs the compiler's `<omp-tools.h>` (compile-time) |
 | `make run-fortran-sentinels` | Fortran `MPI_IN_PLACE`/`MPI_STATUS_IGNORE` results correct in every mode |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
 | `make clean` | Remove build artifacts and reports |
@@ -617,6 +619,29 @@ What a snapshot contains so far:
     MINIPROF_REGION_BEGIN('name')`) to get calls, time and counters per
     region, reduced across ranks. No-ops outside snapshot mode
 
+- **metrics.openmp** (OpenMP, through the OMPT tools interface):
+  - serial time (outside any parallel region, on the initial thread) and
+    parallel time per rank
+  - thread time split into work, barrier wait (explicit barriers and the
+    implicit ones at the end of worksharing loops and parallel regions),
+    lock wait (`critical`, `omp_set_lock`, ...) and taskwait
+  - imbalance = barrier wait ÷ team thread time, overall and per parallel
+    region; each region is named after the function containing it, with
+    file:line when the binary has `-g`, and reduced across ranks
+  - needs an OpenMP runtime with OMPT: LLVM `libomp` (clang, AOCC) or
+    Intel's `libiomp5` (ICX). GCC's
+    `libgomp` has no OMPT; the block then says `available: false` with
+    the reason, and everything else in the snapshot is unaffected.
+    miniprof registers itself as the OMPT tool by setting
+    `OMP_TOOL_LIBRARIES` at load time, so no extra step is needed; set
+    `MINIPROF_OMPT=0` to leave OpenMP alone. A process has one OMPT
+    tool: if another tool is already listed in `OMP_TOOL_LIBRARIES` and
+    accepts, it wins and the block reports why OpenMP was not measured.
+  - validation: `make run-omp-validate` injects serial time, balanced and
+    imbalanced regions, a contended critical section and an imbalanced
+    static loop; imbalance per region is within 3 points of the analytic
+    value, wall times within 5%
+
 `topdown`, `memory` and `roofline` are still `null`; they arrive in later
 phases. `MINIPROF_SNAPSHOT=topdown` and `full` currently collect the
 `basic` group.
@@ -646,6 +671,9 @@ launcher's environment-passing convention).
 |---|---|---|---|
 | `MINIPROF_MODE` | all | `sample` | `sample`, `trace`, `snapshot`, or `off` (library loaded but inactive) |
 | `MINIPROF_SNAPSHOT` | snapshot | `basic` | Counter groups to collect: `basic`, `topdown`, `roofline`, or `full` |
+| `MINIPROF_OMPT` | snapshot | `1` | `0` disables OpenMP measurement (OMPT) |
+| `MINIPROF_OMPT_DEBUG` | snapshot | unset | Set to trace every OMPT callback on stderr (debugging only; very verbose) |
+| `MINIPROF_COUNTERS_SPLIT` | snapshot | `1` | `0` stops reading counters at MPI calls: no inside/outside-MPI split, but no per-call cost either |
 | `MINIPROF_SNAPSHOT_OUTPUT` | snapshot | `miniprof_snapshot.json` | Snapshot JSON path |
 | `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
 | `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |

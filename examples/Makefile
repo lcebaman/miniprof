@@ -59,7 +59,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate
 
 all: $(EXAMPLES)
 
@@ -121,6 +121,13 @@ mpi_percall: mpi_percall.c $(LIB)
 counters_validate: counters_validate.c $(LIB)
 	$(CC) $(CFLAGS) -pthread $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Known-answer MPI+OpenMP workload for snapshot-mode OMPT (P2). OMPT needs
+# an LLVM-family OpenMP runtime (clang, AOCC, ICX); with GCC's libgomp it
+# builds and runs, and the validator reports SKIP.
+OMP_FLAG ?= -fopenmp
+omp_validate: omp_validate.c $(LIB)
+	$(CC) $(CFLAGS) $(OMP_FLAG) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 # Regression test for Fortran MPI sentinels (MPI_IN_PLACE,
 # MPI_STATUS(ES)_IGNORE) passing through the Fortran wrappers intact.
 fortran_sentinels: fortran_sentinels.f90 $(LIB)
@@ -129,4 +136,4 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
 	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
-	      counters_validate mpi_percall
+	      counters_validate mpi_percall omp_validate

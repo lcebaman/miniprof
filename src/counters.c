@@ -157,6 +157,7 @@ typedef struct {
     int      depth;
     region_frame_t stack[CNT_REGION_DEPTH];
     uint64_t n_rdpmc, n_syscall;       /* which read path boundaries took */
+    pid_t    tid;                      /* kernel thread id the group counts */
 } thread_slot_t;
 
 static thread_slot_t g_slots[CNT_MAX_THREADS];
@@ -170,6 +171,7 @@ static int  g_nev = 0;           /* events in use (required [+ optional]) */
 static int  g_active = 0;        /* counting enabled                      */
 static int  g_regions_on = 0;    /* regions record time even w/o counters */
 static int  g_use_rdpmc = 0;
+static int  g_split = 1;         /* reads at MPI calls (compute/MPI split) */
 static char g_reason[160] = "";
 static long g_pagesize = 4096;
 static thread_slot_t *g_main_slot = NULL;
@@ -183,10 +185,12 @@ static inline uint64_t now_ns(void)
 
 /* ── perf plumbing ───────────────────────────────────────────────────── */
 
-static long sys_perf_event_open(struct perf_event_attr *a, int group_fd)
+static long sys_perf_event_open(struct perf_event_attr *a, pid_t pid, int group_fd)
 {
-    return syscall(__NR_perf_event_open, a, 0 /* this thread */, -1, group_fd, 0);
+    return syscall(__NR_perf_event_open, a, pid /* 0 = this thread */, -1, group_fd, 0);
 }
+
+static inline pid_t my_tid(void) { return (pid_t)syscall(SYS_gettid); }
 
 static void close_slot(thread_slot_t *s, int n)
 {
@@ -202,7 +206,7 @@ static void close_slot(thread_slot_t *s, int n)
  * first. Returns 0 or -errno. */
 static int g_fail_index = -1;   /* index of the event that failed to open */
 
-static int open_events(thread_slot_t *s, int n)
+static int open_events_pid(thread_slot_t *s, int n, pid_t pid)
 {
     for (int i = 0; i < CNT_MAX_EVENTS; i++) { s->fd[i] = -1; s->pg[i] = NULL; }
     for (int i = 0; i < n; i++) {
@@ -216,7 +220,7 @@ static int open_events(thread_slot_t *s, int n)
         a.exclude_hv     = 1;
         a.read_format    = PERF_FORMAT_GROUP | PERF_FORMAT_TOTAL_TIME_ENABLED |
                            PERF_FORMAT_TOTAL_TIME_RUNNING;
-        int fd = (int)sys_perf_event_open(&a, i == 0 ? -1 : s->fd[0]);
+        int fd = (int)sys_perf_event_open(&a, pid, i == 0 ? -1 : s->fd[0]);
         if (fd < 0) { int e = errno; close_slot(s, i); g_fail_index = i; return -e; }
         s->fd[i] = fd;
         if (g_use_rdpmc) {
@@ -230,6 +234,8 @@ static int open_events(thread_slot_t *s, int n)
     }
     return 0;
 }
+
+static int open_events(thread_slot_t *s, int n) { return open_events_pid(s, n, 0); }
 
 typedef struct {
     uint64_t nr, time_enabled, time_running;
@@ -299,10 +305,23 @@ static int read_now(thread_slot_t *s, uint64_t *v)
 
 /* ── thread slots ────────────────────────────────────────────────────── */
 
+/* slot already opened for this kernel thread (attached at init)? */
+static thread_slot_t *slot_by_tid(pid_t tid)
+{
+    int n = __atomic_load_n(&g_nslots, __ATOMIC_ACQUIRE);
+    if (n > CNT_MAX_THREADS) n = CNT_MAX_THREADS;
+    for (int i = 0; i < n; i++)
+        if (g_slots[i].tid == tid && g_slots[i].fd[0] >= 0) return &g_slots[i];
+    return NULL;
+}
+
 static thread_slot_t *thread_open(void)
 {
     if (t_slot) return t_slot;
     if (!g_active || t_open_failed) return NULL;
+    pid_t tid = my_tid();
+    thread_slot_t *found = slot_by_tid(tid);
+    if (found) { t_slot = found; return found; }
     int idx = __atomic_fetch_add(&g_nslots, 1, __ATOMIC_ACQ_REL);
     if (idx >= CNT_MAX_THREADS) {
         __atomic_fetch_add(&g_dropped, 1, __ATOMIC_RELAXED);
@@ -316,9 +335,46 @@ static thread_slot_t *thread_open(void)
         t_open_failed = 1;
         return NULL;
     }
+    s->tid = tid;
     read_now(s, s->last);
     t_slot = s;
     return s;
+}
+
+/* ── threads that started before counters (OpenMP pools) ─────────────── */
+
+#define CNT_MAX_PENDING 1024
+static pid_t g_pending[CNT_MAX_PENDING];
+static int   g_npending = 0;
+
+void cnt_thread_hook(void)
+{
+    if (g_active) { thread_open(); return; }
+    int i = __atomic_fetch_add(&g_npending, 1, __ATOMIC_ACQ_REL);
+    if (i < CNT_MAX_PENDING) g_pending[i] = my_tid();
+}
+
+/* Open groups for remembered threads from the init thread (perf allows
+ * counting another thread of the same process). Their reads at region
+ * boundaries still use rdpmc from their own thread, via slot_by_tid. */
+static void attach_pending(void)
+{
+    int n = __atomic_load_n(&g_npending, __ATOMIC_ACQUIRE);
+    if (n > CNT_MAX_PENDING) n = CNT_MAX_PENDING;
+    pid_t self = my_tid();
+    for (int i = 0; i < n; i++) {
+        pid_t tid = g_pending[i];
+        if (tid == self || slot_by_tid(tid)) continue;
+        int idx = __atomic_fetch_add(&g_nslots, 1, __ATOMIC_ACQ_REL);
+        if (idx >= CNT_MAX_THREADS) { __atomic_fetch_add(&g_dropped, 1, __ATOMIC_RELAXED); return; }
+        thread_slot_t *s = &g_slots[idx];
+        memset(s, 0, sizeof(*s));
+        if (open_events_pid(s, g_nev, tid) != 0) continue;   /* thread gone: skip */
+        s->tid = tid;
+        group_read_t g;
+        if (read_group(s, &g) == 0)
+            for (int e = 0; e < g_nev; e++) s->last[e] = g.v[e];
+    }
 }
 
 /* ── pthread_create interposer: threads started after init count from
@@ -427,6 +483,9 @@ int cnt_init(const char *uarch, const char *group)
         snprintf(g_reason, sizeof(g_reason), "could not open counters on the main thread");
         return 0;
     }
+    attach_pending();
+    const char *split = getenv("MINIPROF_COUNTERS_SPLIT");
+    g_split = !(split && strcmp(split, "0") == 0);
     return 1;
 }
 
@@ -454,8 +513,10 @@ static inline void boundary(int entering_mpi)
     s->in_mpi = entering_mpi;
 }
 
-void cnt_mpi_enter(void) { if (g_active) boundary(1); }
-void cnt_mpi_exit(void)  { if (g_active) boundary(0); }
+void cnt_mpi_enter(void) { if (g_active && g_split) boundary(1); }
+void cnt_mpi_exit(void)  { if (g_active && g_split) boundary(0); }
+
+int cnt_split_enabled(void) { return g_split; }
 
 /* ── regions ─────────────────────────────────────────────────────────── */
 
