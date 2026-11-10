@@ -112,8 +112,10 @@ if command -v numactl >/dev/null && [ "$(ls -d /sys/devices/system/node/node[0-9
     MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT="$J" \
       $LAUNCH 1 numactl --cpunodebind=0 --membind=$mem ./examples/counters_validate 33554432 4 >/dev/null 2>&1
     python3 -c "import json; d=json.load(open('$J'))['metrics']['counters']['derived']; \
-print('cpu node 0, memory node $mem: remote_dram_fill_pct=%.1f  dram_fill_gb_per_s=%.2f' % \
-(d.get('remote_dram_fill_pct', -1), d.get('dram_fill_gb_per_s', -1)))" 2>&1
+r=d.get('remote_dram_fill_pct'); \
+print('cpu node 0, memory node $mem: ' + ('remote_dram_fill_pct=%.1f' % r if r is not None else \
+'remote fills not counted (optional event dropped to fit the PMU, e.g. NMI watchdog)') + \
+'  dram_fill_gb_per_s=%.2f' % d.get('dram_fill_gb_per_s', -1))" 2>&1
   done
 else
   echo "skipped (numactl missing or single NUMA node)"

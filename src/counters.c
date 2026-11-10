@@ -72,6 +72,16 @@ static const cnt_group_t k_groups[] = {
         { CK_DRAM_FILLS_REMOTE, "ls_any_fills_from_sys.dram_io_far",  RAW(0x044, 0x40) },
         { CK_L2_MISSES,         "l2_cache_req_stat.ic_dc_miss_in_l2", RAW(0x064, 0x09) },
     } },
+    /* Zen 5 FLOP precision split, for the roofline group (P6). The precision
+     * field (umask bits 7:5) only filters: it must be combined with the
+     * op-type bits 3:0. Measured on EPYC 9555 (perf 5.14 RHEL 9.7), the
+     * four variants below sum exactly to .all (0x0f); the kernel JSON's
+     * 0x40/0x60/0x80/0xa0 count nothing:
+     *   0x4f scalar single   0x6f packed single
+     *   0x8f scalar double   0xaf packed double
+     * Each is a two-counter event, so at most two fit in one group with
+     * the NMI watchdog on. Zen 4 has no precision field. */
+
     /* vector: FP ops by width (one counter each) + cycles = 5 counters,
      * fits with the watchdog on. FLOPs (2 counters) would not fit with
      * all four widths; they come from the base group. */

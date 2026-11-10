@@ -82,7 +82,7 @@ def report(doc: dict, args) -> str:
     comp = par["compute"]
     mpi = par["mpi"]
     io = par["io"]
-    cpuu = par["cpu"]["utilisation_pct"]
+    cpuu = par["cpu"].get("utilisation_per_core_pct") or par["cpu"]["utilisation_pct"]
     p("")
     p(f" Compute imbalance     {comp['imbalance_pct']:5.1f}%   "
       f"(perfect balance would save {comp['imbalance_cost_pct']:.1f}% of elapsed)")
@@ -92,7 +92,8 @@ def report(doc: dict, args) -> str:
         p(f"   slowest ranks       {slow}")
     p(f" MPI time imbalance    {mpi['imbalance_pct']:5.1f}%   "
       f"(min {human_time(mpi['time_s']['min'])}, max {human_time(mpi['time_s']['max'])})")
-    p(f" CPU utilisation       {cpuu['avg']:5.1f}%   (min {cpuu['min']:.1f}%, max {cpuu['max']:.1f}%)")
+    p(f" CPU utilisation       {cpuu['avg']:5.1f}%   (min {cpuu['min']:.1f}%, max {cpuu['max']:.1f}%; "
+      "per physical core)")
 
     # MPI detail
     funcs = mpi.get("by_function", [])
@@ -197,7 +198,7 @@ def report(doc: dict, args) -> str:
         obs.append(f"I/O takes {split['io']:.1f}% of the run (> {args.io_pct:g}%).")
     if cpuu["avg"] < args.cpu_util_pct:
         obs.append(f"CPU utilisation is {cpuu['avg']:.1f}% (< {args.cpu_util_pct:g}%): "
-                   "ranks may be bound to more CPUs than they use, or be idle/blocked.")
+                   "ranks may be bound to more cores than they use, or be idle/blocked.")
     rem = cd.get("remote_dram_fill_pct")
     if rem is not None and rem > args.remote_pct:
         obs.append(f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
