@@ -74,6 +74,7 @@ typedef struct {
     double mpi_s, io_s, compute_s;
     double class_s[MPIC_COUNT];
     double cpu_user_s, cpu_sys_s, cpu_util;   /* util: fraction of allowed CPUs */
+    double cpu_util_core;                     /* ... of allowed physical cores  */
     long   max_rss_kb, vcsw, ivcsw;
     uint64_t f_calls[MPIF_COUNT], f_bytes[MPIF_COUNT], f_ns[MPIF_COUNT];
     io_snap_t io;
@@ -271,12 +272,14 @@ static void write_rank(jw_t *w, const rank_rec_t *rr)
     jw_int(w, "node", rr->node_index);
     jw_int(w, "pid", rr->info.pid);
     jw_int_or_null(w, "cpus_allowed", rr->info.cpus_allowed);
+    jw_int_or_null(w, "cores_allowed", rr->info.cores_allowed);
     jw_str_or_null(w, "cpus_allowed_list", rr->info.cpus_allowed_list);
     jw_dbl(w, "elapsed_s", rr->elapsed_s);
     jw_dbl(w, "compute_s", rr->compute_s);
     jw_dbl(w, "mpi_s", rr->mpi_s);
     jw_dbl(w, "io_s", rr->io_s);
     jw_dbl(w, "cpu_util_pct", 100.0 * rr->cpu_util);
+    jw_dbl(w, "cpu_util_per_core_pct", 100.0 * rr->cpu_util_core);
     jw_end_obj(w);
 }
 
@@ -321,6 +324,7 @@ static double g_io      (const rank_rec_t *r, int a) { (void)a; return r->io_s; 
 static double g_class   (const rank_rec_t *r, int c) { return r->class_s[c]; }
 static double g_func_s  (const rank_rec_t *r, int f) { return r->f_ns[f] * 1e-9; }
 static double g_cpu_util(const rank_rec_t *r, int a) { (void)a; return 100.0 * r->cpu_util; }
+static double g_cpu_util_core(const rank_rec_t *r, int a) { (void)a; return 100.0 * r->cpu_util_core; }
 static double g_cpu_user(const rank_rec_t *r, int a) { (void)a; return r->cpu_user_s; }
 static double g_cpu_sys (const rank_rec_t *r, int a) { (void)a; return r->cpu_sys_s; }
 static double g_rss_mb  (const rank_rec_t *r, int a) { (void)a; return r->max_rss_kb / 1024.0; }
@@ -509,13 +513,16 @@ static void write_parallel(jw_t *w, const rank_rec_t *r, int n, const mpi_snap_t
     for (int i = 0; i < n; i++) { vcsw += r[i].vcsw; ivcsw += r[i].ivcsw; }
     jw_begin_obj(w, "cpu");
     jw_stat(w, "utilisation_pct", stats(r, n, g_cpu_util, 0));
+    jw_stat(w, "utilisation_per_core_pct", stats(r, n, g_cpu_util_core, 0));
     jw_stat(w, "user_s", stats(r, n, g_cpu_user, 0));
     jw_stat(w, "sys_s",  stats(r, n, g_cpu_sys, 0));
     jw_stat(w, "max_rss_mb", stats(r, n, g_rss_mb, 0));
     jw_int(w, "voluntary_ctx_switches", vcsw);
     jw_int(w, "involuntary_ctx_switches", ivcsw);
-    jw_str(w, "note", "utilisation = CPU time / (elapsed x CPUs the rank may run on); "
-                      "MPI libraries usually busy-poll while waiting, so MPI time counts as busy");
+    jw_str(w, "note", "utilisation = CPU time / (elapsed x hardware threads the rank may run "
+                      "on); per_core uses physical cores instead, which is the meaningful one "
+                      "when a rank is bound to a whole SMT core. MPI libraries usually "
+                      "busy-poll while waiting, so MPI time counts as busy");
     jw_end_obj(w);
 
     jw_end_obj(w);   /* parallel */
@@ -887,6 +894,9 @@ static void collect_parallel(rank_rec_t *r, double elapsed_s, mpi_snap_t *snap)
     int ncpu = r->info.cpus_allowed > 0 ? r->info.cpus_allowed : 1;
     r->cpu_util = elapsed_s > 0
                 ? (r->cpu_user_s + r->cpu_sys_s) / (elapsed_s * ncpu) : 0.0;
+    int ncore = r->info.cores_allowed > 0 ? r->info.cores_allowed : ncpu;
+    r->cpu_util_core = elapsed_s > 0
+                ? (r->cpu_user_s + r->cpu_sys_s) / (elapsed_s * ncore) : 0.0;
 
     double mpi = 0.0;
     for (int f = 0; f < MPIF_COUNT; f++) {

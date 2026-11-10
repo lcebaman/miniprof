@@ -45,6 +45,7 @@ typedef struct {
 typedef struct {
     int  pid;
     int  cpus_allowed;                 /* popcount of sched_getaffinity mask    */
+    int  cores_allowed;                /* distinct physical cores in that mask  */
     char cpus_allowed_list[128];       /* "0-3,64-67" style, truncated with ... */
 } sysinfo_rank_t;
 

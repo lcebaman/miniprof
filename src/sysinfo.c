@@ -188,12 +188,35 @@ void sysinfo_collect_rank(sysinfo_rank_t *r)
     memset(r, 0, sizeof(*r));
     r->pid = (int)getpid();
     r->cpus_allowed = -1;
+    r->cores_allowed = -1;
 
     cpu_set_t set;
     CPU_ZERO(&set);
     if (sched_getaffinity(0, sizeof(set), &set) != 0) return;
 
     r->cpus_allowed = CPU_COUNT(&set);
+
+    /* Physical cores = distinct (package, core_id) pairs in the mask. With
+     * SMT on, launchers usually bind a rank to a whole core (2 hardware
+     * threads), so utilisation against hardware threads would read ~50%
+     * for a fully busy single-threaded rank. */
+    {
+        int pk[CPU_SETSIZE], co[CPU_SETSIZE], n = 0, ok = 1;
+        for (int cpu = 0; cpu < CPU_SETSIZE && ok; cpu++) {
+            if (!CPU_ISSET(cpu, &set)) continue;
+            char path[96];
+            snprintf(path, sizeof(path),
+                     "/sys/devices/system/cpu/cpu%d/topology/physical_package_id", cpu);
+            int p = read_int_file(path, -1);
+            snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
+            int c = read_int_file(path, -1);
+            if (p < 0 || c < 0) { ok = 0; break; }
+            int dup = 0;
+            for (int i = 0; i < n && !dup; i++) dup = (pk[i] == p && co[i] == c);
+            if (!dup) { pk[n] = p; co[n] = c; n++; }
+        }
+        r->cores_allowed = ok ? n : -1;
+    }
 
     /* Compact range list, e.g. "0-3,64-67". Truncated with "..." if it
      * doesn't fit — the count above stays exact either way. */

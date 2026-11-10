@@ -44,7 +44,11 @@ static void daxpy(double a, const double *x, double *y, long n, int reps)
         for (long i = 0; i < n; i++) y[i] = a * x[i] + y[i];
 }
 
+#if defined(__clang__)
+__attribute__((noinline))
+#else
 __attribute__((noinline, optimize("no-tree-vectorize")))
+#endif
 static double dot_scalar(const double *x, const double *y, long n, int reps)
 {
     double s = 0.0;
