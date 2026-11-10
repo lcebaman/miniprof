@@ -654,6 +654,10 @@ What a snapshot contains so far:
     backend bound, retiring (and SMT contention when a counter is free);
     level 2 frontend latency/bandwidth, mispredicts/pipeline restarts,
     backend memory/cpu, retiring fast path/microcode
+  - reading it on Zen: bad speculation counts only the squashed ops; the
+    refetch bubble after a mispredict shows as frontend bound (latency),
+    so very branchy code looks frontend bound. Level 1 can sum to less
+    than 100% in strongly latency-bound code (a pointer chase: ~85%)
   - reported outside MPI (`compute`, the application's own code), inside
     MPI (`mpi`, mostly the library polling), and per user region
   - the 12 events do not fit in one thread's 5 free counters, so they are

@@ -994,7 +994,11 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
     jw_str(w, "mpi", "inside MPI calls: mostly the MPI library polling for progress");
     jw_str(w, "frontend_bound", "slots left empty because the frontend delivered no ops "
                                 "(instruction fetch/decode)");
-    jw_str(w, "bad_speculation", "slots used by ops that were later squashed");
+    jw_str(w, "bad_speculation", "slots used by ops that were later squashed; the refetch "
+                                 "bubble after a mispredict counts as frontend_bound "
+                                 "(mostly frontend_latency)");
+    jw_str(w, "level1_sum", "level 1 need not sum to 100: in strongly latency-bound code "
+                            "some empty slots are not attributed to any category");
     jw_str(w, "backend_bound", "slots left empty because the backend was full "
                                "(waiting on memory or execution resources)");
     jw_str(w, "retiring", "slots used by ops that retired: useful work");
