@@ -92,6 +92,14 @@ def main() -> int:
     check(not missing, f"all metric blocks present in schema (missing: {missing or 'none'})")
     for k in metrics.get("collected", []):
         check(metrics.get(k) is not None, f"collected block {k!r} is non-null")
+    mem = metrics.get("memory")
+    if isinstance(mem, dict):
+        check(isinstance(mem.get("available"), bool), "memory.available is a bool")
+        if mem.get("available"):
+            check(all(k in mem for k in ("nodes", "per_node", "interval_ms")),
+                  "memory has nodes/per_node/interval_ms")
+        else:
+            check(bool(mem.get("reason")), "memory.reason explains why it is unavailable")
     omp = metrics.get("openmp")
     if isinstance(omp, dict):
         check(isinstance(omp.get("available"), bool), "openmp.available is a bool")

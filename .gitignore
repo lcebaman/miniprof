@@ -30,3 +30,5 @@ examples/omp_validate
 examples/omp_validate_clang
 examples/omp_validate_gcc
 examples/topdown_validate
+examples/membw_validate
+miniprof-nodemon

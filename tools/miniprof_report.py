@@ -184,6 +184,31 @@ def report(doc: dict, args) -> str:
                 p(f"   {r['name'][:20]:<20} {r['calls']:>6}  {human_time(r['time_s']['avg']):>10}  {gf}  {ipc}")
             p("   (time/rank is summed over a rank's threads for regions entered on several threads)")
 
+    # memory (socket-level counters)
+    mem = (doc.get("metrics") or {}).get("memory")
+    if mem:
+        p("")
+        if not mem.get("available"):
+            p(f" Memory (node)          not measured: {mem.get('reason')}")
+        else:
+            pn = mem["per_node"]
+            p(f" Memory (node)          {mem['nodes_measured']} node(s), whole-node DRAM traffic"
+              + (f"; {mem['nodes_without']} node(s) without: {mem.get('reason_missing')}" if mem.get("nodes_without") else ""))
+            p(f"   DRAM bandwidth      read {pn['read_gb_s']['avg']:.1f} + write {pn['write_gb_s']['avg']:.1f} GB/s "
+              f"per node (avg); peak {pn['peak_gb_s_max']:.1f} GB/s over {mem['interval_ms']} ms")
+            if mem["nodes_measured"] > 1:
+                p(f"   all nodes           {mem['total_gb_s_all_nodes']:.1f} GB/s; per node "
+                  f"min {pn['total_gb_s']['min']:.1f} / max {pn['total_gb_s']['max']:.1f}")
+            p(f"   Remote-socket reads {mem['remote_read_share_pct_avg']:5.1f}%  of socket reads (NUMA placement)")
+            p(f"   Package power       {pn['power_w_avg']:.0f} W per node, {mem['energy_j_all_nodes'] / 1e3:.2f} kJ in total")
+            n0 = mem["nodes"][0]
+            for so in n0["sockets"]:
+                ch = so["channels"]
+                p(f"   {n0.get('hostname') or 'node 0'} socket {so['socket']}: read {so['read_gb_s']:.1f} "
+                  f"(peak {so['peak_read_gb_s']:.1f}), write {so['write_gb_s']:.1f} GB/s, "
+                  f"{ch['active']}/{ch['count']} channels active, remote {so['remote_read_share_pct']:.0f}%, "
+                  f"{so['power_w']:.0f} W")
+
     # top-down
     td = (doc.get("metrics") or {}).get("topdown")
     tdc = {}
@@ -295,6 +320,16 @@ def report(doc: dict, args) -> str:
         if tdc.get("bad_speculation", 0) > args.td_badspec_pct:
             obs.append(f"Bad speculation {tdc['bad_speculation']:.1f}% (> {args.td_badspec_pct:g}%): "
                        "branch mispredictions or pipeline restarts.")
+    if mem and mem.get("available"):
+        if mem["remote_read_share_pct_avg"] > args.remote_pct:
+            obs.append(f"{mem['remote_read_share_pct_avg']:.1f}% of DRAM reads cross sockets (> {args.remote_pct:g}%): "
+                       "check binding and first-touch initialisation.")
+        for so in mem["nodes"][0]["sockets"]:
+            ch = so["channels"]
+            if so["read_gb_s"] > 1 and ch["count"] and ch["active"] < ch["count"] / 2:
+                obs.append(f"Socket {so['socket']} of node 0 uses {ch['active']} of {ch['count']} memory "
+                           "channels: memory is concentrated in a few NUMA domains (placement, or NPS mode).")
+                break
     rem = cd.get("remote_dram_fill_pct")
     if rem is not None and rem > args.remote_pct:
         obs.append(f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
