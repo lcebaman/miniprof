@@ -97,8 +97,9 @@ def main() -> int:
         check(lock < 1.0, f"lock wait {lock:.2f} ms/rank ~ 0 with one thread")
 
     if any("location" not in r for r in regions.values()):
-        print("  note  regions without file:line: is llvm-addr2line on PATH? "
-              "(old GNU addr2line cannot read clang's DWARF 5; see MINIPROF_ADDR2LINE)")
+        print("  note  regions without file:line: old GNU addr2line cannot read clang's "
+              "DWARF 5; put llvm-symbolizer, llvm-addr2line or eu-addr2line on PATH "
+              "(see MINIPROF_ADDR2LINE)")
     print("PASS" if not fails else f"FAIL ({len(fails)} checks)")
     return 0 if not fails else 1
 

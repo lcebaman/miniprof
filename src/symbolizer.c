@@ -147,17 +147,31 @@ static int on_path(const char *prog)
     return 0;
 }
 
-/* File:line with llvm-addr2line for symbols GNU addr2line left without
- * one. Old binutils (2.35, RHEL/Rocky 9) cannot read every DWARF 5 line
- * table that recent clang-based compilers (AOCC 5+, LLVM 17+) emit by
- * default: function names resolve from .symtab, file:line comes back ??:0. */
+/* DWARF 5-capable addr2line-compatible tools, in order of preference.
+ * llvm-addr2line is often missing (AOCC 6 ships llvm-symbolizer only);
+ * llvm-symbolizer in GNU output style prints the same two lines. */
+static const struct { const char *prog, *args; } g_line_tools[] = {
+    { "llvm-addr2line",  "-f -C" },
+    { "llvm-symbolizer", "--output-style=GNU -f -C" },
+    { "eu-addr2line",    "-f -C" },          /* elfutils */
+};
+
+/* File:line for symbols GNU addr2line left without one. Old binutils
+ * (2.35, RHEL/Rocky 9) cannot read the DWARF 5 that recent clang-based
+ * compilers (AOCC 5+, LLVM 17+) emit by default: function names resolve
+ * from .symtab, file:line comes back ??:0. */
 static void resolve_lines_llvm(miniprof_sym_t *syms, void **fbases,
                                const char *dso_path, int n)
 {
-    if (getenv("MINIPROF_ADDR2LINE") || !on_path("llvm-addr2line")) return;
+    const char *forced = getenv("MINIPROF_ADDR2LINE");
+    if (forced && *forced) return;
+    const char *prog = NULL, *args = NULL;
+    for (size_t k = 0; k < sizeof(g_line_tools) / sizeof(g_line_tools[0]); k++)
+        if (on_path(g_line_tools[k].prog)) { prog = g_line_tools[k].prog; args = g_line_tools[k].args; break; }
+    if (!prog) return;
     int idx[ADDR2LINE_BATCH], m = 0;
     char cmd[8192];
-    int pos = snprintf(cmd, sizeof(cmd), "llvm-addr2line -e '%s' -f -C 2>/dev/null", dso_path);
+    int pos = snprintf(cmd, sizeof(cmd), "%s %s -e '%s' 2>/dev/null", prog, args, dso_path);
     for (int i = 0; i < n && m < ADDR2LINE_BATCH && pos < (int)sizeof(cmd) - 32; i++) {
         if (syms[i].line > 0) continue;
         uintptr_t pc = (uintptr_t)syms[i].pc - (fbases[i] ? (uintptr_t)fbases[i] : 0);
