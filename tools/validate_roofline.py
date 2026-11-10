@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""
+validate_roofline.py — check the roofline block (P6) of a known run.
+
+  --expect memory   examples/membw_validate on every physical core:
+                    bound == memory, >= 50% of the calibrated DRAM bandwidth
+  --expect compute  examples/roofline_fma on every physical core, with
+                    MINIPROF_ROOFLINE_PEAK set to the width it used:
+                    bound == compute, >= 60% of the calibrated peak
+
+--plumbing: test events (MINIPROF_COUNTERS_TEST/NODEMON_TEST) with a
+quick calibration: only the structure is checked. Exit 77 = roofline
+unavailable (no counters, no helper, no calibration) → SKIP.
+
+Usage: validate_roofline.py SNAPSHOT.json (--expect memory|compute | --plumbing)
+"""
+import argparse
+import json
+import sys
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("file")
+    ap.add_argument("--expect", choices=("memory", "compute"))
+    ap.add_argument("--plumbing", action="store_true")
+    a = ap.parse_args()
+    r = json.load(open(a.file))["metrics"].get("roofline") or {}
+    if not r.get("available"):
+        print(f"SKIP: roofline not available: {r.get('reason', 'no roofline block')}")
+        return 77
+    fails = []
+
+    def check(ok, msg):
+        print(("  ok    " if ok else "  FAIL  ") + msg)
+        if not ok:
+            fails.append(msg)
+
+    c = r["ceilings"]
+    check(c["peak_gflops"] > 0 and c["dram_gb_s"] > 0,
+          f"ceilings: peak {c['peak_gflops']:.1f} GFLOP/s ({c['peak_key']}), DRAM {c['dram_gb_s']:.1f} GB/s, "
+          f"ridge {c['ridge_flop_per_byte']:.2f} FLOP/B")
+    check(len(r["nodes"]) >= 1, f"{len(r['nodes'])} node(s)")
+    if r["calibration"].get("warning"):
+        print(f"  note  {r['calibration']['warning']}")
+    if not r["calibration"].get("same_cpu"):
+        print(f"  note  calibration from a different CPU ({r['calibration']['host']})")
+    if not a.plumbing:
+        n = r["nodes"][0]
+        print(f"  node {n['hostname']}: {n['gflops_per_s']:.1f} GFLOP/s, {n['dram_gb_s']:.1f} GB/s, "
+              f"AI {n['arithmetic_intensity']:.3g} FLOP/B, {n['bound']}-bound, "
+              f"{n['pct_of_attainable']:.1f}% of attainable, {n['pct_of_peak_gflops']:.1f}% of peak, "
+              f"{n['pct_of_dram_bw']:.1f}% of DRAM bandwidth")
+        check(n["bound"] == a.expect, f"bound: {n['bound']} (expected {a.expect})")
+        if a.expect == "memory":
+            check(n["pct_of_dram_bw"] >= 50, f"{n['pct_of_dram_bw']:.1f}% of calibrated DRAM bandwidth (>= 50)")
+        else:
+            check(n["pct_of_peak_gflops"] >= 60, f"{n['pct_of_peak_gflops']:.1f}% of calibrated peak (>= 60)")
+        check(n["pct_of_attainable"] <= 115, f"{n['pct_of_attainable']:.1f}% of attainable (<= 115: ceilings hold)")
+    print("PASS" if not fails else f"FAIL ({len(fails)} checks)")
+    return 0 if not fails else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

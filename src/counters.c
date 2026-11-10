@@ -194,9 +194,10 @@ static const cnt_group_t k_groups[] = {
      * engine — groups, thread slots, pthread hook, MPI boundaries,
      * regions, collect — can be exercised on machines without a PMU
      * (CI, VMs). task-clock (ns on CPU) stands in for cycles. */
-    { "swtest", "base", 2, 3, {
+    { "swtest", "base", 3, 4, {
         { CK_CYCLES,       "task-clock",       PERF_TYPE_SOFTWARE, PERF_COUNT_SW_TASK_CLOCK },
         { CK_INSTRUCTIONS, "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+        { CK_FLOPS,        "minor-faults",     PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS_MIN },
         { CK_L2_MISSES,    "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
     } },
     /* anything else (incl. Intel until P8): architectural events only */

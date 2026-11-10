@@ -149,10 +149,10 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run-ext-trace run-3d-snapshot test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
         run-omp-validate test-ompt-abi run-topdown-validate \
-        nodemon nodemon-setcap run-memory-validate \
+        nodemon nodemon-setcap run-memory-validate calibrate run-calibrate-test \
         mpa check clean
 
-all: lib nodemon examples
+all: lib nodemon calibrate examples
 
 lib: $(LIB)
 
@@ -169,6 +169,15 @@ $(NODEMON): src/nodemon.c src/nodemon.h
 # node-wide energy and memory traffic, which the kernel otherwise keeps
 # from unprivileged users (RAPL is root-only since the PLATYPUS side
 # channel). Widen to a group deliberately, e.g. chgrp benchmark + 0750.
+# ── calibrate: the P6 node-ceiling tool (no MPI) ────────────────────────────
+# Run once per node type on an exclusive node:
+#     srun -N1 --exclusive ./miniprof-calibrate -o calib/
+# then MINIPROF_CALIBRATION=calib/ for snapshot runs (bandwidth %, roofline).
+CALIBRATE := miniprof-calibrate
+calibrate: $(CALIBRATE)
+$(CALIBRATE): src/calibrate.c src/json_writer.c src/sysinfo.c src/json_writer.h src/sysinfo.h
+	$(CC_HOST) -O3 -Wall -Wextra -pthread -Iinclude -o $@ src/calibrate.c src/json_writer.c src/sysinfo.c -lm
+
 nodemon-setcap: $(NODEMON)
 	chmod 0700 $(NODEMON) && sudo setcap cap_perfmon+ep $(NODEMON) && getcap $(NODEMON)
 
@@ -611,6 +620,27 @@ test-ompt-abi:
 		echo "test-ompt-abi: OK ($(OMPT_ABI_CC))"; \
 	else echo "SKIP: no omp-tools.h for $(OMPT_ABI_CC)"; fi
 
+# ── run-calibrate-test: calibration tool + roofline plumbing (P6) ───────────
+# miniprof-calibrate --quick (small arrays, short kernels: exercises the
+# tool, not the node) and its JSON; then a snapshot with test events and
+# that file must produce a roofline block (SKIP where perf is blocked).
+# The real check is tools/validate_roofline.sh on a node.
+examples/roofline_fma: examples/roofline_fma.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) roofline_fma
+
+run-calibrate-test: $(CALIBRATE) $(NODEMON) examples/membw_validate
+	@echo "--- miniprof-calibrate --quick"
+	@./$(CALIBRATE) --quick -o miniprof_calibration_quick.json 2>&1 | tail -3 && \
+	python3 tests/check_calibration.py miniprof_calibration_quick.json || exit 1
+	@echo "--- roofline plumbing (test events + quick calibration)"
+	@MINIPROF_MODE=snapshot MINIPROF_COUNTERS_TEST=1 MINIPROF_NODEMON_TEST=1 \
+	MINIPROF_MEMORY_INTERVAL_MS=10 MINIPROF_CALIBRATION=miniprof_calibration_quick.json \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_swtest.json \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
+	python3 tools/validate_roofline.py miniprof_snapshot_roof_swtest.json --plumbing; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: roofline plumbing needs software perf events"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi
+
 # ── run-memory-validate: socket-level memory counters (P5) ──────────────────
 # 1. plumbing: miniprof-nodemon in its software-event test mode
 #    (MINIPROF_NODEMON_TEST=1): the pipe protocol and the memory block;
@@ -749,7 +779,7 @@ overhead-3d: $(EXAMPLE_3D)
 #
 # Override MPIRUN_FLAGS/NRANKS for constrained environments, e.g.:
 #   make check MPIRUN_FLAGS=--oversubscribe NRANKS=2
-check: lib nodemon examples mpa-check
+check: lib nodemon calibrate examples mpa-check
 	@echo "=========================================="
 	@echo " miniprof test suite"
 	@echo "=========================================="
@@ -773,6 +803,7 @@ check: lib nodemon examples mpa-check
 	$(MAKE) run-omp-validate || FAIL=1; \
 	$(MAKE) run-topdown-validate || FAIL=1; \
 	$(MAKE) run-memory-validate || FAIL=1; \
+	$(MAKE) run-calibrate-test || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -785,7 +816,7 @@ check: lib nodemon examples mpa-check
 
 # ── clean ─────────────────────────────────────────────────────────────────────
 clean:
-	rm -f $(LIB_OBJS) $(LIB) $(NODEMON) $(EXAMPLE) $(EXAMPLE_TRACE) \
+	rm -f $(LIB_OBJS) $(LIB) $(NODEMON) $(CALIBRATE) $(EXAMPLE) $(EXAMPLE_TRACE) \
 	      $(EXAMPLE_F) $(EXAMPLE_F_TRACE) \
 	      $(EXAMPLE_3D) $(EXAMPLE_3D_TRACE) \
 	      $(EXAMPLE_HWC_VALIDATE) $(EXAMPLE_HWC_VALIDATE_OMP) \
@@ -805,5 +836,5 @@ clean:
 	      examples/imbalance_validate examples/fortran_sentinels \
 	      examples/counters_validate miniprof_snapshot_cv_*.json \
 	      examples/omp_validate examples/omp_validate_clang examples/omp_validate_gcc \
-	      examples/topdown_validate examples/membw_validate \
+	      examples/topdown_validate examples/membw_validate examples/roofline_fma \
 	      tests/test_units tests/test_units_out.json

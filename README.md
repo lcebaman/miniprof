@@ -272,6 +272,7 @@ Build all three sample and trace variants with `make examples`.
 | `make run-omp-validate` | Snapshot OpenMP (OMPT): per-region imbalance, team size, serial time and lock wait vs injected values (SKIP under GCC libgomp; build with `OMPI_CC=clang` or AOCC) |
 | `make nodemon` / `make nodemon-setcap` | Build the socket-counter helper / grant it CAP_PERFMON (sudo) |
 | `make run-memory-validate` | Snapshot memory block: helper protocol (test mode, any machine), then known DRAM traffic if the helper has CAP_PERFMON (SKIP otherwise) |
+| `make calibrate` / `make run-calibrate-test` | Build the node-ceiling tool / check its output (`--quick`) and the roofline plumbing |
 | `make run-topdown-validate` | Snapshot top-down: event-set rotation (software events, any machine), then per-region shapes on a real PMU (SKIP without one) |
 | `make test-ompt-abi` | miniprof's built-in OMPT definitions vs the compiler's `<omp-tools.h>` (compile-time) |
 | `make run-fortran-sentinels` | Fortran `MPI_IN_PLACE`/`MPI_STATUS_IGNORE` results correct in every mode |
@@ -724,7 +725,33 @@ What a snapshot contains so far:
     `tools/validate_memory.sh` on a node: known triad traffic within a
     few percent, and a remote-memory run reading ~100% remote
 
-`roofline` is still `null`; it arrives in P6.
+- **calibration + metrics.roofline** (P6). `miniprof-calibrate` measures
+  what a node can do, once per node type, on an exclusive node:
+  ```bash
+  make calibrate
+  srun -N1 --exclusive ./miniprof-calibrate -o calib/     # ~1 minute
+  export MINIPROF_CALIBRATION=calib/                      # for snapshot runs
+  ```
+  It pins one thread to each physical core and writes
+  `calibration_<host>.json`: DRAM bandwidth per socket and per node
+  (read-only and triad, in DRAM bytes: triad counts STREAM's 24 B per
+  element plus the write-allocate read), and peak FLOP rates for every
+  width and precision (scalar, 128, 256, 512-bit; FP64 and FP32) from FMA
+  chains in registers, all cores at once and one core. With a calibration:
+  - the memory block adds `pct_of_calibrated_bw` (average and peak, per
+    node and per socket)
+  - `metrics.roofline`, per node: FLOP rate (FLOP counter, `basic` level)
+    over DRAM bytes (memory block) gives arithmetic intensity; with the
+    calibrated ceilings, whether the run is memory- or compute-bound and
+    its % of the attainable rate, of peak FLOPs and of DRAM bandwidth.
+    The FLOP counter does not separate precisions, so the compute roof is
+    the widest FP64 rate unless `MINIPROF_ROOFLINE_PEAK` names another
+    (`fp32_512`, `fp64_256`, ...)
+  - run level only: the node counters cannot be split by user region
+  - validation: `make run-calibrate-test` (tool and plumbing) and
+    `tools/validate_roofline.sh` on a node: a streaming run must be
+    memory-bound at >= 50% of the calibrated bandwidth and an FMA run
+    compute-bound at >= 60% of the calibrated peak, every physical core
 `MINIPROF_SNAPSHOT=full` currently collects the `basic` group.
 
 Counter validation on a real node: `tools/pmu_probe.sh` records what the
@@ -759,6 +786,8 @@ launcher's environment-passing convention).
 | `MINIPROF_MEMORY` | snapshot | `1` | `0` skips the socket-level memory/energy helper |
 | `MINIPROF_MEMORY_INTERVAL_MS` | snapshot | `100` | Sampling interval for peak memory bandwidth (10–10000) |
 | `MINIPROF_NODEMON` | snapshot | next to `libminiprof.so` | Path of `miniprof-nodemon` |
+| `MINIPROF_CALIBRATION` | snapshot | unset | `miniprof-calibrate` output: a file, or a directory (the file for the node's hostname, else one with the same CPU) |
+| `MINIPROF_ROOFLINE_PEAK` | snapshot | widest FP64 | Compute roof for the roofline: `fp64_512`, `fp32_256`, ... |
 | `MINIPROF_SNAPSHOT_OUTPUT` | snapshot | `miniprof_snapshot.json` | Snapshot JSON path |
 | `MINIPROF_INTERVAL_MS` | sample | `10` | SIGPROF sampling interval, milliseconds |
 | `MINIPROF_DEPTH` | sample | `8` | Call-stack depth captured per sample |
