@@ -47,6 +47,8 @@
 /* ── tables ──────────────────────────────────────────────────────────── */
 
 #define RAW(ev, um) PERF_TYPE_RAW, CNT_AMD_RAW(ev, um)
+/* ... with a counter mask: count cycles where the event fires >= cm times */
+#define RAWC(ev, um, cm) PERF_TYPE_RAW, (CNT_AMD_RAW(ev, um) | ((uint64_t)(cm) << 24))
 #define HW(cfg)     PERF_TYPE_HARDWARE, PERF_COUNT_HW_##cfg
 
 static const cnt_group_t k_groups[] = {
@@ -99,6 +101,91 @@ static const cnt_group_t k_groups[] = {
         { CK_FP_512,    "fp_ops_retired_by_width.pack_512_uops_retired", RAW(0x008, 0x20) },
         { CK_CYCLES,    "ls_not_halted_cyc",                          RAW(0x076, 0x00) },
     } },
+    /* ── top-down (P4) ─────────────────────────────────────────────────
+     * AMD's pipeline-utilisation model (perf metric groups PipelineL1/L2;
+     * the kernel's amdzen4/amdzen5 JSON), in dispatch slots: W per cycle,
+     * W = 6 on Zen 4 and 8 on Zen 5.
+     *   L1  frontend  = fe_empty_slots / slots
+     *       bad spec  = (dispatched ops - retired ops) / slots
+     *       backend   = be_stall_slots / slots
+     *       retiring  = retired ops / slots      smt = smt_slots / slots
+     *   L2  frontend latency  share = W * fe_lat_cycles / fe_empty_slots
+     *       backend memory    share = noret_load / noret_notcomplete
+     *       microcode         share = ucode_ops / retired ops
+     *       mispredicts       share = br_misp / (br_misp + resyncs)
+     * Twelve events do not fit in 5 counters (6, one taken by the NMI
+     * watchdog), so they are split into three sets of at most 5, each
+     * carrying what its ratios need: no ratio mixes two sets. Each thread
+     * counts one set for the whole run (see cnt_init). L2 shares from
+     * td_febe/td_rbs are applied to the L1 fractions from td_l1. */
+    { "zen4", "td_l1", 5, 6, {
+        { CK_CYCLES,         "ls_not_halted_cyc",                            RAW(0x076, 0x00) },
+        { CK_RET_OPS,        "ex_ret_ops",                                   RAW(0x0c1, 0x00) },
+        { CK_DISP_OPS,       "de_src_op_disp.all",                           RAW(0x0aa, 0x07) },
+        { CK_FE_EMPTY_SLOTS, "de_no_dispatch_per_slot.no_ops_from_frontend", RAW(0x1a0, 0x01) },
+        { CK_BE_STALL_SLOTS, "de_no_dispatch_per_slot.backend_stalls",       RAW(0x1a0, 0x1e) },
+        { CK_SMT_SLOTS,      "de_no_dispatch_per_slot.smt_contention",       RAW(0x1a0, 0x60) },
+    } },
+    { "zen4", "td_febe", 5, 5, {
+        { CK_CYCLES,            "ls_not_halted_cyc",                            RAW(0x076, 0x00) },
+        { CK_FE_EMPTY_SLOTS,    "de_no_dispatch_per_slot.no_ops_from_frontend", RAW(0x1a0, 0x01) },
+        { CK_FE_LAT_CYCLES,     "de_no_dispatch_per_slot.no_ops_from_frontend,cmask=0x6", RAWC(0x1a0, 0x01, 6) },
+        { CK_NORET_LOAD,        "ex_no_retire.load_not_complete",               RAW(0x0d6, 0xa2) },
+        { CK_NORET_NOTCOMPLETE, "ex_no_retire.not_complete",                    RAW(0x0d6, 0x02) },
+    } },
+    { "zen4", "td_rbs", 5, 5, {
+        { CK_CYCLES,   "ls_not_halted_cyc",       RAW(0x076, 0x00) },
+        { CK_RET_OPS,  "ex_ret_ops",              RAW(0x0c1, 0x00) },
+        { CK_UCODE_OPS,"ex_ret_ucode_ops",        RAW(0x1c1, 0x00) },
+        { CK_BR_MISP,  "ex_ret_brn_misp",         RAW(0x0c3, 0x00) },
+        { CK_RESYNCS,  "resyncs_or_nc_redirects", RAW(0x096, 0x00) },
+    } },
+    { "zen5", "td_l1", 5, 6, {
+        { CK_CYCLES,         "ls_not_halted_cyc",                            RAW(0x076, 0x00) },
+        { CK_RET_OPS,        "ex_ret_ops",                                   RAW(0x0c1, 0x00) },
+        { CK_DISP_OPS,       "de_src_op_disp.all",                           RAW(0x0aa, 0x07) },
+        { CK_FE_EMPTY_SLOTS, "de_no_dispatch_per_slot.no_ops_from_frontend", RAW(0x1a0, 0x01) },
+        { CK_BE_STALL_SLOTS, "de_no_dispatch_per_slot.backend_stalls",       RAW(0x1a0, 0x1e) },
+        { CK_SMT_SLOTS,      "de_no_dispatch_per_slot.smt_contention",       RAW(0x1a0, 0x60) },
+    } },
+    { "zen5", "td_febe", 5, 5, {
+        { CK_CYCLES,            "ls_not_halted_cyc",                            RAW(0x076, 0x00) },
+        { CK_FE_EMPTY_SLOTS,    "de_no_dispatch_per_slot.no_ops_from_frontend", RAW(0x1a0, 0x01) },
+        { CK_FE_LAT_CYCLES,     "de_no_dispatch_per_slot.no_ops_from_frontend,cmask=0x8", RAWC(0x1a0, 0x01, 8) },
+        { CK_NORET_LOAD,        "ex_no_retire.load_not_complete",               RAW(0x0d6, 0xa2) },
+        { CK_NORET_NOTCOMPLETE, "ex_no_retire.not_complete",                    RAW(0x0d6, 0x02) },
+    } },
+    { "zen5", "td_rbs", 5, 5, {
+        { CK_CYCLES,   "ls_not_halted_cyc",       RAW(0x076, 0x00) },
+        { CK_RET_OPS,  "ex_ret_ops",              RAW(0x0c1, 0x00) },
+        { CK_UCODE_OPS,"ex_ret_ucode_ops",        RAW(0x1c1, 0x00) },
+        { CK_BR_MISP,  "ex_ret_brn_misp",         RAW(0x0c3, 0x00) },
+        { CK_RESYNCS,  "resyncs_or_nc_redirects", RAW(0x096, 0x00) },
+    } },
+    /* Test-only top-down sets: software events, to exercise the set
+     * rotation, per-set results and regions without a PMU. The metrics
+     * they produce are meaningless. */
+    { "swtest", "td_l1", 5, 5, {
+        { CK_CYCLES,         "task-clock",       PERF_TYPE_SOFTWARE, PERF_COUNT_SW_TASK_CLOCK },
+        { CK_RET_OPS,        "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+        { CK_DISP_OPS,       "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+        { CK_FE_EMPTY_SLOTS, "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
+        { CK_BE_STALL_SLOTS, "cpu-migrations",   PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_MIGRATIONS },
+    } },
+    { "swtest", "td_febe", 5, 5, {
+        { CK_CYCLES,            "task-clock",       PERF_TYPE_SOFTWARE, PERF_COUNT_SW_TASK_CLOCK },
+        { CK_FE_EMPTY_SLOTS,    "task-clock",       PERF_TYPE_SOFTWARE, PERF_COUNT_SW_TASK_CLOCK },
+        { CK_FE_LAT_CYCLES,     "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
+        { CK_NORET_LOAD,        "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+        { CK_NORET_NOTCOMPLETE, "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+    } },
+    { "swtest", "td_rbs", 5, 5, {
+        { CK_CYCLES,    "task-clock",       PERF_TYPE_SOFTWARE, PERF_COUNT_SW_TASK_CLOCK },
+        { CK_RET_OPS,   "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+        { CK_UCODE_OPS, "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
+        { CK_BR_MISP,   "cpu-migrations",   PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_MIGRATIONS },
+        { CK_RESYNCS,   "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
+    } },
     /* Test-only (MINIPROF_COUNTERS_TEST=1): software events, so the whole
      * engine — groups, thread slots, pthread hook, MPI boundaries,
      * regions, collect — can be exercised on machines without a PMU
@@ -119,8 +206,30 @@ static const cnt_group_t k_groups[] = {
 static const char *k_kind_names[CK_COUNT] = {
     "cycles", "instructions", "flops", "l2_misses", "dram_fills",
     "dram_fills_remote", "fp_scalar_ops", "fp_packed128_ops",
-    "fp_packed256_ops", "fp_packed512_ops"
+    "fp_packed256_ops", "fp_packed512_ops",
+    "ret_ops", "disp_ops", "fe_empty_slots", "be_stall_slots", "smt_slots",
+    "fe_latency_cycles", "noret_load_cycles", "noret_notcomplete_cycles",
+    "ucode_ops", "br_misp", "resyncs"
 };
+
+int cnt_dispatch_width(const char *uarch)
+{
+    if (!uarch) return 0;
+    if (strcmp(uarch, "zen4") == 0) return 6;
+    if (strcmp(uarch, "zen5") == 0) return 8;
+    if (strcmp(uarch, "swtest") == 0) return 1;
+    return 0;
+}
+
+/* exact (uarch, group) match, NULL if absent */
+static const cnt_group_t *find_group(const char *uarch, const char *group)
+{
+    for (int i = 0; i < N_GROUPS; i++)
+        if (uarch && strcmp(k_groups[i].uarch, uarch) == 0 &&
+            strcmp(k_groups[i].group, group) == 0)
+            return &k_groups[i];
+    return NULL;
+}
 
 const char *cnt_kind_name(cnt_kind_t k)
 {
@@ -129,10 +238,8 @@ const char *cnt_kind_name(cnt_kind_t k)
 
 const cnt_group_t *cnt_lookup(const char *uarch, const char *group)
 {
-    for (int i = 0; i < N_GROUPS; i++)
-        if (uarch && strcmp(k_groups[i].uarch, uarch) == 0 &&
-            strcmp(k_groups[i].group, group) == 0)
-            return &k_groups[i];
+    const cnt_group_t *g = find_group(uarch, group);
+    if (g) return g;
     for (int i = 0; i < N_GROUPS; i++)
         if (strcmp(k_groups[i].uarch, "generic") == 0) return &k_groups[i];
     return &k_groups[0];   /* unreachable: generic is in the table */
@@ -158,6 +265,7 @@ typedef struct {
     region_frame_t stack[CNT_REGION_DEPTH];
     uint64_t n_rdpmc, n_syscall;       /* which read path boundaries took */
     pid_t    tid;                      /* kernel thread id the group counts */
+    int      set;                      /* event set this thread counts      */
 } thread_slot_t;
 
 static thread_slot_t g_slots[CNT_MAX_THREADS];
@@ -166,8 +274,13 @@ static int  g_dropped = 0;                    /* atomic */
 static _Thread_local thread_slot_t *t_slot = NULL;
 static _Thread_local int t_open_failed = 0;
 
-static const cnt_group_t *g_group = NULL;
-static int  g_nev = 0;           /* events in use (required [+ optional]) */
+/* Event sets: one for basic/roofline, CNT_MAX_SETS for top-down. */
+static const cnt_group_t *g_sets[CNT_MAX_SETS];
+static int  g_set_nev[CNT_MAX_SETS];   /* events in use per set          */
+static int  g_nsets = 1;
+static int  g_rank = 0;
+#define NEV(s)  g_set_nev[(s)->set]
+#define GRP(s)  g_sets[(s)->set]
 static int  g_active = 0;        /* counting enabled                      */
 static int  g_regions_on = 0;    /* regions record time even w/o counters */
 static int  g_use_rdpmc = 0;
@@ -213,8 +326,8 @@ static int open_events_pid(thread_slot_t *s, int n, pid_t pid)
         struct perf_event_attr a;
         memset(&a, 0, sizeof(a));
         a.size           = sizeof(a);
-        a.type           = g_group->ev[i].type;
-        a.config         = g_group->ev[i].config;
+        a.type           = GRP(s)->ev[i].type;
+        a.config         = GRP(s)->ev[i].config;
         a.disabled       = (i == 0);       /* members follow the leader */
         a.exclude_kernel = 1;
         a.exclude_hv     = 1;
@@ -244,7 +357,7 @@ typedef struct {
 
 static int read_group(const thread_slot_t *s, group_read_t *g)
 {
-    ssize_t want = (ssize_t)((3 + g_nev) * sizeof(uint64_t));
+    ssize_t want = (ssize_t)((3 + NEV(s)) * sizeof(uint64_t));
     return read(s->fd[0], g, sizeof(*g)) >= want ? 0 : -1;
 }
 
@@ -292,14 +405,14 @@ static int read_now(thread_slot_t *s, uint64_t *v)
 {
     if (g_use_rdpmc) {
         int ok = 1;
-        for (int i = 0; i < g_nev && ok; i++)
+        for (int i = 0; i < NEV(s) && ok; i++)
             ok = s->pg[i] && rdpmc_one(s->pg[i], &v[i]) == 0;
         if (ok) { s->n_rdpmc++; return 0; }
     }
     group_read_t g;
     if (read_group(s, &g) != 0) return -1;
     s->n_syscall++;
-    for (int i = 0; i < g_nev; i++) v[i] = g.v[i];
+    for (int i = 0; i < NEV(s); i++) v[i] = g.v[i];
     return 0;
 }
 
@@ -330,7 +443,8 @@ static thread_slot_t *thread_open(void)
     }
     thread_slot_t *s = &g_slots[idx];
     memset(s, 0, sizeof(*s));
-    if (open_events(s, g_nev) != 0) {    /* leaves s->fd[] = -1 */
+    s->set = (g_rank + idx) % g_nsets;
+    if (open_events(s, NEV(s)) != 0) {    /* leaves s->fd[] = -1 */
         /* keep the slot (fds = -1) so collect() skips it */
         t_open_failed = 1;
         return NULL;
@@ -369,11 +483,12 @@ static void attach_pending(void)
         if (idx >= CNT_MAX_THREADS) { __atomic_fetch_add(&g_dropped, 1, __ATOMIC_RELAXED); return; }
         thread_slot_t *s = &g_slots[idx];
         memset(s, 0, sizeof(*s));
-        if (open_events_pid(s, g_nev, tid) != 0) continue;   /* thread gone: skip */
+        s->set = (g_rank + idx) % g_nsets;
+        if (open_events_pid(s, NEV(s), tid) != 0) continue;   /* thread gone: skip */
         s->tid = tid;
         group_read_t g;
         if (read_group(s, &g) == 0)
-            for (int e = 0; e < g_nev; e++) s->last[e] = g.v[e];
+            for (int e = 0; e < NEV(s); e++) s->last[e] = g.v[e];
     }
 }
 
@@ -424,47 +539,92 @@ static int read_int_file(const char *path, int def)
     return v;
 }
 
-int cnt_init(const char *uarch, const char *group)
+/* Fit one set: the full event list, then trim optional events from the
+ * end until the group opens AND gets scheduled (probed on the calling
+ * thread). Returns the number of events that fit, or 0 with *err set
+ * (errno of a required event, or 0 = opened but never scheduled). */
+static int fit_set(int set, int *err)
 {
-    g_regions_on = 1;
-    g_pagesize = sysconf(_SC_PAGESIZE);
-    g_group = getenv("MINIPROF_COUNTERS_TEST") ? cnt_lookup("swtest", "base")
-                                                : cnt_lookup(uarch, group);
-    g_nev = g_group->n_events;
-    g_use_rdpmc = HAVE_RDPMC &&
-                  read_int_file("/sys/bus/event_source/devices/cpu/rdpmc", 1) != 0 &&
-                  !getenv("MINIPROF_NO_RDPMC");
-
-    /* Probe on the calling (MPI_Init) thread: the full group first, then
-     * trim optional events from the end until the group opens AND gets
-     * scheduled. A required event failing to open is fatal (permissions,
-     * no PMU); an optional one failing just means "does not fit". */
-    g_active = 1;
-    int fitted = 0, last_err = 0;
-    for (int n = g_group->n_events; n >= g_group->n_required; n--) {
-        g_nev = n;
+    const cnt_group_t *grp = g_sets[set];
+    *err = 0;
+    for (int n = grp->n_events; n >= grp->n_required; n--) {
+        g_set_nev[set] = n;
         thread_slot_t probe;
         memset(&probe, 0, sizeof(probe));
+        probe.set = set;
         g_fail_index = -1;
         int rc = open_events(&probe, n);
         if (rc != 0) {
-            last_err = -rc;
-            if (g_fail_index >= 0 && g_fail_index < g_group->n_required) break;
+            *err = -rc;
+            if (g_fail_index >= 0 && g_fail_index < grp->n_required) return 0;
             continue;                         /* optional event did not fit */
         }
         spin_us(2000);
         group_read_t g;
         int ok = read_group(&probe, &g) == 0 && g.time_running > 0;
         close_slot(&probe, n);
-        if (ok) { fitted = 1; break; }
-        last_err = 0;                         /* opened but never scheduled */
+        if (ok) return n;
+        *err = 0;                             /* opened but never scheduled */
     }
-    if (!fitted) {
+    return 0;
+}
+
+static char g_set_note[160] = "";
+
+int cnt_init(const char *uarch, const char *group, int rank)
+{
+    g_regions_on = 1;
+    g_rank = rank < 0 ? 0 : rank;
+    g_pagesize = sysconf(_SC_PAGESIZE);
+    const char *ua = getenv("MINIPROF_COUNTERS_TEST") ? "swtest" : uarch;
+    g_use_rdpmc = HAVE_RDPMC &&
+                  read_int_file("/sys/bus/event_source/devices/cpu/rdpmc", 1) != 0 &&
+                  !getenv("MINIPROF_NO_RDPMC");
+
+    g_nsets = 1;
+    if (group && strcmp(group, "topdown") == 0) {
+        static const char *names[CNT_MAX_SETS] = { "td_l1", "td_febe", "td_rbs" };
+        int n = 0;
+        for (int k = 0; k < CNT_MAX_SETS; k++) {
+            const cnt_group_t *g = find_group(ua, names[k]);
+            if (g) g_sets[n++] = g;
+        }
+        if (n == 0) {   /* no top-down tables for this CPU: base group */
+            snprintf(g_set_note, sizeof(g_set_note),
+                     "no top-down event tables for uarch '%s'", ua ? ua : "?");
+            g_sets[0] = cnt_lookup(ua, "base");
+        } else {
+            g_nsets = n;
+        }
+    } else {
+        g_sets[0] = cnt_lookup(ua, group);
+    }
+
+    /* Fit every set. The first is required; a later set that cannot be
+     * scheduled is dropped from the rotation (its L2 metrics go missing). */
+    g_active = 1;
+    int last_err = 0, kept = 0;
+    for (int k = 0; k < g_nsets; k++) {
+        int err = 0;
+        int nfit = fit_set(k, &err);
+        if (nfit == 0) {
+            if (k == 0) { last_err = err; kept = 0; break; }
+            snprintf(g_set_note, sizeof(g_set_note), "set %s/%s could not be scheduled%s%s",
+                     g_sets[k]->uarch, g_sets[k]->group, err ? ": " : "", err ? strerror(err) : "");
+            continue;
+        }
+        g_sets[kept] = g_sets[k];
+        g_set_nev[kept] = nfit;
+        kept++;
+    }
+    if (kept == 0) {
+        const cnt_group_t *g0 = g_sets[0];
         g_active = 0;
+        g_nsets = 1;
         if (last_err)
             snprintf(g_reason, sizeof(g_reason),
-                     "perf_event_open failed for %s/%s: %s%s", g_group->uarch,
-                     g_group->group, strerror(last_err),
+                     "perf_event_open failed for %s/%s: %s%s", g0->uarch,
+                     g0->group, strerror(last_err),
                      (last_err == EACCES || last_err == EPERM)
                          ? " (check /proc/sys/kernel/perf_event_paranoid)" :
                      (last_err == ENOENT || last_err == ENODEV || last_err == EOPNOTSUPP)
@@ -473,9 +633,10 @@ int cnt_init(const char *uarch, const char *group)
             snprintf(g_reason, sizeof(g_reason),
                      "%s/%s: even the %d required events were never scheduled on the "
                      "PMU: counters in use (NMI watchdog, another profiler)?",
-                     g_group->uarch, g_group->group, g_group->n_required);
+                     g0->uarch, g0->group, g0->n_required);
         return 0;
     }
+    g_nsets = kept;
 
     g_main_slot = thread_open();
     if (!g_main_slot) {
@@ -488,6 +649,8 @@ int cnt_init(const char *uarch, const char *group)
     g_split = !(split && strcmp(split, "0") == 0);
     return 1;
 }
+
+const char *cnt_set_note(void) { return g_set_note; }
 
 void cnt_stop(void)
 {
@@ -506,7 +669,7 @@ static inline void boundary(int entering_mpi)
     uint64_t v[CNT_MAX_EVENTS];
     if (read_now(s, v) != 0) return;
     int bucket = s->in_mpi;
-    for (int i = 0; i < g_nev; i++) {
+    for (int i = 0; i < NEV(s); i++) {
         s->acc[bucket][i] += v[i] - s->last[i];
         s->last[i] = v[i];
     }
@@ -595,8 +758,8 @@ void miniprof_region_end(const char *name)
     __atomic_fetch_add(&r->calls, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&r->ns, t1 - f->t0_ns, __ATOMIC_RELAXED);
     if (have_v)
-        for (int i = 0; i < g_nev; i++)
-            __atomic_fetch_add(&r->ev[i], v[i] - f->v0[i], __ATOMIC_RELAXED);
+        for (int i = 0; i < NEV(s); i++)
+            __atomic_fetch_add(&r->ev[s->set][i], v[i] - f->v0[i], __ATOMIC_RELAXED);
 }
 
 /* Fortran: CALL MINIPROF_REGION_BEGIN('name') — hidden length, blank-padded */
@@ -628,8 +791,9 @@ int cnt_regions_get(cnt_region_t *out, int max)
         memcpy(out[i].name, g_regions[i].name, CNT_REGION_NAME);
         out[i].calls = __atomic_load_n(&g_regions[i].calls, __ATOMIC_RELAXED);
         out[i].ns    = __atomic_load_n(&g_regions[i].ns, __ATOMIC_RELAXED);
-        for (int e = 0; e < CNT_MAX_EVENTS; e++)
-            out[i].ev[e] = __atomic_load_n(&g_regions[i].ev[e], __ATOMIC_RELAXED);
+        for (int k = 0; k < CNT_MAX_SETS; k++)
+            for (int e = 0; e < CNT_MAX_EVENTS; e++)
+                out[i].ev[k][e] = __atomic_load_n(&g_regions[i].ev[k][e], __ATOMIC_RELAXED);
     }
     return n;
 }
@@ -639,7 +803,9 @@ int cnt_regions_get(cnt_region_t *out, int max)
 void cnt_collect(cnt_result_t *out)
 {
     memset(out, 0, sizeof(*out));
-    out->group = g_group;
+    out->group = g_sets[0];
+    out->nsets = g_nsets;
+    for (int k = 0; k < g_nsets; k++) { out->set_group[k] = g_sets[k]; out->set_nev[k] = g_set_nev[k]; }
     out->rdpmc = g_use_rdpmc;
     out->threads_dropped = __atomic_load_n(&g_dropped, __ATOMIC_RELAXED);
     if (!g_active) {
@@ -649,7 +815,7 @@ void cnt_collect(cnt_result_t *out)
         return;
     }
     out->available = 1;
-    out->n_active = g_nev;
+    out->n_active = g_set_nev[0];
 
     int n = __atomic_load_n(&g_nslots, __ATOMIC_ACQUIRE);
     if (n > CNT_MAX_THREADS) n = CNT_MAX_THREADS;
@@ -663,17 +829,21 @@ void cnt_collect(cnt_result_t *out)
         if (read_group(s, &g) != 0) continue;
         if (g.time_running < g.time_enabled - g.time_enabled / 100) out->multiplexed = 1;
         out->threads++;
+        out->set_threads[s->set]++;
         out->reads_rdpmc   += s->n_rdpmc;
         out->reads_syscall += s->n_syscall;
-        for (int i = 0; i < g_nev; i++) {
+        for (int i = 0; i < NEV(s); i++) {
             uint64_t tail = g.v[i] - s->last[i];
             uint64_t comp = s->acc[0][i] + (s->in_mpi ? 0 : tail);
             uint64_t mpi  = s->acc[1][i] + (s->in_mpi ? tail : 0);
-            out->compute[i] += comp;
-            out->mpi[i]     += mpi;
-            out->total[i]   += comp + mpi;
-            if (s == g_main_slot) out->main_thread[i] = comp + mpi;
+            out->set_compute[s->set][i] += comp;
+            out->set_mpi[s->set][i]     += mpi;
+            out->set_total[s->set][i]   += comp + mpi;
+            if (s == g_main_slot && s->set == 0) out->main_thread[i] = comp + mpi;
         }
     }
+    memcpy(out->total,   out->set_total[0],   sizeof(out->total));
+    memcpy(out->compute, out->set_compute[0], sizeof(out->compute));
+    memcpy(out->mpi,     out->set_mpi[0],     sizeof(out->mpi));
     g_active = 0;   /* no more boundary reads */
 }

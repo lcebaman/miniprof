@@ -59,7 +59,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate topdown_validate
 
 all: $(EXAMPLES)
 
@@ -121,6 +121,10 @@ mpi_percall: mpi_percall.c $(LIB)
 counters_validate: counters_validate.c $(LIB)
 	$(CC) $(CFLAGS) -pthread $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Known-shape top-down workload (P4): one region per top-down category.
+topdown_validate: topdown_validate.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 # Known-answer MPI+OpenMP workload for snapshot-mode OMPT (P2). OMPT needs
 # an LLVM-family OpenMP runtime (clang, AOCC, ICX); with GCC's libgomp it
 # builds and runs, and the validator reports SKIP.
@@ -136,4 +140,4 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
 	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
-	      counters_validate mpi_percall omp_validate
+	      counters_validate mpi_percall omp_validate topdown_validate

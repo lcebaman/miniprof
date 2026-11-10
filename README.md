@@ -270,6 +270,7 @@ Build all three sample and trace variants with `make examples`.
 | `make run-imbalance-validate` | Snapshot known-answer test: injected imbalance, trace cross-check, exact I/O counts |
 | `make run-counters-validate` | Snapshot hardware counters: exact region FLOPs, threads, compute/MPI split (SKIP without a PMU) |
 | `make run-omp-validate` | Snapshot OpenMP (OMPT): per-region imbalance, team size, serial time and lock wait vs injected values (SKIP under GCC libgomp; build with `OMPI_CC=clang` or AOCC) |
+| `make run-topdown-validate` | Snapshot top-down: event-set rotation (software events, any machine), then per-region shapes on a real PMU (SKIP without one) |
 | `make test-ompt-abi` | miniprof's built-in OMPT definitions vs the compiler's `<omp-tools.h>` (compile-time) |
 | `make run-fortran-sentinels` | Fortran `MPI_IN_PLACE`/`MPI_STATUS_IGNORE` results correct in every mode |
 | `make mpa` | Run the full `heat2d` workflow: clean, build, sample, validate, trace |
@@ -646,9 +647,31 @@ What a snapshot contains so far:
     static loop; imbalance per region is within 3 points of the analytic
     value, wall times within 5%
 
-`topdown`, `memory` and `roofline` are still `null`; they arrive in later
-phases. `MINIPROF_SNAPSHOT=topdown` and `full` currently collect the
-`basic` group.
+- **metrics.topdown** (`MINIPROF_SNAPSHOT=topdown`; AMD Zen 4 / Zen 5):
+  - AMD's pipeline-utilisation model, the one behind `perf stat -M
+    PipelineL1,PipelineL2`, as a percentage of dispatch slots (6 per
+    cycle on Zen 4, 8 on Zen 5): level 1 frontend bound, bad speculation,
+    backend bound, retiring (and SMT contention when a counter is free);
+    level 2 frontend latency/bandwidth, mispredicts/pipeline restarts,
+    backend memory/cpu, retiring fast path/microcode
+  - reported outside MPI (`compute`, the application's own code), inside
+    MPI (`mpi`, mostly the library polling), and per user region
+  - the 12 events do not fit in one thread's 5 free counters, so they are
+    split into three event sets and **each thread counts one set for the
+    whole run** (thread *i* of rank *r* counts set `(r + i) mod 3`). Every
+    ratio is formed within one set, so nothing is time-multiplexed or
+    scaled, and rdpmc, the MPI split and regions keep working. This
+    assumes ranks and threads run similar code (SPMD); level 2 needs at
+    least 3 counted threads in the job (3 ranks, or 1 rank with 3 threads)
+  - replaces the `basic` counter group for that run (no IPC/FLOPs);
+    `counters.sets` holds the raw per-set totals
+  - validation: `make run-topdown-validate` (regions built to be retiring,
+    backend-cpu, backend-memory and bad-speculation bound);
+    `tools/validate_topdown.sh` on a node also checks every raw encoding
+    against perf's and compares with `perf stat -M PipelineL1/L2`
+
+`memory` and `roofline` are still `null`; they arrive in later phases.
+`MINIPROF_SNAPSHOT=full` currently collects the `basic` group.
 
 Counter validation on a real node: `tools/pmu_probe.sh` records what the
 node's PMU and perf support; `tools/validate_counters.sh` checks exact

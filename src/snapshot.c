@@ -52,13 +52,14 @@ static sysinfo_rank_t g_rank;
 static struct rusage  g_ru0;             /* baseline at init                */
 static char           g_cnt_reason[160] = "";
 static const cnt_group_t *g_cnt_group = NULL;
+static cnt_result_t       g_cnt;           /* this rank's result: set layout */
 
 /* Regions reduced across ranks (rank 0 only): union of names, then
  * per-name sums / min / max. */
 typedef struct {
     char     name[CNT_REGION_NAME];
     uint64_t ranks, calls, ns_sum, ns_min, ns_max;
-    uint64_t ev[CNT_MAX_EVENTS];
+    uint64_t ev[CNT_MAX_SETS][CNT_MAX_EVENTS];
 } region_red_t;
 static region_red_t g_rreg[CNT_MAX_REGIONS];
 static int          g_nrreg = 0;
@@ -103,6 +104,11 @@ typedef struct {
     uint64_t cnt_reads_rdpmc, cnt_reads_syscall;
     uint64_t cnt_total[CNT_MAX_EVENTS], cnt_compute[CNT_MAX_EVENTS],
              cnt_mpi[CNT_MAX_EVENTS];
+    /* P4: every event set (top-down rotates three over threads) */
+    int      cnt_nsets;
+    int      cnt_set_threads[CNT_MAX_SETS];
+    uint64_t cnt_set_compute[CNT_MAX_SETS][CNT_MAX_EVENTS],
+             cnt_set_mpi[CNT_MAX_SETS][CNT_MAX_EVENTS];
 
     /* P2: OpenMP (OMPT) */
     int    omp_available, omp_threads;
@@ -190,11 +196,12 @@ void snapshot_init(int verbose)
     sysinfo_collect_rank(&g_rank);
     if (rank == 0) read_cmdline(g_cmdline, sizeof(g_cmdline));
 
-    /* P3: counter group by level. topdown arrives in P4, so until then it
-     * (and full) collect the base group. */
+    /* Counter groups by level: basic (and, until P7, full) = base group,
+     * roofline = vector widths, topdown = the three top-down sets. */
     {
-        const char *grp = (g_level == SNAPSHOT_ROOFLINE) ? "vector" : "base";
-        int ok = cnt_init(g_node.uarch[0] ? g_node.uarch : "generic", grp);
+        const char *grp = g_level == SNAPSHOT_ROOFLINE ? "vector" :
+                          g_level == SNAPSHOT_TOPDOWN  ? "topdown" : "base";
+        int ok = cnt_init(g_node.uarch[0] ? g_node.uarch : "generic", grp, rank);
         if (g_verbose || (!ok && rank == 0)) {
             cnt_result_t st;
             if (!ok) cnt_collect(&st);
@@ -591,14 +598,14 @@ static void write_region_list(jw_t *w, int n_active, double el_max)
         if (n_active > 0) {
             jw_begin_obj(w, "totals");
             for (int i = 0; i < n_active; i++)
-                jw_int(w, cnt_kind_name(g_cnt_group->ev[i].kind), (int64_t)r->ev[i]);
+                jw_int(w, cnt_kind_name(g_cnt_group->ev[i].kind), (int64_t)r->ev[0][i]);
             jw_end_obj(w);
             jw_begin_obj(w, "derived");
-            if (iC >= 0 && iI >= 0) jw_dbl(w, "ipc", ratio((double)r->ev[iI], (double)r->ev[iC]));
+            if (iC >= 0 && iI >= 0) jw_dbl(w, "ipc", ratio((double)r->ev[0][iI], (double)r->ev[0][iC]));
             if (iF >= 0) {
                 jw_dbl(w, "gflops_per_s_per_rank",
-                       r->ranks && avg_s > 0 ? r->ev[iF] / (double)r->ranks / avg_s * 1e-9 : 0.0);
-                if (iC >= 0) jw_dbl(w, "flops_per_cycle", ratio((double)r->ev[iF], (double)r->ev[iC]));
+                       r->ranks && avg_s > 0 ? r->ev[0][iF] / (double)r->ranks / avg_s * 1e-9 : 0.0);
+                if (iC >= 0) jw_dbl(w, "flops_per_cycle", ratio((double)r->ev[0][iF], (double)r->ev[0][iC]));
             }
             jw_end_obj(w);
         }
@@ -636,6 +643,54 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     }
     jw_int(w, "ranks_without_counters", n - avail);
     jw_str(w, "uarch", g_cnt_group->uarch);
+    if (g_cnt.nsets > 1) {   /* top-down sets: raw per-set totals; metrics in "topdown" */
+        jw_str(w, "group", "topdown");
+        jw_str(w, "read_method", rd_fast + rd_sys == 0 ? "none" :
+                                 rd_sys == 0 ? "rdpmc" : rd_fast == 0 ? "syscall" : "mixed");
+        jw_bool(w, "user_space_only", 1);
+        jw_bool(w, "compute_mpi_split", cnt_split_enabled());
+        jw_int(w, "threads_counted", threads);
+        jw_int(w, "threads_dropped", dropped);
+        jw_int(w, "multiplexed_ranks", mux);
+        jw_begin_arr(w, "sets");
+        for (int k = 0; k < g_cnt.nsets; k++) {
+            const cnt_group_t *g = g_cnt.set_group[k];
+            jw_begin_obj(w, NULL);
+            jw_str(w, "name", g->group);
+            long th = 0;
+            uint64_t c[CNT_MAX_EVENTS] = {0}, m[CNT_MAX_EVENTS] = {0};
+            for (int i = 0; i < n; i++) {
+                if (!r[i].cnt_available) continue;
+                th += r[i].cnt_set_threads[k];
+                for (int e = 0; e < g_cnt.set_nev[k]; e++) {
+                    c[e] += r[i].cnt_set_compute[k][e]; m[e] += r[i].cnt_set_mpi[k][e];
+                }
+            }
+            jw_int(w, "threads", th);
+            jw_begin_arr(w, "events");
+            for (int e = 0; e < g->n_events; e++) {
+                char cfg[24];
+                snprintf(cfg, sizeof(cfg), "0x%llx", (unsigned long long)g->ev[e].config);
+                jw_begin_obj(w, NULL);
+                jw_str(w, "key", cnt_kind_name(g->ev[e].kind));
+                jw_str(w, "perf_name", g->ev[e].perf_name);
+                jw_str(w, "config", cfg);
+                jw_bool(w, "active", e < g_cnt.set_nev[k]);
+                jw_end_obj(w);
+            }
+            jw_end_arr(w);
+            jw_begin_obj(w, "compute");
+            for (int e = 0; e < g_cnt.set_nev[k]; e++) jw_int(w, cnt_kind_name(g->ev[e].kind), (int64_t)c[e]);
+            jw_end_obj(w);
+            jw_begin_obj(w, "mpi");
+            for (int e = 0; e < g_cnt.set_nev[k]; e++) jw_int(w, cnt_kind_name(g->ev[e].kind), (int64_t)m[e]);
+            jw_end_obj(w);
+            jw_end_obj(w);
+        }
+        jw_end_arr(w);
+        jw_end_obj(w);
+        return;
+    }
     jw_str(w, "group", g_cnt_group->group);
     /* boundary/region reads: rdpmc (user space) vs read() syscall. Mostly
      * syscall means rdpmc is disabled (sysfs rdpmc=0, MINIPROF_NO_RDPMC)
@@ -776,6 +831,196 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     jw_end_obj(w);
 }
 
+
+/* ── P4: top-down block ─────────────────────────────────────────────── */
+
+/* index of `kind` in set k's fitted events, -1 if absent */
+static int set_idx(int k, cnt_kind_t kind)
+{
+    if (k < 0 || k >= g_cnt.nsets) return -1;
+    for (int e = 0; e < g_cnt.set_nev[k]; e++)
+        if (g_cnt.set_group[k]->ev[e].kind == kind) return e;
+    return -1;
+}
+static int set_by_name(const char *name)
+{
+    for (int k = 0; k < g_cnt.nsets; k++)
+        if (strcmp(g_cnt.set_group[k]->group, name) == 0) return k;
+    return -1;
+}
+
+typedef struct {
+    int    l1, smt, l2_fe, l2_be, l2_ret, l2_bs;   /* which parts are valid */
+    double fe, bs, be, ret, smt_v;                  /* L1 fractions (0..1)   */
+    double fe_lat, be_mem, ucode, misp;             /* L2 shares of L1 parent */
+    double slots;
+} td_t;
+
+/* ev[set][event] counts (one bucket) → top-down. W = dispatch width. */
+static td_t td_compute(uint64_t ev[CNT_MAX_SETS][CNT_MAX_EVENTS], int W)
+{
+    td_t t;
+    memset(&t, 0, sizeof(t));
+    int A = set_by_name("td_l1"), B = set_by_name("td_febe"), C = set_by_name("td_rbs");
+    int aC = set_idx(A, CK_CYCLES), aR = set_idx(A, CK_RET_OPS), aD = set_idx(A, CK_DISP_OPS);
+    int aF = set_idx(A, CK_FE_EMPTY_SLOTS), aB = set_idx(A, CK_BE_STALL_SLOTS);
+    int aS = set_idx(A, CK_SMT_SLOTS);
+    if (aC >= 0 && aR >= 0 && aD >= 0 && aF >= 0 && aB >= 0 && ev[A][aC] > 0 && W > 0) {
+        t.slots = (double)W * (double)ev[A][aC];
+        double ret = (double)ev[A][aR], disp = (double)ev[A][aD];
+        t.l1  = 1;
+        t.fe  = ev[A][aF] / t.slots;
+        t.be  = ev[A][aB] / t.slots;
+        t.ret = ret / t.slots;
+        t.bs  = disp > ret ? (disp - ret) / t.slots : 0.0;
+        if (aS >= 0) { t.smt = 1; t.smt_v = ev[A][aS] / t.slots; }
+    }
+    int bF = set_idx(B, CK_FE_EMPTY_SLOTS), bL = set_idx(B, CK_FE_LAT_CYCLES);
+    int bLd = set_idx(B, CK_NORET_LOAD), bNc = set_idx(B, CK_NORET_NOTCOMPLETE);
+    if (bF >= 0 && bL >= 0 && ev[B][bF] > 0) {
+        t.l2_fe = 1;
+        t.fe_lat = (double)W * ev[B][bL] / (double)ev[B][bF];
+        if (t.fe_lat > 1) t.fe_lat = 1;
+    }
+    if (bLd >= 0 && bNc >= 0 && ev[B][bNc] > 0) {
+        t.l2_be = 1;
+        t.be_mem = (double)ev[B][bLd] / (double)ev[B][bNc];
+        if (t.be_mem > 1) t.be_mem = 1;
+    }
+    int cR = set_idx(C, CK_RET_OPS), cU = set_idx(C, CK_UCODE_OPS);
+    int cM = set_idx(C, CK_BR_MISP), cS = set_idx(C, CK_RESYNCS);
+    if (cR >= 0 && cU >= 0 && ev[C][cR] > 0) {
+        t.l2_ret = 1;
+        t.ucode = (double)ev[C][cU] / (double)ev[C][cR];
+        if (t.ucode > 1) t.ucode = 1;
+    }
+    if (cM >= 0 && cS >= 0) {
+        double d = (double)ev[C][cM] + (double)ev[C][cS];
+        t.l2_bs = 1;
+        t.misp = d > 0 ? (double)ev[C][cM] / d : 0.0;
+    }
+    return t;
+}
+
+static void write_td(jw_t *w, const char *key, const td_t *t)
+{
+    jw_begin_obj(w, key);
+    if (!t->l1) { jw_null(w, "level1"); jw_null(w, "level2"); jw_end_obj(w); return; }
+    jw_begin_obj(w, "level1");
+    jw_dbl(w, "frontend_bound", 100.0 * t->fe);
+    jw_dbl(w, "bad_speculation", 100.0 * t->bs);
+    jw_dbl(w, "backend_bound", 100.0 * t->be);
+    jw_dbl(w, "retiring", 100.0 * t->ret);
+    if (t->smt) jw_dbl(w, "smt_contention", 100.0 * t->smt_v);
+    else        jw_null(w, "smt_contention");
+    jw_end_obj(w);
+    jw_begin_obj(w, "level2");
+    if (t->l2_fe) {
+        jw_dbl(w, "frontend_latency", 100.0 * t->fe * t->fe_lat);
+        jw_dbl(w, "frontend_bandwidth", 100.0 * t->fe * (1 - t->fe_lat));
+    }
+    if (t->l2_bs) {
+        jw_dbl(w, "bad_speculation_mispredicts", 100.0 * t->bs * t->misp);
+        jw_dbl(w, "bad_speculation_pipeline_restarts", 100.0 * t->bs * (1 - t->misp));
+    }
+    if (t->l2_be) {
+        jw_dbl(w, "backend_memory", 100.0 * t->be * t->be_mem);
+        jw_dbl(w, "backend_cpu", 100.0 * t->be * (1 - t->be_mem));
+    }
+    if (t->l2_ret) {
+        jw_dbl(w, "retiring_fastpath", 100.0 * t->ret * (1 - t->ucode));
+        jw_dbl(w, "retiring_microcode", 100.0 * t->ret * t->ucode);
+    }
+    jw_end_obj(w);
+    jw_end_obj(w);
+}
+
+static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
+{
+    if (g_level != SNAPSHOT_TOPDOWN) { jw_null(w, "topdown"); return; }
+    jw_begin_obj(w, "topdown");
+    int avail = 0;
+    for (int i = 0; i < n; i++) avail += r[i].cnt_available;
+    int W = g_cnt_group ? cnt_dispatch_width(g_cnt_group->uarch) : 0;
+    if (!avail || g_cnt.nsets <= 1 || W == 0) {
+        jw_bool(w, "available", 0);
+        jw_str(w, "reason", !avail ? (g_cnt_reason[0] ? g_cnt_reason : "counters unavailable") :
+                            cnt_set_note()[0] ? cnt_set_note() :
+                            "no top-down model for this CPU");
+        jw_end_obj(w);
+        return;
+    }
+    jw_bool(w, "available", 1);
+    jw_str(w, "uarch", g_cnt_group->uarch);
+    jw_str(w, "model", "AMD pipeline utilisation (perf PipelineL1/L2)");
+    jw_int(w, "dispatch_width", W);
+    jw_str(w, "method", "each thread counts one event set for the whole run, set = "
+                        "(rank + thread) mod sets; ratios only within a set; level 2 "
+                        "shares applied to the level 1 fractions");
+
+    uint64_t comp[CNT_MAX_SETS][CNT_MAX_EVENTS], mpi[CNT_MAX_SETS][CNT_MAX_EVENTS];
+    memset(comp, 0, sizeof(comp)); memset(mpi, 0, sizeof(mpi));
+    long th[CNT_MAX_SETS] = {0}, rk[CNT_MAX_SETS] = {0};
+    for (int i = 0; i < n; i++) {
+        if (!r[i].cnt_available) continue;
+        for (int k = 0; k < g_cnt.nsets; k++) {
+            th[k] += r[i].cnt_set_threads[k];
+            if (r[i].cnt_set_threads[k]) rk[k]++;
+            for (int e = 0; e < CNT_MAX_EVENTS; e++) {
+                comp[k][e] += r[i].cnt_set_compute[k][e];
+                mpi[k][e]  += r[i].cnt_set_mpi[k][e];
+            }
+        }
+    }
+    jw_begin_arr(w, "sets");
+    int all_measured = 1;
+    for (int k = 0; k < g_cnt.nsets; k++) {
+        jw_begin_obj(w, NULL);
+        jw_str(w, "name", g_cnt.set_group[k]->group);
+        jw_int(w, "threads", th[k]);
+        jw_int(w, "ranks", rk[k]);
+        jw_end_obj(w);
+        if (!th[k]) all_measured = 0;
+    }
+    jw_end_arr(w);
+    if (g_cnt.nsets < CNT_MAX_SETS || !all_measured)
+        jw_str(w, "note", cnt_set_note()[0] ? cnt_set_note() :
+                          "level 2 is partial: fewer counted threads than event sets "
+                          "(run with >= 3 ranks or threads)");
+
+    jw_begin_obj(w, "definitions");
+    jw_str(w, "units", "percent of dispatch slots (dispatch_width per cycle), user space");
+    jw_str(w, "compute", "outside MPI calls: the application's own code");
+    jw_str(w, "mpi", "inside MPI calls: mostly the MPI library polling for progress");
+    jw_str(w, "frontend_bound", "slots left empty because the frontend delivered no ops "
+                                "(instruction fetch/decode)");
+    jw_str(w, "bad_speculation", "slots used by ops that were later squashed");
+    jw_str(w, "backend_bound", "slots left empty because the backend was full "
+                               "(waiting on memory or execution resources)");
+    jw_str(w, "retiring", "slots used by ops that retired: useful work");
+    jw_str(w, "backend_memory", "backend_bound share while the oldest op is a load");
+    jw_str(w, "frontend_latency", "frontend_bound share in cycles with no ops at all "
+                                  "(fetch latency: i-cache/iTLB misses, redirects)");
+    jw_end_obj(w);
+
+    td_t tc = td_compute(comp, W), tm = td_compute(mpi, W);
+    write_td(w, "compute", &tc);
+    write_td(w, "mpi", &tm);
+
+    jw_begin_arr(w, "regions");
+    for (int u = 0; u < g_nrreg; u++) {
+        td_t tr = td_compute(g_rreg[u].ev, W);
+        jw_begin_obj(w, NULL);
+        jw_str(w, "name", g_rreg[u].name);
+        jw_int(w, "ranks", (int64_t)g_rreg[u].ranks);
+        jw_int(w, "calls", (int64_t)g_rreg[u].calls);
+        jw_dbl(w, "time_s_per_rank", g_rreg[u].ranks ? g_rreg[u].ns_sum * 1e-9 / g_rreg[u].ranks : 0.0);
+        write_td(w, "topdown", &tr);
+        jw_end_obj(w);
+    }
+    jw_end_arr(w);
+    jw_end_obj(w);
+}
 /* ── P2: OpenMP block ───────────────────────────────────────────────── */
 
 static double g_omp_par (const rank_rec_t *r, int a) { (void)a; return r->omp_parallel_s; }
@@ -954,11 +1199,12 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_str(&w, NULL, "parallel");
     jw_str(&w, NULL, "counters");
     jw_str(&w, NULL, "openmp");
+    if (g_level == SNAPSHOT_TOPDOWN) jw_str(&w, NULL, "topdown");
     jw_end_arr(&w);
     write_parallel(&w, ranks, nranks, hist);
     write_counters(&w, ranks, nranks);
     write_openmp(&w, ranks, nranks);
-    jw_null(&w, "topdown");
+    write_topdown(&w, ranks, nranks);
     jw_null(&w, "memory");
     jw_null(&w, "roofline");
     jw_end_obj(&w);
@@ -1009,7 +1255,12 @@ static void collect_parallel(rank_rec_t *r, double elapsed_s, mpi_snap_t *snap)
     memcpy(r->cnt_total,   cr.total,   sizeof(cr.total));
     memcpy(r->cnt_compute, cr.compute, sizeof(cr.compute));
     memcpy(r->cnt_mpi,     cr.mpi,     sizeof(cr.mpi));
+    r->cnt_nsets = cr.nsets;
+    memcpy(r->cnt_set_threads, cr.set_threads, sizeof(cr.set_threads));
+    memcpy(r->cnt_set_compute, cr.set_compute, sizeof(cr.set_compute));
+    memcpy(r->cnt_set_mpi,     cr.set_mpi,     sizeof(cr.set_mpi));
     g_cnt_group = cr.group;
+    g_cnt = cr;
     if (!cr.available) snprintf(g_cnt_reason, sizeof(g_cnt_reason), "%s", cr.reason);
 
     struct rusage ru;
@@ -1090,7 +1341,7 @@ static void reduce_regions(int rank, int size)
     if (nu > 0) PMPI_Bcast(uni, nu * CNT_REGION_NAME, MPI_CHAR, 0, MPI_COMM_WORLD);
 
     /* per union entry: [present, calls, ns, ev...] summed; ns min/max */
-    enum { K = 3 + CNT_MAX_EVENTS };
+    enum { K = 3 + CNT_MAX_SETS * CNT_MAX_EVENTS };
     static uint64_t sum_in[CNT_MAX_REGIONS][K], sum_out[CNT_MAX_REGIONS][K];
     static uint64_t min_in[CNT_MAX_REGIONS], min_out[CNT_MAX_REGIONS];
     static uint64_t max_in[CNT_MAX_REGIONS], max_out[CNT_MAX_REGIONS];
@@ -1102,7 +1353,9 @@ static void reduce_regions(int rank, int size)
                 sum_in[u][0] = 1;
                 sum_in[u][1] = mine[i].calls;
                 sum_in[u][2] = mine[i].ns;
-                for (int e = 0; e < CNT_MAX_EVENTS; e++) sum_in[u][3 + e] = mine[i].ev[e];
+                for (int k = 0; k < CNT_MAX_SETS; k++)
+                    for (int e = 0; e < CNT_MAX_EVENTS; e++)
+                        sum_in[u][3 + k * CNT_MAX_EVENTS + e] = mine[i].ev[k][e];
                 min_in[u] = max_in[u] = mine[i].ns;
             }
     if (nu > 0) {
@@ -1121,7 +1374,9 @@ static void reduce_regions(int rank, int size)
             r->ns_sum = sum_out[u][2];
             r->ns_min = min_out[u];
             r->ns_max = max_out[u];
-            for (int e = 0; e < CNT_MAX_EVENTS; e++) r->ev[e] = sum_out[u][3 + e];
+            for (int k = 0; k < CNT_MAX_SETS; k++)
+                for (int e = 0; e < CNT_MAX_EVENTS; e++)
+                    r->ev[k][e] = sum_out[u][3 + k * CNT_MAX_EVENTS + e];
         }
     }
     free(counts); free(displs); free(all); free(mynames);

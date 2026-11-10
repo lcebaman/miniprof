@@ -184,6 +184,48 @@ def report(doc: dict, args) -> str:
                 p(f"   {r['name'][:20]:<20} {r['calls']:>6}  {human_time(r['time_s']['avg']):>10}  {gf}  {ipc}")
             p("   (time/rank is summed over a rank's threads for regions entered on several threads)")
 
+    # top-down
+    td = (doc.get("metrics") or {}).get("topdown")
+    tdc = {}
+    if td:
+        p("")
+        if not td.get("available"):
+            p(f" Top-down               not measured: {td.get('reason')}")
+        else:
+            tdc = dict((td.get("compute") or {}).get("level1") or {})
+            l2 = (td.get("compute") or {}).get("level2") or {}
+            tdc.update(l2)
+            p(f" Top-down               {td['uarch']}, % of dispatch slots ({td['dispatch_width']}/cycle), "
+              "outside MPI")
+            if td.get("note"):
+                p(f"   note: {td['note']}")
+            subs = {"frontend_bound": ("frontend_latency", "frontend_bandwidth", "latency", "bandwidth"),
+                    "bad_speculation": ("bad_speculation_mispredicts", "bad_speculation_pipeline_restarts",
+                                        "mispredicts", "restarts"),
+                    "backend_bound": ("backend_memory", "backend_cpu", "memory", "cpu"),
+                    "retiring": ("retiring_fastpath", "retiring_microcode", "fastpath", "microcode")}
+            names = {"frontend_bound": "Frontend bound", "bad_speculation": "Bad speculation",
+                     "backend_bound": "Backend bound", "retiring": "Retiring"}
+            if tdc:
+                for k, label in names.items():
+                    a, b, la, lb = subs[k]
+                    tail = (f"   {la} {tdc[a]:.1f}%, {lb} {tdc[b]:.1f}%" if a in tdc and b in tdc else "")
+                    p(f"   {label:<18} {tdc[k]:5.1f}%  {bar(tdc[k], 20)}{tail}")
+                if tdc.get("smt_contention") is not None:
+                    p(f"   {'SMT contention':<18} {tdc['smt_contention']:5.1f}%")
+            regs = td.get("regions") or []
+            if regs:
+                p("")
+                p(" Top-down by region     front    bad   back   ret | b_mem  b_cpu")
+                for r in regs[:12]:
+                    l1 = (r.get("topdown") or {}).get("level1")
+                    rl2 = (r.get("topdown") or {}).get("level2") or {}
+                    if not l1:
+                        continue
+                    bm = f"{rl2['backend_memory']:6.1f} {rl2['backend_cpu']:6.1f}" if "backend_memory" in rl2 else ""
+                    p(f"   {r['name'][:20]:<20} {l1['frontend_bound']:6.1f} {l1['bad_speculation']:6.1f} "
+                      f"{l1['backend_bound']:6.1f} {l1['retiring']:5.1f} | {bm}")
+
     # OpenMP
     omp = (doc.get("metrics") or {}).get("openmp")
     if omp:
@@ -240,6 +282,19 @@ def report(doc: dict, args) -> str:
                        + ": consider dynamic/guided scheduling or a finer work split.")
         if omp["lock_wait_pct"] > args.omp_imbalance_pct:
             obs.append(f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
+    if tdc:
+        if tdc.get("backend_memory", 0) > args.td_memory_pct:
+            obs.append(f"{tdc['backend_memory']:.1f}% of slots stall on memory (backend_memory > "
+                       f"{args.td_memory_pct:g}%): data locality, prefetching, bandwidth.")
+        elif tdc.get("backend_cpu", 0) > args.td_memory_pct:
+            obs.append(f"{tdc['backend_cpu']:.1f}% of slots stall on execution resources or "
+                       "dependency chains (backend_cpu): instruction-level parallelism, vectorisation.")
+        if tdc.get("frontend_bound", 0) > args.td_frontend_pct:
+            obs.append(f"Frontend bound {tdc['frontend_bound']:.1f}% (> {args.td_frontend_pct:g}%): "
+                       "instruction fetch/decode — code size, i-cache/op-cache misses, branchy code.")
+        if tdc.get("bad_speculation", 0) > args.td_badspec_pct:
+            obs.append(f"Bad speculation {tdc['bad_speculation']:.1f}% (> {args.td_badspec_pct:g}%): "
+                       "branch mispredictions or pipeline restarts.")
     rem = cd.get("remote_dram_fill_pct")
     if rem is not None and rem > args.remote_pct:
         obs.append(f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
@@ -269,6 +324,9 @@ def main() -> int:
     ap.add_argument("--remote-pct", type=float, default=20.0)
     ap.add_argument("--packed-pct", type=float, default=50.0)
     ap.add_argument("--serial-pct", type=float, default=20.0)
+    ap.add_argument("--td-memory-pct", type=float, default=30.0)
+    ap.add_argument("--td-frontend-pct", type=float, default=20.0)
+    ap.add_argument("--td-badspec-pct", type=float, default=10.0)
     ap.add_argument("--omp-imbalance-pct", type=float, default=10.0)
     args = ap.parse_args()
     with open(args.file) as f:

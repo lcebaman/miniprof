@@ -41,6 +41,8 @@
 #                          team size, serial time and lock wait against
 #                          injected values; SKIP under GCC libgomp
 #   test-ompt-abi        — src/ompt_abi.h against the real <omp-tools.h>
+#   run-topdown-validate — snapshot top-down: set rotation (software
+#                          events), then per-region shapes on a real PMU
 #   run-counters-validate — snapshot hardware counters: exact region FLOPs,
 #                      threads, compute/MPI split (SKIP without a PMU)
 #   run-fortran-sentinels — Fortran MPI_IN_PLACE/STATUS_IGNORE results
@@ -142,7 +144,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
         run-ext-trace run-3d-snapshot test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
-        run-omp-validate test-ompt-abi \
+        run-omp-validate test-ompt-abi run-topdown-validate \
         mpa check clean
 
 all: lib examples
@@ -588,6 +590,36 @@ test-ompt-abi:
 		echo "test-ompt-abi: OK ($(OMPT_ABI_CC))"; \
 	else echo "SKIP: no omp-tools.h for $(OMPT_ABI_CC)"; fi
 
+# ── run-topdown-validate: snapshot top-down (P4) ────────────────────────────
+# 1. plumbing with software events (any machine): the three event sets
+#    rotate over 3 ranks, per-set totals and regions reach the JSON;
+# 2. on a machine with a CPU PMU: examples/topdown_validate at full size
+#    (~1.5 GB over 3 ranks) and the per-region shape checks. SKIP without
+#    a PMU. The cross-check against perf stat -M is tools/validate_topdown.sh.
+TD_SCALE ?= 1
+
+examples/topdown_validate: examples/topdown_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) topdown_validate
+
+run-topdown-validate: examples/topdown_validate
+	@echo "--- top-down plumbing (software events, MINIPROF_COUNTERS_TEST=1)"
+	@MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=topdown MINIPROF_COUNTERS_TEST=1 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_td_swtest.json \
+	mpirun $(MPIRUN_FLAGS) -n 3 ./examples/topdown_validate 0.02 >/dev/null || exit 1; \
+	python3 tools/validate_topdown.py miniprof_snapshot_td_swtest.json --plumbing; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi; \
+	if [ ! -e /sys/bus/event_source/devices/cpu/type ] && \
+	   [ ! -e /sys/bus/event_source/devices/cpu_core/type ]; then \
+		echo "SKIP: no CPU PMU on this system (top-down shapes need hardware counters)"; exit 0; fi; \
+	echo "--- top-down shapes (MINIPROF_SNAPSHOT=topdown, 3 ranks, scale $(TD_SCALE))"; \
+	MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=topdown \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_td.json \
+	mpirun $(MPIRUN_FLAGS) -n 3 ./examples/topdown_validate $(TD_SCALE) || exit 1; \
+	python3 tools/validate_topdown.py miniprof_snapshot_td.json; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: top-down unavailable on this system"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi
+
 # ── run-counters-validate: snapshot hardware counters (P3) ──────────────────
 # Runs examples/counters_validate in the base group (MINIPROF_SNAPSHOT=basic)
 # and the vector group (=roofline) and checks exact region FLOPs, thread
@@ -688,6 +720,7 @@ check: lib examples mpa-check
 	$(MAKE) run-counters-validate || FAIL=1; \
 	$(MAKE) test-ompt-abi || FAIL=1; \
 	$(MAKE) run-omp-validate || FAIL=1; \
+	$(MAKE) run-topdown-validate || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \
@@ -720,4 +753,5 @@ clean:
 	      examples/imbalance_validate examples/fortran_sentinels \
 	      examples/counters_validate miniprof_snapshot_cv_*.json \
 	      examples/omp_validate examples/omp_validate_clang examples/omp_validate_gcc \
+	      examples/topdown_validate \
 	      tests/test_units tests/test_units_out.json
