@@ -178,8 +178,11 @@ calibrate: $(CALIBRATE)
 $(CALIBRATE): src/calibrate.c src/json_writer.c src/sysinfo.c src/json_writer.h src/sysinfo.h
 	$(CC_HOST) -O3 -Wall -Wextra -pthread -Iinclude -o $@ src/calibrate.c src/json_writer.c src/sysinfo.c -lm
 
+# Not needed where perf_event_paranoid <= 0 (any user may count system-wide).
 nodemon-setcap: $(NODEMON)
-	chmod 0700 $(NODEMON) && sudo setcap cap_perfmon+ep $(NODEMON) && getcap $(NODEMON)
+	@if [ "$$(cat /proc/sys/kernel/perf_event_paranoid)" -le 0 ]; then \
+		echo "perf_event_paranoid <= 0: miniprof-nodemon needs no capability here"; \
+	else chmod 0700 $(NODEMON) && sudo setcap cap_perfmon+ep $(NODEMON) && getcap $(NODEMON); fi
 
 examples:
 	$(MAKE) -C $(EXAMPLE_DIR)
@@ -662,8 +665,8 @@ run-memory-validate: $(NODEMON) examples/membw_validate
 	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest.json --plumbing; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here (perf_event_paranoid)"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi; \
-	if ! getcap ./$(NODEMON) 2>/dev/null | grep -q cap_perfmon; then \
-		echo "SKIP: ./$(NODEMON) has no CAP_PERFMON (make nodemon-setcap) — real counters not tested"; exit 0; fi; \
+	if ! tools/nodemon_ready.sh ./$(NODEMON) >/dev/null; then \
+		echo "SKIP: $$(tools/nodemon_ready.sh ./$(NODEMON)) — real counters not tested"; exit 0; fi; \
 	echo "--- memory block, real counters (2 ranks, N=$(MV_N), $(MV_REPS) reps)"; \
 	MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem.json \
 	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate $(MV_N) $(MV_REPS) || exit 1; \

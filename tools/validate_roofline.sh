@@ -8,7 +8,7 @@
 set -u
 D=${1:-calib}
 make calibrate nodemon examples/membw_validate examples/roofline_fma >/dev/null || exit 1
-getcap ./miniprof-nodemon | grep -q cap_perfmon || { echo "run: make nodemon-setcap"; exit 1; }
+tools/nodemon_ready.sh ./miniprof-nodemon || exit 1
 mkdir -p "$D"
 H=$(hostname -s)
 if [ ! -f "$D/calibration_$(hostname).json" ] && [ ! -f "$D/calibration_$H.json" ]; then

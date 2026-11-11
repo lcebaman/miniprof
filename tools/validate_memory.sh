@@ -15,7 +15,7 @@ set -u
 R=${1:-8}; N=${2:-33554432}; K=${3:-40}
 make nodemon examples/membw_validate >/dev/null || exit 1
 H=./miniprof-nodemon
-if ! getcap "$H" 2>/dev/null | grep -q cap_perfmon; then
+if ! tools/nodemon_ready.sh "$H" >/dev/null; then
     if sudo -n true 2>/dev/null; then
         chmod 0700 "$H" && sudo -n setcap cap_perfmon+ep "$H" || exit 1
     else
@@ -23,7 +23,7 @@ if ! getcap "$H" 2>/dev/null | grep -q cap_perfmon; then
         exit 1
     fi
 fi
-getcap "$H"
+tools/nodemon_ready.sh "$H" || exit 1
 LAST=$(( $(ls -d /sys/devices/system/node/node* | wc -l) - 1 ))
 OUT=miniprof_snapshot_mem
 FAIL=0
