@@ -100,10 +100,12 @@ void nodemon_start(const char *uarch, int verbose)
         snprintf(g_reason, sizeof(g_reason), "disabled (MINIPROF_MEMORY=0)");
         return;
     }
-    const char *ua = getenv("MINIPROF_NODEMON_TEST") ? "swtest" : uarch;
-    if (!ua || (strcmp(ua, "zen4") && strcmp(ua, "zen5") && strcmp(ua, "swtest"))) {
+    const char *nt = getenv("MINIPROF_NODEMON_TEST");
+    const char *ua = nt ? (strcmp(nt, "partial") == 0 ? "swtest-partial" : "swtest") : uarch;
+    if (!ua || (strcmp(ua, "zen4") && strcmp(ua, "zen5") && strcmp(ua, "zen6") &&
+                strcmp(ua, "swtest") && strcmp(ua, "swtest-partial"))) {
         snprintf(g_reason, sizeof(g_reason),
-                 "no node-level memory counters for uarch '%s' (AMD Zen 4 / Zen 5 only)",
+                 "no node-level memory counters for uarch '%s' (AMD Zen 4 / 5 / 6 only)",
                  ua && *ua ? ua : "unknown");
         return;
     }
@@ -122,7 +124,7 @@ void nodemon_start(const char *uarch, int verbose)
     /* Do not start a helper that cannot work: without CAP_PERFMON on the
      * file (security.capability xattr), root, or perf_event_paranoid <= 0,
      * it would only fail — and starting it costs rank 0 time. */
-    if (strcmp(ua, "swtest") != 0 && geteuid() != 0 &&
+    if (strncmp(ua, "swtest", 6) != 0 && geteuid() != 0 &&
         getxattr(path, "security.capability", NULL, 0) <= 0) {
         int par = 2;
         FILE *f = fopen("/proc/sys/kernel/perf_event_paranoid", "r");
@@ -223,6 +225,8 @@ void nodemon_stop(nm_result_t *out)
                    s >= 0 && s < NM_MAX_SOCKETS && c >= 0 && c < NM_MAX_CHANS) {
             out->s[s].chan_rd[c] = rd; out->s[s].chan_wr[c] = wr;
             if (c + 1 > out->s[s].nchans) out->s[s].nchans = c + 1;
+        } else if (strncmp(line, "coverage ", 9) == 0) {
+            snprintf(out->coverage, sizeof(out->coverage), "%.255s", line + 9);
         } else if (sscanf(line, "peak node=%lf", &pn) == 1) {
             out->peak_node_bps = pn;
         }

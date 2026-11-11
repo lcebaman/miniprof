@@ -665,6 +665,13 @@ run-memory-validate: $(NODEMON) examples/membw_validate
 	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest.json --plumbing; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here (perf_event_paranoid)"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi; \
+	echo "--- memory block plumbing, partial coverage (MINIPROF_NODEMON_TEST=partial)"; \
+	MINIPROF_MODE=snapshot MINIPROF_NODEMON_TEST=partial MINIPROF_MEMORY_INTERVAL_MS=10 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem_swtest_part.json \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
+	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest_part.json --plumbing --expect-coverage; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi; \
 	if ! tools/nodemon_ready.sh ./$(NODEMON) >/dev/null; then \
 		echo "SKIP: $$(tools/nodemon_ready.sh ./$(NODEMON)) — real counters not tested"; exit 0; fi; \
 	echo "--- memory block, real counters (2 ranks, N=$(MV_N), $(MV_REPS) reps)"; \

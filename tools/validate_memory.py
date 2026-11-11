@@ -34,6 +34,8 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=0)
     ap.add_argument("--remote", action="store_true")
     ap.add_argument("--plumbing", action="store_true")
+    ap.add_argument("--expect-coverage", action="store_true",
+                    help="plumbing: the helper reported partial coverage")
     a = ap.parse_args()
 
     m = json.load(open(a.file))["metrics"].get("memory") or {}
@@ -56,6 +58,8 @@ def main() -> int:
     for s in n0["sockets"]:
         check(s["channels"]["count"] >= 1, f"socket {s['socket']}: {s['channels']['count']} channels")
 
+    if a.expect_coverage:
+        check(bool(m.get("coverage")), f"partial coverage reported: {m.get('coverage')!r}")
     if a.plumbing:
         print("PASS" if not fails else f"FAIL ({len(fails)} checks)")
         return 0 if not fails else 1
@@ -75,8 +79,18 @@ def main() -> int:
               + ("-" if s["remote_read_share_pct"] is None else f"{s['remote_read_share_pct']:.1f}%") + ", "
               f"{ch['active']}/{ch['count']} channels active, {s['power_w']:.0f} W")
     print()
-    check(0.95 * erd <= rd <= 1.10 * erd, f"DRAM reads {rd:.2f} GB within -5%..+10% of {erd:.2f}")
-    check(0.95 * ewr <= wr <= 1.25 * ewr, f"DRAM writes {wr:.2f} GB within -5%..+25% of {ewr:.2f}")
+    cov = m.get("coverage")
+    if cov:
+        print(f"  coverage: {cov}\n")
+    if cov and a.remote:
+        # Zen 6: the DF sees only NUMA node 0, so DRAM on the other node is
+        # not counted; the reads arriving at node 0's cores are.
+        rin = sum(s["remote_read_gb_s"] for s in n0["sockets"]) * el
+        check(0.92 * erd <= rin <= 1.10 * erd,
+              f"reads into node 0 cores from the other node {rin:.2f} GB within -8%..+10% of {erd:.2f}")
+    else:
+        check(0.95 * erd <= rd <= 1.10 * erd, f"DRAM reads {rd:.2f} GB within -5%..+10% of {erd:.2f}")
+        check(0.95 * ewr <= wr <= 1.25 * ewr, f"DRAM writes {wr:.2f} GB within -5%..+25% of {ewr:.2f}")
     check(n0["peak_gb_s"] >= n0["total_gb_s"], f"peak {n0['peak_gb_s']:.1f} >= average {n0['total_gb_s']:.1f} GB/s")
     # no 2-socket node of this generation moves 2 TB/s; anything above is a counting error
     check(n0["peak_gb_s"] <= 2000, f"peak {n0['peak_gb_s']:.1f} GB/s plausible (<= 2000)")
