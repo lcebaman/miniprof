@@ -467,7 +467,8 @@ def render(doc: dict, obs: list) -> str:
     roof = m.get("roofline") or {}
     if roof.get("available") and roof.get("nodes"):
         rn = roof["nodes"][0]
-        tiles.append(tile("Roofline", f'{rn["bound"]}-bound', f'{rn["pct_of_attainable"]:.0f}% of attainable'))
+        tiles.append(tile("Roofline", f'{rn["bound"]}-bound', f'{rn["pct_of_attainable"]:.0f}% of attainable'
+                          + (" · estimate" if roof.get("estimate") else "")))
 
     # ---- observations
     if obs:
@@ -695,7 +696,12 @@ def render(doc: dict, obs: list) -> str:
             c = roof["ceilings"]
             cal = roof["calibration"]
             nds = roof.get("nodes") or []
-            body = f'<p class="note">Ceilings from <code>{esc(cal["file"])}</code> ({esc(cal["host"])}, ' \
+            body = ""
+            if roof.get("estimate"):
+                body += f'<p class="note"><b>Estimate.</b> {esc(roof.get("dram_bytes"))}. Fills miss write-backs ' \
+                        'and lines only the L2 prefetchers brought in, so the DRAM bytes are a lower bound and the ' \
+                        'points sit to the right of (above) where they belong.</p>'
+            body += f'<p class="note">Ceilings from <code>{esc(cal["file"])}</code> ({esc(cal["host"])}, ' \
                    f'{esc(cal["date_utc"][:10])})' + ("" if cal.get("same_cpu") else " — <b>different CPU</b>") \
                    + (f' — <b>{esc(cal["warning"])}</b>' if cal.get("warning") else "") + ".</p>"
             if nds:
@@ -704,7 +710,9 @@ def render(doc: dict, obs: list) -> str:
                        for nd in nds[:8]]
                 body += roofline_chart({"peak": c["peak_gflops"], "peak_key": c["peak_key"],
                                         "all_gflops": c.get("all_gflops"), "dram": rn["dram_ceiling_gb_s"]}, pts)
-                body += f'<p class="note">The DRAM roof is for node 0\'s read share ({rn["read_share_pct"]:.0f}% reads): ' \
+                mix = ("the read-only calibration" if rn.get("read_share_pct") is None
+                       else f'node 0\'s read share ({rn["read_share_pct"]:.0f}% reads)')
+                body += f'<p class="note">The DRAM roof is for {mix}: ' \
                         f'{c["dram_read_gb_s"]:.0f} GB/s read-only, {c["dram_triad_gb_s"]:.0f} GB/s triad.</p>'
                 body += table(["node", "GFLOP/s", "DRAM GB/s", "FLOP/byte", "bound", "of attainable",
                                "of peak FLOPs", "of DRAM bw"],

@@ -1332,6 +1332,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     jw_begin_obj(w, "roofline");
     const char *why = NULL;
     int iF = kind_index(CK_FLOPS, g_cnt.n_active);
+    int iD = kind_index(CK_DRAM_FILLS, g_cnt.n_active);
     int mem_any = 0, mem_part = 0;
     for (int i = 0; i < nn; i++) {
         mem_any |= nodes[i].mem.available;
@@ -1344,11 +1345,19 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     else if (g_cnt.nsets > 1 || iF < 0)
         why = "needs the FLOP counter: MINIPROF_SNAPSHOT=basic (top-down and roofline-width "
               "levels count other events)";
-    else if (!mem_any)
-        why = "needs DRAM bytes from the memory block (miniprof-nodemon)";
-    else if (mem_part)
-        why = "DRAM bytes cover only part of the node (memory.coverage): an arithmetic "
-              "intensity from them would be wrong";
+    /* Without whole-node DRAM bytes (no helper, or it sees part of the
+     * node) fall back to the job's L1D fills from DRAM x 64 B: reads only,
+     * and not lines brought in by L2 prefetchers alone, so a lower bound on
+     * DRAM bytes and the intensity an upper bound. Marked as an estimate. */
+    int est = !why && (!mem_any || mem_part) && iD >= 0;
+    if (!why && !est && (!mem_any || mem_part)) {
+        if (!mem_any)
+            why = "needs DRAM bytes: the memory block (miniprof-nodemon) or the DRAM fill "
+                  "counter, which this CPU's counter group does not have";
+        else
+            why = "DRAM bytes cover only part of the node (memory.coverage) and there is no "
+                  "DRAM fill counter to estimate them";
+    }
     if (why) {
         jw_bool(w, "available", 0);
         jw_str(w, "reason", why);
@@ -1376,10 +1385,27 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     snprintf(k1, sizeof(k1), "dram_triad_gb_s_node");
     double bw_triad = cal_num(k1);
     jw_bool(w, "available", 1);
+    jw_bool(w, "estimate", est);
+    if (est)
+        jw_str(w, "dram_bytes", mem_part
+               ? "estimate: the memory block covers only part of the node, so DRAM bytes are "
+                 "this job's L1D fills from DRAM x 64 B (core counters, every NUMA node)"
+               : "estimate: no memory block (miniprof-nodemon), so DRAM bytes are this job's "
+                 "L1D fills from DRAM x 64 B (core counters)");
+    else
+        jw_str(w, "dram_bytes", "measured: whole-node DRAM reads + writes (miniprof-nodemon)");
     write_calibration_ref(w);
     jw_begin_obj(w, "definitions");
-    jw_str(w, "arithmetic_intensity", "FLOPs (this job's threads, user space) / DRAM bytes "
-                                      "(whole node: reads + writes, incl. write-allocate)");
+    if (est)
+        jw_str(w, "arithmetic_intensity", "FLOPs / (L1D fills from DRAM x 64 B), this job's threads, "
+                                          "user space. The fills miss write-backs and lines that only "
+                                          "L2 prefetchers brought in: a LOWER bound on DRAM bytes, so "
+                                          "the intensity is an UPPER bound and the point sits to the "
+                                          "right of where it belongs; the DRAM ceiling is the "
+                                          "read-only one");
+    else
+        jw_str(w, "arithmetic_intensity", "FLOPs (this job's threads, user space) / DRAM bytes "
+                                          "(whole node: reads + writes, incl. write-allocate)");
     jw_str(w, "attainable_gflops", "min(peak, arithmetic_intensity x DRAM bandwidth ceiling)");
     jw_str(w, "peak", "calibrated all-core FMA rate; widest FP64 unless MINIPROF_ROOFLINE_PEAK "
                       "names another (fp32_512, fp64_256, ...): the FLOP counter does not "
@@ -1411,21 +1437,30 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     double sum_ai_w = 0, sum_w = 0;
     for (int i = 0; i < nn; i++) {
         const nm_result_t *m = &nodes[i].mem;
-        if (!m->available) continue;
-        double fl = 0, el = 0;
+        if (!est && !m->available) continue;
+        double fl = 0, el = 0, fills = 0;
+        int nc = 0;
         for (int k = 0; k < nr; k++) {
             if (r[k].node_index != nodes[i].node_index || !r[k].cnt_available) continue;
             fl += (double)r[k].cnt_total[iF];
+            if (iD >= 0) fills += (double)r[k].cnt_total[iD];
             if (r[k].elapsed_s > el) el = r[k].elapsed_s;
+            nc++;
         }
-        double bytes = 0, rdb = 0;
-        for (int s = 0; s < m->nsockets; s++) {
-            bytes += (double)(m->s[s].rd_bytes + m->s[s].wr_bytes);
-            rdb += (double)m->s[s].rd_bytes;
+        if (est && !nc) continue;
+        double bytes = 0, rdb = 0, span = m->elapsed_s;
+        if (est) {
+            bytes = rdb = 64.0 * fills;
+            span = el;
+        } else {
+            for (int s = 0; s < m->nsockets; s++) {
+                bytes += (double)(m->s[s].rd_bytes + m->s[s].wr_bytes);
+                rdb += (double)m->s[s].rd_bytes;
+            }
         }
         double bwc = cal_bw_mix("node", rfrac(rdb, bytes - rdb));
         double gfl = el > 0 ? fl / el * 1e-9 : 0;
-        double bw = m->elapsed_s > 0 ? bytes / m->elapsed_s * 1e-9 : 0;
+        double bw = span > 0 ? bytes / span * 1e-9 : 0;
         double ai = bytes > 0 ? fl / bytes : NAN;
         double att = isnan(ai) ? peak : (ai * bwc < peak ? ai * bwc : peak);
         jw_begin_obj(w, NULL);
@@ -1434,7 +1469,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         jw_dbl(w, "gflops_per_s", gfl);
         jw_dbl(w, "dram_gb_s", bw);
         jw_dbl(w, "arithmetic_intensity", ai);
-        jw_dbl(w, "read_share_pct", bytes > 0 ? 100.0 * rdb / bytes : NAN);
+        jw_dbl(w, "read_share_pct", est ? NAN : bytes > 0 ? 100.0 * rdb / bytes : NAN);
         jw_dbl(w, "dram_ceiling_gb_s", bwc);
         jw_dbl(w, "ridge_flop_per_byte", bwc > 0 ? peak / bwc : NAN);
         jw_str(w, "bound", isnan(ai) || ai >= peak / bwc ? "compute" : "memory");

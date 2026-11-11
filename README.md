@@ -718,7 +718,8 @@ What a snapshot contains so far:
     data fabric (the RHEL 9 kernel finds no memory-controller counters)
     and, on that kernel, its one PMU sees only NUMA node 0: the block
     then carries `"coverage"` saying so, drops the `pct_of_calibrated_bw`
-    fields, and the roofline is not computed (it needs every DRAM byte).
+    fields, and the roofline falls back to the core-counter estimate
+    below (it needs every DRAM byte).
     Run the job's ranks on node 0 to measure them; reads from the other
     node show as remote. Mapped with `tools/probe_df_zen6.sh` on an EPYC
     9996 in NPS2.
@@ -771,6 +772,13 @@ What a snapshot contains so far:
     The FLOP counter does not separate precisions, so the compute roof is
     the widest FP64 rate unless `MINIPROF_ROOFLINE_PEAK` names another
     (`fp32_512`, `fp64_256`, ...)
+  - without the memory block (no helper, or partial coverage) the
+    roofline is an **estimate** (`"estimate": true`, `dram_bytes` says
+    why): DRAM bytes are the job's L1D fills from DRAM x 64 B. Fills miss
+    write-backs and lines only the L2 prefetchers brought in, so the
+    bytes are a lower bound, the intensity an upper bound (the point sits
+    right of where it belongs) and the DRAM roof is the read-only one.
+    `tools/validate_roofline.sh` compares the two on a streaming run
   - run level only: the node counters cannot be split by user region
   - the ceilings are measurements, not datasheet numbers: a well-tuned
     code can land a few percent above them (validation allows 115%).

@@ -70,6 +70,7 @@ def _sections(doc):
                  or (par.get("cpu") or {}).get("utilisation_pct") or {}),
         "omp": m.get("openmp"),
         "rn": (roof.get("nodes") or [{}])[0] if roof.get("available") else {},
+        "roof_est": bool(roof.get("estimate")),
         "tdc": tdc,
         "mem": m.get("memory"),
         "cd": cnt.get("derived") or {} if cnt.get("available") else {},
@@ -112,7 +113,7 @@ def observations(doc: dict, args) -> list:
         if omp["lock_wait_pct"] > args.omp_imbalance_pct:
             add("openmp", f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
     if rn:
-        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < 50:
+        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < 50 and not v["roof_est"]:
             add("roofline", f"Memory-bound but only {rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth: "
                        "latency-bound access (pointer chasing, poor prefetching) or too few cores/channels in use.")
         if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < 20:
@@ -334,10 +335,14 @@ def report(doc: dict, args) -> str:
               + (" — QUICK calibration, not a measurement" if cal.get("warning") else ""))
             p(f"   ceilings            peak {c['peak_gflops']:.0f} GFLOP/s ({c['peak_key']}), "
               f"DRAM {c['dram_read_gb_s']:.0f} GB/s read-only / {c['dram_triad_gb_s']:.0f} triad")
+            if roof.get("estimate"):
+                p("   ! ESTIMATE: DRAM bytes from L1D fills (a lower bound): intensity is an upper bound")
             if rn:
+                mix = ("read-only" if rn.get("read_share_pct") is None
+                       else f"at {rn['read_share_pct']:.0f}% reads")
                 p(f"   this run (node 0)   {rn['gflops_per_s']:.1f} GFLOP/s at {rn['arithmetic_intensity']:.3g} FLOP/B: "
-                  f"{rn['bound'].upper()}-bound (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s at "
-                  f"{rn['read_share_pct']:.0f}% reads, ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
+                  f"{rn['bound'].upper()}-bound (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s {mix}, "
+                  f"ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
                 p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
                   f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
 
