@@ -56,7 +56,7 @@ C
 $CC -O2 -fno-tree-loop-distribute-patterns -o "$TMP/k" "$TMP/k.c" || { echo "cannot build kernel"; exit 1; }
 
 dram_ev() { printf 'amd_df/event=0x%x,umask=0x%x/\n' $((0x1f + 0x40*($1%4) + 0x100*($1/4))) "$2"; }
-cfi_ev()  { printf 'amd_df/event=0x%x,umask=0x%x/\n' $((0x41e + 0x40*($1%4) + 0x100*(($1/4)%2) + $1/8)) "$2"; }
+cfi_ev()  { printf 'amd_df/event=0x%x,umask=0x%x/\n' $((0x41e + 0x40*($1%4) + 0x100*($1/4))) "$2"; }   # Zen 6 port map (--cfi-map)
 
 # measure <label> <numactl args> <kernel mode> <event list...>
 # prints one line per event: label count running% ; then the kernel line
