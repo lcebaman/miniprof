@@ -117,10 +117,28 @@ run perf stat -e msr/aperf/,msr/mperf/,msr/tsc/,cycles -- "$TMP/daxpy_vec"
 run perf stat -M PipelineL1 -- "$TMP/daxpy_vec"
 run perf stat -M PipelineL2 -- "$TMP/daxpy_vec"
 
+sec "perf's own definitions for this CPU (new generations: encodings + formulas)"
+# every core event miniprof's tables use, as perf encodes it on this CPU
+for ev in ls_not_halted_cyc ex_ret_instr ex_ret_ops de_src_op_disp.all \
+          de_no_dispatch_per_slot.no_ops_from_frontend de_no_dispatch_per_slot.backend_stalls \
+          de_no_dispatch_per_slot.smt_contention ex_no_retire.not_complete \
+          ex_no_retire.load_not_complete ex_ret_ucode_ops ex_ret_brn_misp \
+          resyncs_or_nc_redirects bp_redirects.resync fp_ret_sse_avx_ops.all \
+          fp_ops_retired_by_width.all fp_ops_retired_by_width.scalar_uops \
+          fp_ops_retired_by_width.pack_128_uops fp_ops_retired_by_width.pack_256_uops \
+          fp_ops_retired_by_width.pack_512_uops fp_ops_retired_by_type.all \
+          ls_any_fills_from_sys.dram_io_all ls_dmnd_fills_from_sys.dram_io_far l2_cache_req_stat.ic_dc_miss_in_l2; do
+    printf '%-56s %s\n' "$ev" "$(perf stat -vv -e "$ev" -- true 2>&1 | awk '$1=="config"{print $2; exit}' | grep . || echo 'unknown to perf')"
+done
+printf '\n$ perf list --details metricgroup PipelineL1 PipelineL2 (formulas)\n'
+perf list --details metric 2>/dev/null | grep -B1 -A6 -E "^\s+(total_dispatch_slots|frontend_bound|bad_speculation|backend_bound|retiring|smt_contention)[a-z_]*\s*$" | head -150
+printf '\n$ perf list --details > %s (full event and metric list, sent separately)\n' "${OUT%.txt}_perflist.txt"
+perf list --details > "${OUT%.txt}_perflist.txt" 2>&1
+
 sec "MPI toolchain"
 for c in mpicc mpifort mpirun srun; do printf '%-8s %s\n' "$c" "$(command -v $c || echo 'not found')"; done
 run mpirun --version
 command -v mpicc >/dev/null && run mpicc --version
 } > "$OUT" 2>&1
 
-echo "Wrote $OUT ($(wc -l < "$OUT") lines). Please send it back."
+echo "Wrote $OUT ($(wc -l < "$OUT") lines) and ${OUT%.txt}_perflist.txt. Please send both back."

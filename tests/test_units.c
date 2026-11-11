@@ -50,6 +50,20 @@ static void test_uarch(void)
     expect_uarch("GenuineIntel", 6,    0xCF, "emerald_rapids");
     /* unrecognised IDs must stay unclassified, never guessed */
     expect_uarch("AuthenticAMD", 0x1A, 0xF0, "");
+    /* Zen 5 / Zen 6 split of family 1Ah, as in Linux bsp_init_amd() */
+    expect_uarch("AuthenticAMD", 0x1A, 0x2F, "zen5");
+    expect_uarch("AuthenticAMD", 0x1A, 0x44, "zen5");
+    expect_uarch("AuthenticAMD", 0x1A, 0x70, "zen5");
+    expect_uarch("AuthenticAMD", 0x1A, 0xD7, "zen5");
+    expect_uarch("AuthenticAMD", 0x1A, 0x50, "zen6");           /* was misread as Zen 5 */
+    expect_uarch("AuthenticAMD", 0x1A, 0x5F, "zen6");
+    expect_uarch("AuthenticAMD", 0x1A, 0x80, "zen6");           /* client       */
+    expect_uarch("AuthenticAMD", 0x1A, 0xA0, "zen6");
+    expect_uarch("AuthenticAMD", 0x1A, 0xC0, "zen6");
+    expect_uarch("AuthenticAMD", 0x1A, 0xD8, "zen6");
+    expect_uarch("AuthenticAMD", 0x1A, 0xEF, "zen6");
+    expect_uarch("AuthenticAMD", 0x1A, 0x30, "");               /* unassigned   */
+    expect_uarch("AuthenticAMD", 0x1A, 0xB0, "");
     expect_uarch("GenuineIntel", 6,    0x01, "");
     expect_uarch("SomeVendor",   1,    1,    "");
 }

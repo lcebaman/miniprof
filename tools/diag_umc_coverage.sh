@@ -13,7 +13,16 @@ H=./miniprof-nodemon
 make nodemon examples/membw_validate >/dev/null || exit 1
 tools/nodemon_ready.sh "$H" || exit 1
 FAM=$(awk -F: '/^cpu family/{gsub(/ /,"",$2); print $2; exit}' /proc/cpuinfo)
-UA=zen4; [ "$FAM" = 26 ] && UA=zen5
+MOD=$(awk -F: '/^model[[:space:]]*:/{gsub(/ /,"",$2); print $2; exit}' /proc/cpuinfo)
+# family 1Ah is Zen 5 or Zen 6 depending on the model (Linux bsp_init_amd)
+case "$FAM" in
+  25) UA=zen4 ;;
+  26) if   [ "$MOD" -le 47 ] || { [ "$MOD" -ge 64 ] && [ "$MOD" -le 79 ]; } || \
+           { [ "$MOD" -ge 96 ] && [ "$MOD" -le 127 ]; } || { [ "$MOD" -ge 208 ] && [ "$MOD" -le 215 ]; }
+      then UA=zen5
+      else echo "family 1Ah model $MOD is Zen 6 (Venice): no event tables yet"; exit 1; fi ;;
+  *)  echo "unsupported CPU family $FAM"; exit 1 ;;
+esac
 NN=$(ls -d /sys/devices/system/node/node* | wc -l)
 N=33554432; K=10
 EXP=$(awk -v n=$N -v k=$K 'BEGIN{printf "%.2f", 24*n*k/1e9}')

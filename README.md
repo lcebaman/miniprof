@@ -702,6 +702,9 @@ What a snapshot contains so far:
     system-wide and no capability is needed: `make nodemon` is enough
     (`make nodemon-setcap` says so and does nothing).
     `tools/nodemon_ready.sh` tells you whether the helper can work here.
+    Zen 6 (Venice) is recognised but has no event tables yet: there the
+    counters use the generic group and top-down and the memory block
+    report it as unsupported, rather than borrowing Zen 5 encodings.
     One rank per node starts it at `MPI_Init`; it opens a fixed set of
     events, drops every capability, samples, and returns totals over a
     pipe at `MPI_Finalize`. It is looked for next to `libminiprof.so`
