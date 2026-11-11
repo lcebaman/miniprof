@@ -101,10 +101,10 @@ void sysinfo_classify_uarch(const char *vendor, int family, int model,
              *   Zen 5: 00-2F, 40-4F, 60-7F, D0-D7
              *   Zen 6: 50-5F, 80-AF, C0-CF, D8-EF
              * Zen 6 client models named in AMD's EPP patches: 80, 81, 84,
-             * 85, E0; other Zen 6 models are labelled Venice. A uarch
-             * without event tables (zen6 for now) gets the generic
-             * counter group, and top-down / memory say unsupported:
-             * never another generation's encodings. */
+             * 85, E0; other Zen 6 models are labelled Venice. Zen 6 core
+             * counters use the Zen 5 tables, checked against perf on an
+             * EPYC 9996 (counters.c); node memory counters are separate
+             * (nodemon.c). */
             if      (model <= 0x1F)                  { u = "zen5"; nm = "Turin"; }
             else if (model <= 0x2F ||
                      (model >= 0x40 && model <= 0x4F) ||

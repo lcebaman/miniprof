@@ -702,9 +702,12 @@ What a snapshot contains so far:
     system-wide and no capability is needed: `make nodemon` is enough
     (`make nodemon-setcap` says so and does nothing).
     `tools/nodemon_ready.sh` tells you whether the helper can work here.
-    Zen 6 (Venice) is recognised but has no event tables yet: there the
-    counters use the generic group and top-down and the memory block
-    report it as unsupported, rather than borrowing Zen 5 encodings.
+    Zen 6 (Venice): the core counters and top-down use the Zen 5 tables
+    (W = 8), after checking against perf on an EPYC 9996 that every event
+    has the same encoding there; the counters block reports
+    `"uarch": "zen5"`, the table used. The memory block still reports
+    Zen 6 as unsupported until its data-fabric channel map is confirmed
+    (`tools/probe_df_zen6.sh`).
     One rank per node starts it at `MPI_Init`; it opens a fixed set of
     events, drops every capability, samples, and returns totals over a
     pipe at `MPI_Finalize`. It is looked for next to `libminiprof.so`

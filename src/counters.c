@@ -222,13 +222,27 @@ int cnt_dispatch_width(const char *uarch)
     if (!uarch) return 0;
     if (strcmp(uarch, "zen4") == 0) return 6;
     if (strcmp(uarch, "zen5") == 0) return 8;
+    if (strcmp(uarch, "zen6") == 0) return 8;
     if (strcmp(uarch, "swtest") == 0) return 1;
     return 0;
+}
+
+/* Generations that use another's tables. Zen 6 (Venice): on EPYC 9996
+ * (family 1Ah model 51h, perf 5.14 RHEL 9.7) perf applies the Zen 5 JSON
+ * and every core event used here has the Zen 5 encoding; FLOPs (.all,
+ * umask 0x0f), fills, L2 misses, the by-width split and the PipelineL1/L2
+ * events all count, and PipelineL1 sums to ~100% with W = 8
+ * (tools/pmu_probe.sh). The counters block reports the table used. */
+static const char *table_uarch(const char *uarch)
+{
+    if (uarch && strcmp(uarch, "zen6") == 0) return "zen5";
+    return uarch;
 }
 
 /* exact (uarch, group) match, NULL if absent */
 static const cnt_group_t *find_group(const char *uarch, const char *group)
 {
+    uarch = table_uarch(uarch);
     for (int i = 0; i < N_GROUPS; i++)
         if (uarch && strcmp(k_groups[i].uarch, uarch) == 0 &&
             strcmp(k_groups[i].group, group) == 0)
