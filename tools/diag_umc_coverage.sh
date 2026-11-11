@@ -11,7 +11,7 @@
 set -u
 H=./miniprof-nodemon
 make nodemon examples/membw_validate >/dev/null || exit 1
-getcap "$H" | grep -q cap_perfmon || { echo "run: make nodemon-setcap"; exit 1; }
+tools/nodemon_ready.sh "$H" || exit 1
 FAM=$(awk -F: '/^cpu family/{gsub(/ /,"",$2); print $2; exit}' /proc/cpuinfo)
 UA=zen4; [ "$FAM" = 26 ] && UA=zen5
 NN=$(ls -d /sys/devices/system/node/node* | wc -l)

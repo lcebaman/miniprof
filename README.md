@@ -698,6 +698,10 @@ What a snapshot contains so far:
     make nodemon
     sudo setcap cap_perfmon+ep ./miniprof-nodemon     # or: make nodemon-setcap
     ```
+    Where `perf_event_paranoid` is 0 or lower, any user may count
+    system-wide and no capability is needed: `make nodemon` is enough
+    (`make nodemon-setcap` says so and does nothing).
+    `tools/nodemon_ready.sh` tells you whether the helper can work here.
     One rank per node starts it at `MPI_Init`; it opens a fixed set of
     events, drops every capability, samples, and returns totals over a
     pipe at `MPI_Finalize`. It is looked for next to `libminiprof.so`
