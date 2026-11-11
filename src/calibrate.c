@@ -313,10 +313,16 @@ int main(int argc, char **argv)
     topology();
     if (g_ncores == 0) { fprintf(stderr, "no CPUs in the affinity mask\n"); return 1; }
 
-    /* arrays: 3 x max(8 x L3, 1 GiB) over the node; per socket the same total */
+    /* arrays: max(32 x L3, 4 GiB) each, at most a quarter of RAM for all
+     * three. A repetition must take ~100 ms: it is timed until the LAST
+     * thread finishes, so with short ones (8 x L3: ~22 ms on 256 Zen 4
+     * cores) thread skew alone cost ~5% and a streaming application
+     * measured 103% of the "ceiling" (amd4604). */
     long l3 = l3_bytes_total();
-    long per_array = l3 * 8 > (1L << 30) ? l3 * 8 : (1L << 30);
-    int reps = 6;
+    long per_array = l3 * 32 > (4L << 30) ? l3 * 32 : (4L << 30);
+    long ram = sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE);
+    if (ram > 0 && 3 * per_array > ram / 4) per_array = ram / 12;
+    int reps = 10;
     double fsec = FLOP_SECONDS;
     if (quick) { per_array = 16L << 20; reps = 3; fsec = 0.05; }
 
