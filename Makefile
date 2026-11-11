@@ -165,6 +165,10 @@ NODEMON := miniprof-nodemon
 nodemon: $(NODEMON)
 $(NODEMON): src/nodemon.c src/nodemon.h
 	$(CC_HOST) -O2 -Wall -Wextra -o $@ src/nodemon.c
+	@# a freshly written binary carries no file capability
+	@if [ "$$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 2)" -gt 0 ]; then \
+		echo "NOTE: $@ rebuilt; perf_event_paranoid > 0, so the memory block needs"; \
+		echo "      'make nodemon-setcap' (sudo) again, or it will report itself unavailable."; fi
 # Owner-only execute first: with the capability, the helper reads
 # node-wide energy and memory traffic, which the kernel otherwise keeps
 # from unprivileged users (RAPL is root-only since the PLATYPUS side
