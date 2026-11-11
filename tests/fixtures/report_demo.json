@@ -1,0 +1,1758 @@
+{
+ "schema": "miniprof-snapshot",
+ "schema_version": "0.7.0",
+ "tool": {
+  "name": "miniprof",
+  "version": "1.1.0-dev"
+ },
+ "run": {
+  "start_utc": "2026-11-11T20:14:46Z",
+  "command": "./wrf.exe -namelist namelist.input",
+  "level": "basic",
+  "nranks": 32,
+  "nnodes": 2,
+  "ranks_per_node": {
+   "min": 2,
+   "max": 2
+  },
+  "cpus_per_rank": {
+   "min": 1,
+   "max": 1
+  },
+  "omp_num_threads": 4,
+  "mpi_thread_level": "funneled",
+  "mpi_library": "Open MPI v5.0.10",
+  "slurm_job_id": "184467",
+  "elapsed_s": {
+   "min": 41.8,
+   "avg": 41.9,
+   "max": 42.0
+  }
+ },
+ "overhead": {
+  "init_s_max": 0.016714669,
+  "finalize_s": 0.00619079399999,
+  "fraction_of_elapsed": 0.0405304364118
+ },
+ "nodes": [
+  {
+   "index": 0,
+   "hostname": "amd4121",
+   "ranks": 16,
+   "first_rank": 0,
+   "cpu": {
+    "vendor": "AuthenticAMD",
+    "family": 26,
+    "model": 2,
+    "stepping": 7,
+    "brand": "AMD EPYC 9555 64-Core Processor",
+    "uarch": "zen5",
+    "uarch_name": "Zen 5 (Turin)"
+   },
+   "logical_cpus": 256,
+   "numa_nodes": 2,
+   "smt_active": false,
+   "kernel": "6.18.44-fc-v378",
+   "perf_event_paranoid": 2,
+   "exclusivity": {
+    "loadavg1_at_init": 0.35,
+    "procs_running_at_init": 2,
+    "shared_suspected": false
+   }
+  },
+  {
+   "index": 1,
+   "hostname": "amd4126",
+   "ranks": 16,
+   "first_rank": 16,
+   "cpu": {
+    "vendor": "AuthenticAMD",
+    "family": 26,
+    "model": 2,
+    "stepping": 7,
+    "brand": "AMD EPYC 9555 64-Core Processor",
+    "uarch": "zen5",
+    "uarch_name": "Zen 5 (Turin)"
+   },
+   "logical_cpus": 256,
+   "numa_nodes": 2,
+   "smt_active": false,
+   "kernel": "6.18.44-fc-v378",
+   "perf_event_paranoid": 2,
+   "exclusivity": {
+    "loadavg1_at_init": 0.35,
+    "procs_running_at_init": 2,
+    "shared_suspected": false
+   }
+  }
+ ],
+ "ranks": [
+  {
+   "rank": 0,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.93523344703337,
+   "compute_s": 30.72627376088675,
+   "mpi_s": 10.608959686146617,
+   "io_s": 0.6,
+   "cpu_util_pct": 91.90560683823912,
+   "cpu_util_per_core_pct": 88.43461772000526,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 1,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.892823599138666,
+   "compute_s": 31.04853337536888,
+   "mpi_s": 10.844290223769786,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.34799354864825,
+   "cpu_util_per_core_pct": 91.04461439913652,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 2,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.9925008683116,
+   "compute_s": 31.15046852549358,
+   "mpi_s": 10.842032342818023,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.41913254144771,
+   "cpu_util_per_core_pct": 88.5442780800632,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 3,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.915096162171494,
+   "compute_s": 31.74027818700806,
+   "mpi_s": 10.174817975163435,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.74281176689787,
+   "cpu_util_per_core_pct": 89.3394337876421,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 4,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.87451335551888,
+   "compute_s": 31.921563413685508,
+   "mpi_s": 9.95294994183337,
+   "io_s": 0.0,
+   "cpu_util_pct": 91.46261769170499,
+   "cpu_util_per_core_pct": 90.38008284790467,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 5,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.80474897888141,
+   "compute_s": 30.569874020926633,
+   "mpi_s": 11.23487495795478,
+   "io_s": 0.0,
+   "cpu_util_pct": 93.15081075429208,
+   "cpu_util_per_core_pct": 89.73765571799005,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 6,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.97114898332851,
+   "compute_s": 30.676688357117552,
+   "mpi_s": 11.29446062621096,
+   "io_s": 0.0,
+   "cpu_util_pct": 89.8508909446116,
+   "cpu_util_per_core_pct": 92.89675815472019,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 7,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.96385472401521,
+   "compute_s": 35.8724002454937,
+   "mpi_s": 6.091454478521513,
+   "io_s": 0.0,
+   "cpu_util_pct": 91.8334808135571,
+   "cpu_util_per_core_pct": 90.23438525635439,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 8,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.89045110685809,
+   "compute_s": 30.594183462459984,
+   "mpi_s": 11.296267644398103,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.3576070197974,
+   "cpu_util_per_core_pct": 89.23575227691596,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 9,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.863920005363646,
+   "compute_s": 31.141388458504103,
+   "mpi_s": 10.722531546859543,
+   "io_s": 0.0,
+   "cpu_util_pct": 89.88488302226075,
+   "cpu_util_per_core_pct": 91.51337118104583,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 10,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.90936312472584,
+   "compute_s": 30.949650495295522,
+   "mpi_s": 10.95971262943032,
+   "io_s": 0.0,
+   "cpu_util_pct": 92.76627688913494,
+   "cpu_util_per_core_pct": 92.19396660237743,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 11,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.95118069785557,
+   "compute_s": 31.361635565388006,
+   "mpi_s": 10.589545132467563,
+   "io_s": 0.0,
+   "cpu_util_pct": 91.1511790228687,
+   "cpu_util_per_core_pct": 93.25082497344057,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 12,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.85411094211216,
+   "compute_s": 30.93190664733528,
+   "mpi_s": 10.92220429477688,
+   "io_s": 0.0,
+   "cpu_util_pct": 93.88104908495549,
+   "cpu_util_per_core_pct": 88.70839466952977,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 13,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.916375435642955,
+   "compute_s": 31.635711394347872,
+   "mpi_s": 10.280664041295083,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.91190720796303,
+   "cpu_util_per_core_pct": 90.93377860285483,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 14,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.99215854859051,
+   "compute_s": 31.502323784801593,
+   "mpi_s": 10.489834763788917,
+   "io_s": 0.0,
+   "cpu_util_pct": 92.58742519727687,
+   "cpu_util_per_core_pct": 91.43815564166431,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 15,
+   "node": 0,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.82490443763382,
+   "compute_s": 30.970621269272144,
+   "mpi_s": 10.854283168361675,
+   "io_s": 0.0,
+   "cpu_util_pct": 92.17177219764196,
+   "cpu_util_per_core_pct": 91.56621926263011,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 16,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.8840209591435,
+   "compute_s": 31.18430799695212,
+   "mpi_s": 10.699712962191377,
+   "io_s": 0.0,
+   "cpu_util_pct": 93.03980668307526,
+   "cpu_util_per_core_pct": 93.66808657064763,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 17,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.90518033251607,
+   "compute_s": 31.49622830821201,
+   "mpi_s": 10.408952024304057,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.36401656558331,
+   "cpu_util_per_core_pct": 92.20895212782655,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 18,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.870574229094466,
+   "compute_s": 31.989643909199952,
+   "mpi_s": 9.880930319894514,
+   "io_s": 0.0,
+   "cpu_util_pct": 92.9315487196583,
+   "cpu_util_per_core_pct": 89.7075731925649,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 19,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.92284171151066,
+   "compute_s": 31.502979073826282,
+   "mpi_s": 10.419862637684375,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.13537756833352,
+   "cpu_util_per_core_pct": 90.77017171779859,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 20,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.96639032421869,
+   "compute_s": 30.6756436917226,
+   "mpi_s": 11.290746632496095,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.35372651598786,
+   "cpu_util_per_core_pct": 92.60939793083513,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 21,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.97413195559626,
+   "compute_s": 30.871422250545372,
+   "mpi_s": 11.102709705050891,
+   "io_s": 0.0,
+   "cpu_util_pct": 90.34569821879936,
+   "cpu_util_per_core_pct": 93.2285318447578,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 22,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.983883739759975,
+   "compute_s": 31.173781101423998,
+   "mpi_s": 10.810102638335977,
+   "io_s": 0.0,
+   "cpu_util_pct": 91.29663945486422,
+   "cpu_util_per_core_pct": 93.30030295864907,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 23,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.83614403243285,
+   "compute_s": 36.295976704547776,
+   "mpi_s": 5.540167327885072,
+   "io_s": 0.0,
+   "cpu_util_pct": 89.67052638708338,
+   "cpu_util_per_core_pct": 90.49177910327019,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 24,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.92824576693368,
+   "compute_s": 31.826289240797326,
+   "mpi_s": 10.101956526136352,
+   "io_s": 0.0,
+   "cpu_util_pct": 93.74638722378394,
+   "cpu_util_per_core_pct": 88.90552543474665,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 25,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.96475645430193,
+   "compute_s": 30.847935300229302,
+   "mpi_s": 11.116821154072625,
+   "io_s": 0.0,
+   "cpu_util_pct": 89.40001650208517,
+   "cpu_util_per_core_pct": 90.90977638204814,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 26,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.88217529925355,
+   "compute_s": 30.894119928947806,
+   "mpi_s": 10.98805537030574,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.02456162031038,
+   "cpu_util_per_core_pct": 90.51367900675197,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 27,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.926149285421054,
+   "compute_s": 31.34951183555959,
+   "mpi_s": 10.576637449861465,
+   "io_s": 0.0,
+   "cpu_util_pct": 93.71858755315057,
+   "cpu_util_per_core_pct": 92.14296194281587,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 28,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.896901713385844,
+   "compute_s": 31.42638912411369,
+   "mpi_s": 10.470512589272154,
+   "io_s": 0.0,
+   "cpu_util_pct": 92.05720049469701,
+   "cpu_util_per_core_pct": 88.32395735934274,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 29,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.82009339798841,
+   "compute_s": 31.66995423605911,
+   "mpi_s": 10.1501391619293,
+   "io_s": 0.0,
+   "cpu_util_pct": 93.24707910480686,
+   "cpu_util_per_core_pct": 92.7872387271794,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 30,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.92152421862175,
+   "compute_s": 31.09846824848041,
+   "mpi_s": 10.82305597014134,
+   "io_s": 0.0,
+   "cpu_util_pct": 88.62122256226195,
+   "cpu_util_per_core_pct": 91.80573739411426,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  },
+  {
+   "rank": 31,
+   "node": 1,
+   "pid": 353,
+   "cpus_allowed": 1,
+   "cores_allowed": 1,
+   "cpus_allowed_list": "0",
+   "elapsed_s": 41.98755043567626,
+   "compute_s": 30.601021423764536,
+   "mpi_s": 11.386529011911726,
+   "io_s": 0.0,
+   "cpu_util_pct": 89.25257911267698,
+   "cpu_util_per_core_pct": 88.97381912663259,
+   "omp_threads": 2,
+   "omp_parallel_s": 0.357694176
+  }
+ ],
+ "metrics": {
+  "collected": [
+   "parallel",
+   "counters",
+   "openmp",
+   "topdown",
+   "memory",
+   "roofline"
+  ],
+  "parallel": {
+   "definitions": {
+    "compute_s": "elapsed - MPI time - I/O time, per rank",
+    "imbalance_pct": "(max - avg) / max over ranks",
+    "imbalance_cost_pct": "(max - avg) compute time as a share of elapsed: what perfect balance would save",
+    "bytes": "this rank's share of each call's data; receives count the posted size",
+    "message_sizes": "bin 0 = 0 bytes; bin b = [2^(b-1), 2^b) bytes"
+   },
+   "time_split_pct": {
+    "compute": 74.6,
+    "mpi": 23.9,
+    "io": 1.5
+   },
+   "compute": {
+    "time_s": {
+     "min": 30.5,
+     "avg": 31.6,
+     "max": 36.4
+    },
+    "imbalance_pct": 13.2,
+    "imbalance_cost_pct": 11.4,
+    "slowest_ranks": [
+     {
+      "rank": 7,
+      "compute_s": 36.4
+     },
+     {
+      "rank": 23,
+      "compute_s": 35.9
+     },
+     {
+      "rank": 12,
+      "compute_s": 32.0
+     }
+    ]
+   },
+   "mpi": {
+    "time_s": {
+     "min": 5.6,
+     "avg": 10.0,
+     "max": 11.4
+    },
+    "pct_of_elapsed": 23.9,
+    "imbalance_pct": 12.3,
+    "by_class": {
+     "p2p": {
+      "time_s": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      },
+      "pct_of_elapsed": 6.3,
+      "calls": 2000000,
+      "bytes": 393216000000
+     },
+     "collective": {
+      "time_s": {
+       "min": 2.3021e-05,
+       "avg": 0.000531582,
+       "max": 0.001040143
+      },
+      "pct_of_elapsed": 7.8,
+      "calls": 51200,
+      "bytes": 12672000
+     },
+     "wait": {
+      "time_s": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      },
+      "pct_of_elapsed": 9.8,
+      "calls": 2000000,
+      "bytes": 0
+     },
+     "rma": {
+      "time_s": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      },
+      "pct_of_elapsed": 0,
+      "calls": 0,
+      "bytes": 0
+     }
+    },
+    "by_function": [
+     {
+      "name": "MPI_Waitall",
+      "class": "wait",
+      "calls": 2000000,
+      "bytes": 0,
+      "avg_bytes_per_call": 0,
+      "time_s": {
+       "min": 2.94,
+       "avg": 4.1160000000000005,
+       "max": 4.9
+      },
+      "pct_of_elapsed": 9.8,
+      "imbalance_pct": 28.602146089293736
+     },
+     {
+      "name": "MPI_Allreduce",
+      "class": "collective",
+      "calls": 48000,
+      "bytes": 384000,
+      "avg_bytes_per_call": 8,
+      "time_s": {
+       "min": 1.8299999999999998,
+       "avg": 2.562,
+       "max": 3.05
+      },
+      "pct_of_elapsed": 6.1,
+      "imbalance_pct": 17.103024155610676
+     },
+     {
+      "name": "MPI_Isend",
+      "class": "p2p",
+      "calls": 1000000,
+      "bytes": 196608000000,
+      "avg_bytes_per_call": 196608,
+      "time_s": {
+       "min": 1.17,
+       "avg": 1.638,
+       "max": 1.95
+      },
+      "pct_of_elapsed": 3.9,
+      "imbalance_pct": 15.009331276054265
+     },
+     {
+      "name": "MPI_Irecv",
+      "class": "p2p",
+      "calls": 1000000,
+      "bytes": 196608000000,
+      "avg_bytes_per_call": 196608,
+      "time_s": {
+       "min": 0.72,
+       "avg": 1.008,
+       "max": 1.2
+      },
+      "pct_of_elapsed": 2.4,
+      "imbalance_pct": 21.05059729117712
+     },
+     {
+      "name": "MPI_Bcast",
+      "class": "collective",
+      "calls": 3000,
+      "bytes": 12288000,
+      "avg_bytes_per_call": 4096,
+      "time_s": {
+       "min": 0.36,
+       "avg": 0.504,
+       "max": 0.6
+      },
+      "pct_of_elapsed": 1.2,
+      "imbalance_pct": 19.05857472090386
+     },
+     {
+      "name": "MPI_Barrier",
+      "class": "collective",
+      "calls": 200,
+      "bytes": 0,
+      "avg_bytes_per_call": 0,
+      "time_s": {
+       "min": 0.15,
+       "avg": 0.21,
+       "max": 0.25
+      },
+      "pct_of_elapsed": 0.5,
+      "imbalance_pct": 29.544396881382838
+     }
+    ],
+    "message_sizes": {
+     "bin_lower_bytes": [
+      0,
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      16384,
+      32768,
+      65536,
+      131072,
+      262144,
+      524288,
+      1048576,
+      2097152,
+      4194304,
+      8388608
+     ],
+     "p2p": {
+      "calls": [
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       11,
+       613,
+       13777,
+       127140,
+       482329,
+       752252,
+       482329,
+       127140,
+       13777,
+       613,
+       11,
+       0
+      ],
+      "time_s": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       2.2e-05,
+       0.0012259999999999999,
+       0.027554,
+       0.25428,
+       0.9646579999999999,
+       1.5045039999999998,
+       0.9646579999999999,
+       0.25428,
+       0.027554,
+       0.0012259999999999999,
+       2.2e-05,
+       0.0
+      ]
+     },
+     "collective": {
+      "calls": [
+       0,
+       46,
+       1490,
+       11973,
+       23978,
+       11973,
+       1490,
+       46,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0,
+       0
+      ],
+      "time_s": [
+       0.0,
+       0.0046,
+       0.149,
+       1.1973,
+       2.3978,
+       1.1973,
+       0.149,
+       0.0046,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     }
+    }
+   },
+   "io": {
+    "time_s": {
+     "min": 0,
+     "avg": 0,
+     "max": 0
+    },
+    "pct_of_elapsed": 0,
+    "posix": {
+     "calls": {
+      "open": 40,
+      "close": 40,
+      "read": 310,
+      "write": 1240,
+      "sync": 0
+     },
+     "bytes": {
+      "read": 2100000000.0,
+      "write": 6400000000.0
+     },
+     "time_s": {
+      "read": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      },
+      "write": {
+       "min": 0,
+       "avg": 0.55,
+       "max": 17.6
+      },
+      "meta": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      }
+     }
+    },
+    "mpiio": {
+     "calls": {
+      "open": 0,
+      "close": 0,
+      "read": 0,
+      "write": 0,
+      "sync": 0
+     },
+     "bytes": {
+      "read": 0,
+      "write": 0
+     },
+     "time_s": {
+      "read": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      },
+      "write": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      },
+      "meta": {
+       "min": 0,
+       "avg": 0,
+       "max": 0
+      }
+     }
+    }
+   },
+   "cpu": {
+    "utilisation_pct": {
+     "min": 98.1799088473,
+     "avg": 98.396299537,
+     "max": 98.6126902267
+    },
+    "utilisation_per_core_pct": {
+     "min": 88.1,
+     "avg": 91.4,
+     "max": 94.0
+    },
+    "user_s": {
+     "min": 0.553176,
+     "avg": 0.555239,
+     "max": 0.557302
+    },
+    "sys_s": {
+     "min": 0,
+     "avg": 0,
+     "max": 0
+    },
+    "max_rss_mb": {
+     "min": 16.02734375,
+     "avg": 16.0703125,
+     "max": 16.11328125
+    },
+    "voluntary_ctx_switches": 29,
+    "involuntary_ctx_switches": 567,
+    "note": "utilisation = CPU time / (elapsed x hardware threads the rank may run on); per_core uses physical cores instead, which is the meaningful one when a rank is bound to a whole SMT core. MPI libraries usually busy-poll while waiting, so MPI time counts as busy"
+   }
+  },
+  "counters": {
+   "available": true,
+   "ranks_without_counters": 0,
+   "uarch": "zen5",
+   "group": "base",
+   "read_method": "rdpmc",
+   "reads": {
+    "rdpmc": 0,
+    "syscall": 8
+   },
+   "user_space_only": true,
+   "compute_mpi_split": true,
+   "threads_counted": 4,
+   "threads_dropped": 0,
+   "multiplexed_ranks": 0,
+   "events": [
+    {
+     "key": "cycles",
+     "perf_name": "task-clock",
+     "type": "software",
+     "config": "0x1",
+     "optional": false,
+     "active": true
+    },
+    {
+     "key": "instructions",
+     "perf_name": "page-faults",
+     "type": "software",
+     "config": "0x2",
+     "optional": false,
+     "active": true
+    },
+    {
+     "key": "flops",
+     "perf_name": "minor-faults",
+     "type": "software",
+     "config": "0x5",
+     "optional": false,
+     "active": true
+    },
+    {
+     "key": "l2_misses",
+     "perf_name": "context-switches",
+     "type": "software",
+     "config": "0x3",
+     "optional": true,
+     "active": true
+    }
+   ],
+   "definitions": {
+    "compute": "counts outside MPI calls (includes I/O); mpi = inside MPI calls",
+    "dram_fills": "L1D fills sourced from DRAM/IO, x64 B per line; misses lines the L2 prefetcher brought in and all writebacks, so it is a lower bound on DRAM traffic, not a bandwidth measurement",
+    "ghz_effective": "cycles / user CPU time (user-space counts)",
+    "fp_ops_width": "FP-unit ops by vector width, including FP loads, stores and register moves: shows how much vector hardware is used, not the share of arithmetic that is vectorised"
+   },
+   "totals": {
+    "cycles": 1120787277,
+    "instructions": 163,
+    "flops": 147,
+    "l2_misses": 0
+   },
+   "compute": {
+    "cycles": 1119712174,
+    "instructions": 163,
+    "flops": 147,
+    "l2_misses": 0
+   },
+   "mpi": {
+    "cycles": 1075103,
+    "instructions": 0,
+    "flops": 0,
+    "l2_misses": 0
+   },
+   "per_rank": {
+    "cycles": {
+     "min": 560168596,
+     "avg": 560393638.5,
+     "max": 560618681
+    },
+    "instructions": {
+     "min": 81,
+     "avg": 81.5,
+     "max": 82
+    },
+    "flops": {
+     "min": 70,
+     "avg": 73.5,
+     "max": 77
+    },
+    "l2_misses": {
+     "min": 0,
+     "avg": 0,
+     "max": 0
+    }
+   },
+   "derived": {
+    "ipc": 1.21,
+    "ipc_compute": 1.38,
+    "ipc_mpi": 0.62,
+    "ipc_per_rank": {
+     "min": 1.1,
+     "avg": 1.21,
+     "max": 1.3
+    },
+    "ghz_effective": 4.18,
+    "gflops_per_s": 1840.0,
+    "gflops_per_s_per_rank_in_compute": 77.5,
+    "flops_per_cycle": 4.6,
+    "flops_in_mpi_pct": 0.4,
+    "l2_misses_per_kilo_instr": 6.8,
+    "dram_fill_bytes": 9100000000000.0,
+    "dram_fill_gb_per_s": 216.0,
+    "remote_dram_fill_pct": 4.2,
+    "flops_per_dram_fill_byte": 8.5,
+    "packed_fp_ops_pct": 61.0,
+    "fp_ops_width_pct": {
+     "scalar": 39.0,
+     "packed128": 6.0,
+     "packed256": 41.0,
+     "packed512": 14.0
+    }
+   },
+   "regions": [
+    {
+     "name": "advance_uv",
+     "ranks": 32,
+     "calls": 3200,
+     "time_s": {
+      "min": 9.1,
+      "avg": 9.8,
+      "max": 12.9
+     },
+     "pct_of_elapsed": 23.3,
+     "derived": {
+      "ipc": 1.62,
+      "gflops_per_s_per_rank": 96.0
+     }
+    },
+    {
+     "name": "microphysics",
+     "ranks": 32,
+     "calls": 800,
+     "time_s": {
+      "min": 7.0,
+      "avg": 7.4,
+      "max": 8.1
+     },
+     "pct_of_elapsed": 17.6,
+     "derived": {
+      "ipc": 0.88,
+      "gflops_per_s_per_rank": 31.0
+     }
+    },
+    {
+     "name": "radiation",
+     "ranks": 32,
+     "calls": 80,
+     "time_s": {
+      "min": 5.2,
+      "avg": 5.5,
+      "max": 5.9
+     },
+     "pct_of_elapsed": 13.1,
+     "derived": {
+      "ipc": 2.31,
+      "gflops_per_s_per_rank": 142.0
+     }
+    },
+    {
+     "name": "halo_pack",
+     "ranks": 32,
+     "calls": 9600,
+     "time_s": {
+      "min": 2.0,
+      "avg": 2.3,
+      "max": 2.5
+     },
+     "pct_of_elapsed": 5.5,
+     "derived": {
+      "ipc": 0.71,
+      "gflops_per_s_per_rank": 0.4
+     }
+    }
+   ]
+  },
+  "openmp": {
+   "available": true,
+   "ranks_without_ompt": 0,
+   "runtime": "LLVM OMP version 5.0 (AOCC 6.0)",
+   "definitions": {
+    "parallel_s": "time the initial thread spent inside outermost parallel regions",
+    "serial_s": "elapsed - parallel_s: time outside any parallel region",
+    "barrier_wait": "time team members waited at barriers (explicit, implicit at the end of worksharing constructs and parallel regions)",
+    "imbalance_pct": "barrier wait / team time: share of thread time spent waiting for slower team members",
+    "thread_imbalance_pct": "per rank, (max - avg) / max of per-thread work time"
+   },
+   "threads": 128,
+   "parallel_s": {
+    "min": 0.357694176,
+    "avg": 0.358232465,
+    "max": 0.358770754
+   },
+   "serial_s": {
+    "min": 3.2,
+    "avg": 3.4,
+    "max": 3.6
+   },
+   "parallel_pct_of_elapsed": 91.8,
+   "serial_pct_of_elapsed": 8.2,
+   "thread_time_s": {
+    "work": 4380.0,
+    "barrier_wait": 640.0,
+    "lock_wait": 15.0,
+    "task_wait": 0.0
+   },
+   "imbalance_pct": 12.7,
+   "lock_wait_pct": 0.3,
+   "thread_imbalance_pct": {
+    "min": 8.26746938494,
+    "avg": 8.64860094551,
+    "max": 9.02973250609
+   },
+   "regions": [
+    {
+     "name": "advance_uv",
+     "location": "module_small_step_em.f90:412",
+     "key": "x",
+     "ranks": 32,
+     "calls": 102400,
+     "wall_s_per_rank": 11.9,
+     "avg_team": 4,
+     "max_team": 4,
+     "barrier_wait_s": 92.0,
+     "imbalance_pct": 19.3
+    },
+    {
+     "name": "microphysics",
+     "location": "module_mp_thompson.f90:1180",
+     "key": "y",
+     "ranks": 32,
+     "calls": 25600,
+     "wall_s_per_rank": 8.1,
+     "avg_team": 4,
+     "max_team": 4,
+     "barrier_wait_s": 60.0,
+     "imbalance_pct": 23.1
+    },
+    {
+     "name": "radiation",
+     "location": "module_ra_rrtmg_lw.f90:6420",
+     "key": "z",
+     "ranks": 32,
+     "calls": 2560,
+     "wall_s_per_rank": 5.8,
+     "avg_team": 4,
+     "max_team": 4,
+     "barrier_wait_s": 7.0,
+     "imbalance_pct": 3.8
+    }
+   ]
+  },
+  "topdown": {
+   "available": true,
+   "uarch": "zen5",
+   "model": "AMD pipeline utilisation (perf PipelineL1/L2)",
+   "dispatch_width": 8,
+   "method": "each thread counts one event set for the whole run, set = (rank + thread) mod sets; ratios only within a set; level 2 shares applied to the level 1 fractions",
+   "sets": [
+    {
+     "name": "td_l1",
+     "threads": 1,
+     "ranks": 1
+    },
+    {
+     "name": "td_febe",
+     "threads": 2,
+     "ranks": 2
+    },
+    {
+     "name": "td_rbs",
+     "threads": 1,
+     "ranks": 1
+    }
+   ],
+   "definitions": {
+    "units": "percent of dispatch slots (dispatch_width per cycle), user space",
+    "compute": "outside MPI calls: the application's own code",
+    "mpi": "inside MPI calls: mostly the MPI library polling for progress",
+    "frontend_bound": "slots left empty because the frontend delivered no ops (instruction fetch/decode)",
+    "bad_speculation": "slots used by ops that were later squashed; the refetch bubble after a mispredict counts as frontend_bound (mostly frontend_latency)",
+    "level1_sum": "level 1 need not sum to 100: in strongly latency-bound code some empty slots are not attributed to any category",
+    "backend_bound": "slots left empty because the backend was full (waiting on memory or execution resources)",
+    "retiring": "slots used by ops that retired: useful work",
+    "backend_memory": "backend_bound share while the oldest op is a load",
+    "frontend_latency": "frontend_bound share in cycles with no ops at all (fetch latency: i-cache/iTLB misses, redirects)"
+   },
+   "compute": {
+    "level1": {
+     "frontend_bound": 14.0,
+     "bad_speculation": 3.1,
+     "backend_bound": 52.4,
+     "retiring": 30.5,
+     "smt_contention": null
+    },
+    "level2": {
+     "frontend_latency": 9.0,
+     "frontend_bandwidth": 5.0,
+     "bad_speculation_mispredicts": 2.9,
+     "bad_speculation_pipeline_restarts": 0.2,
+     "backend_memory": 38.1,
+     "backend_cpu": 14.3,
+     "retiring_fastpath": 30.1,
+     "retiring_microcode": 0.4
+    }
+   },
+   "mpi": {
+    "level1": {
+     "frontend_bound": 0,
+     "bad_speculation": 0,
+     "backend_bound": 0,
+     "retiring": 0,
+     "smt_contention": null
+    },
+    "level2": {
+     "frontend_latency": 0,
+     "frontend_bandwidth": 0,
+     "bad_speculation_mispredicts": 0,
+     "bad_speculation_pipeline_restarts": 0
+    }
+   },
+   "regions": [
+    {
+     "name": "advance_uv",
+     "ranks": 32,
+     "calls": 100,
+     "time_s_per_rank": 5.0,
+     "topdown": {
+      "level1": {
+       "frontend_bound": 6.0,
+       "bad_speculation": 0.8,
+       "backend_bound": 63.0,
+       "retiring": 30.2
+      },
+      "level2": {
+       "backend_memory": 51.0,
+       "backend_cpu": 12.0
+      }
+     }
+    },
+    {
+     "name": "microphysics",
+     "ranks": 32,
+     "calls": 100,
+     "time_s_per_rank": 5.0,
+     "topdown": {
+      "level1": {
+       "frontend_bound": 22.0,
+       "bad_speculation": 9.5,
+       "backend_bound": 44.0,
+       "retiring": 24.5
+      },
+      "level2": {
+       "backend_memory": 18.0,
+       "backend_cpu": 26.0
+      }
+     }
+    },
+    {
+     "name": "radiation",
+     "ranks": 32,
+     "calls": 100,
+     "time_s_per_rank": 5.0,
+     "topdown": {
+      "level1": {
+       "frontend_bound": 4.0,
+       "bad_speculation": 0.5,
+       "backend_bound": 30.0,
+       "retiring": 65.5
+      },
+      "level2": {
+       "backend_memory": 6.0,
+       "backend_cpu": 24.0
+      }
+     }
+    },
+    {
+     "name": "halo_pack",
+     "ranks": 32,
+     "calls": 100,
+     "time_s_per_rank": 5.0,
+     "topdown": {
+      "level1": {
+       "frontend_bound": 3.0,
+       "bad_speculation": 0.1,
+       "backend_bound": 88.0,
+       "retiring": 8.9
+      },
+      "level2": {
+       "backend_memory": 80.0,
+       "backend_cpu": 8.0
+      }
+     }
+    }
+   ]
+  },
+  "memory": {
+   "available": true,
+   "nodes_measured": 2,
+   "nodes_without": 0,
+   "source": "miniprof-nodemon: DRAM from memory-controller CAS (amd_umc, Zen 5) or data-fabric DRAM beats (amd_df, Zen 4 / Zen 6), data-fabric remote inbound (amd_df), package energy (power)",
+   "interval_ms": 100,
+   "calibration": {
+    "file": "miniprof_calibration_quick.json",
+    "host": "vm",
+    "date_utc": "2026-11-11T12:06:56Z",
+    "same_cpu": true,
+    "warning": "calibration made with --quick: not a measurement of the node"
+   },
+   "definitions": {
+    "scope": "whole node: every process on it counts, not only this job (see nodes[].exclusivity)",
+    "read_gb_s": "DRAM read bandwidth over the run, includes write-allocate reads and prefetches",
+    "peak_gb_s": "highest bandwidth over one sampling interval",
+    "remote_read_share_pct": "share of core reads served by another socket (NUMA placement), weighted by traffic; null for a socket whose cores read < 1% of the node's total",
+    "channels_active": "channels carrying at least 2% of the busiest channel's traffic"
+   },
+   "nodes": [
+    {
+     "index": 0,
+     "hostname": "amd4121",
+     "elapsed_s": 42.0,
+     "samples": 420,
+     "multiplexed": false,
+     "sockets": [
+      {
+       "socket": 0,
+       "read_gb_s": 121.0,
+       "write_gb_s": 51.0,
+       "peak_read_gb_s": 229.89999999999998,
+       "peak_write_gb_s": 86.7,
+       "pct_of_calibrated_bw": 31.0,
+       "peak_pct_of_calibrated_bw": 57.0,
+       "remote_read_gb_s": 4.598,
+       "remote_read_share_pct": 3.8,
+       "energy_j": 14952,
+       "power_w": 356,
+       "channels": {
+        "count": 12,
+        "active": 12,
+        "read_gb_s": [
+         9.604880060721698,
+         10.460785147185268,
+         10.19835289602005,
+         9.728955072708649,
+         9.833526571195053,
+         9.92945112560415,
+         9.946364801524352,
+         9.703032582685212,
+         10.435178067538654,
+         10.580545244385586,
+         10.0490393713196,
+         10.067033278553073
+        ],
+        "write_gb_s": [
+         4.074000981161371,
+         4.080929737117971,
+         4.183120231253276,
+         4.150021678979802,
+         4.389763535701663,
+         4.106111409473733,
+         4.04731568144423,
+         4.441668868471749,
+         4.262009392892903,
+         4.099806079032113,
+         4.2683482809998985,
+         4.048993058854421
+        ]
+       }
+      },
+      {
+       "socket": 1,
+       "read_gb_s": 107.0,
+       "write_gb_s": 45.0,
+       "peak_read_gb_s": 203.29999999999998,
+       "peak_write_gb_s": 76.5,
+       "pct_of_calibrated_bw": 31.0,
+       "peak_pct_of_calibrated_bw": 57.0,
+       "remote_read_gb_s": 5.456999999999999,
+       "remote_read_share_pct": 5.1,
+       "energy_j": 14952,
+       "power_w": 356,
+       "channels": {
+        "count": 12,
+        "active": 12,
+        "read_gb_s": [
+         8.94173091816999,
+         9.343330274757749,
+         9.24063148534162,
+         9.091608800767789,
+         8.703661050862847,
+         8.797807314320384,
+         8.619779147459782,
+         9.15914463499181,
+         8.945728221097816,
+         9.165490611443207,
+         8.764784620584255,
+         8.669712158517006
+        ],
+        "write_gb_s": [
+         3.866816717540098,
+         3.931847268971584,
+         3.8822357995299974,
+         3.8647794692946253,
+         3.8693748537470145,
+         3.8399523826408926,
+         3.647527308761844,
+         3.7566145215913145,
+         3.695835953758109,
+         3.573367556528012,
+         3.572976403283274,
+         3.667281952143386
+        ]
+       }
+      }
+     ],
+     "read_gb_s": 228.0,
+     "write_gb_s": 96.0,
+     "total_gb_s": 324.0,
+     "peak_gb_s": 611.0,
+     "calibrated_bw_gb_s": 1050.0,
+     "pct_of_calibrated_bw": 30.9,
+     "peak_pct_of_calibrated_bw": 58.2,
+     "energy_j": 29904.0,
+     "power_w": 712
+    },
+    {
+     "index": 1,
+     "hostname": "amd4126",
+     "elapsed_s": 42.0,
+     "samples": 420,
+     "multiplexed": false,
+     "sockets": [
+      {
+       "socket": 0,
+       "read_gb_s": 121.0,
+       "write_gb_s": 51.0,
+       "peak_read_gb_s": 229.89999999999998,
+       "peak_write_gb_s": 86.7,
+       "pct_of_calibrated_bw": 31.0,
+       "peak_pct_of_calibrated_bw": 57.0,
+       "remote_read_gb_s": 4.598,
+       "remote_read_share_pct": 3.8,
+       "energy_j": 14952,
+       "power_w": 356,
+       "channels": {
+        "count": 12,
+        "active": 12,
+        "read_gb_s": [
+         9.604880060721698,
+         10.460785147185268,
+         10.19835289602005,
+         9.728955072708649,
+         9.833526571195053,
+         9.92945112560415,
+         9.946364801524352,
+         9.703032582685212,
+         10.435178067538654,
+         10.580545244385586,
+         10.0490393713196,
+         10.067033278553073
+        ],
+        "write_gb_s": [
+         4.074000981161371,
+         4.080929737117971,
+         4.183120231253276,
+         4.150021678979802,
+         4.389763535701663,
+         4.106111409473733,
+         4.04731568144423,
+         4.441668868471749,
+         4.262009392892903,
+         4.099806079032113,
+         4.2683482809998985,
+         4.048993058854421
+        ]
+       }
+      },
+      {
+       "socket": 1,
+       "read_gb_s": 107.0,
+       "write_gb_s": 45.0,
+       "peak_read_gb_s": 203.29999999999998,
+       "peak_write_gb_s": 76.5,
+       "pct_of_calibrated_bw": 31.0,
+       "peak_pct_of_calibrated_bw": 57.0,
+       "remote_read_gb_s": 5.456999999999999,
+       "remote_read_share_pct": 5.1,
+       "energy_j": 14952,
+       "power_w": 356,
+       "channels": {
+        "count": 12,
+        "active": 12,
+        "read_gb_s": [
+         8.94173091816999,
+         9.343330274757749,
+         9.24063148534162,
+         9.091608800767789,
+         8.703661050862847,
+         8.797807314320384,
+         8.619779147459782,
+         9.15914463499181,
+         8.945728221097816,
+         9.165490611443207,
+         8.764784620584255,
+         8.669712158517006
+        ],
+        "write_gb_s": [
+         3.866816717540098,
+         3.931847268971584,
+         3.8822357995299974,
+         3.8647794692946253,
+         3.8693748537470145,
+         3.8399523826408926,
+         3.647527308761844,
+         3.7566145215913145,
+         3.695835953758109,
+         3.573367556528012,
+         3.572976403283274,
+         3.667281952143386
+        ]
+       }
+      }
+     ],
+     "read_gb_s": 219.0,
+     "write_gb_s": 93.0,
+     "total_gb_s": 312.0,
+     "peak_gb_s": 611.0,
+     "calibrated_bw_gb_s": 1050.0,
+     "pct_of_calibrated_bw": 30.9,
+     "peak_pct_of_calibrated_bw": 58.2,
+     "energy_j": 29904.0,
+     "power_w": 712
+    }
+   ],
+   "per_node": {
+    "read_gb_s": {
+     "min": 219.0,
+     "avg": 223.5,
+     "max": 228.0
+    },
+    "write_gb_s": {
+     "min": 93.0,
+     "avg": 94.5,
+     "max": 96.0
+    },
+    "total_gb_s": {
+     "min": 312.0,
+     "avg": 318.0,
+     "max": 324.0
+    },
+    "peak_gb_s_max": 611.0,
+    "power_w_avg": 708.0
+   },
+   "total_gb_s_all_nodes": 636.0,
+   "energy_j_all_nodes": 59472,
+   "remote_read_share_pct": 4.4
+  },
+  "roofline": {
+   "available": true,
+   "calibration": {
+    "file": "miniprof_calibration_amd4121.json",
+    "host": "amd4121",
+    "date_utc": "2026-11-11T12:06:56Z",
+    "same_cpu": true
+   },
+   "definitions": {
+    "arithmetic_intensity": "FLOPs (this job's threads, user space) / DRAM bytes (whole node: reads + writes, incl. write-allocate)",
+    "attainable_gflops": "min(peak, arithmetic_intensity x DRAM bandwidth ceiling)",
+    "peak": "calibrated all-core FMA rate; widest FP64 unless MINIPROF_ROOFLINE_PEAK names another (fp32_512, fp64_256, ...): the FLOP counter does not separate precisions",
+    "scope": "whole run, per node; FLOPs include those inside MPI calls",
+    "dram_ceiling": "depends on the run's read share of DRAM bytes: the read-only calibration for pure reads, the triad one at <= 75% reads (writes cost bus turnarounds), linear between"
+   },
+   "ceilings": {
+    "peak_key": "fp64_512",
+    "peak_gflops": 17500.0,
+    "dram_read_gb_s": 1127.0,
+    "dram_triad_gb_s": 1021.0,
+    "ridge_flop_per_byte_triad": 17.1,
+    "all_gflops": {
+     "fp64_scalar": 2270.0,
+     "fp64_128": 4540.0,
+     "fp64_256": 9080.0,
+     "fp64_512": 17500.0,
+     "fp32_scalar": 2270.0,
+     "fp32_128": 9080.0,
+     "fp32_256": 18160.0,
+     "fp32_512": 35000.0
+    }
+   },
+   "nodes": [
+    {
+     "index": 0,
+     "hostname": "amd4121",
+     "gflops_per_s": 930.0,
+     "dram_gb_s": 324.0,
+     "arithmetic_intensity": 2.8703703703703702,
+     "read_share_pct": 70.4,
+     "dram_ceiling_gb_s": 1046.0,
+     "ridge_flop_per_byte": 16.730401529636712,
+     "bound": "memory",
+     "attainable_gflops": 3002.4074074074074,
+     "pct_of_attainable": 30.97514340344168,
+     "pct_of_peak_gflops": 5.314285714285714,
+     "pct_of_dram_bw": 30.97514340344168
+    },
+    {
+     "index": 1,
+     "hostname": "amd4126",
+     "gflops_per_s": 910.0,
+     "dram_gb_s": 312.0,
+     "arithmetic_intensity": 2.9166666666666665,
+     "read_share_pct": 70.4,
+     "dram_ceiling_gb_s": 1046.0,
+     "ridge_flop_per_byte": 16.730401529636712,
+     "bound": "memory",
+     "attainable_gflops": 3050.833333333333,
+     "pct_of_attainable": 29.82791586998088,
+     "pct_of_peak_gflops": 5.2,
+     "pct_of_dram_bw": 29.82791586998088
+    }
+   ],
+   "arithmetic_intensity_all_nodes": 2.893081761006289
+  }
+ }
+}

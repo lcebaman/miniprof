@@ -534,7 +534,16 @@ happen.
 ```bash
 MINIPROF_MODE=snapshot mpirun -n 64 ./your_app       # no rebuild needed
 python3 tools/miniprof_report.py miniprof_snapshot.json
+python3 tools/miniprof_report.py miniprof_snapshot.json --html report.html
 ```
+
+`--html` also writes one self-contained page (no external files, fonts
+or scripts; opens offline, can be mailed): headline figures, the
+observations, time per rank, MPI functions and message sizes, I/O,
+OpenMP regions, counters, top-down by region, memory per socket and per
+channel, and the roofline. Every chart has its numbers in a table beside
+it; hovering a mark shows its value; it follows the viewer's light/dark
+setting. Python 3 standard library only.
 
 Snapshot mode is a low-overhead, whole-run characterisation in the
 spirit of Intel APS and AMDuProfPcm. It records no individual samples or
