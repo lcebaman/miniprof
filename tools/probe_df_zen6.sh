@@ -13,12 +13,17 @@
 # so channel coverage and bytes per beat can be read off directly.
 # Also records why the amd_umc PMUs do not count.
 #
+# --cfi-map: only map which core-inbound ports each L3 (CCD) of NUMA
+# node 0 uses, trying candidate encodings for ports 8..23 (on Zen 6 the
+# Turin encodings for ports 8..15 count exactly zero).
+#
 # Needs system-wide counters: perf_event_paranoid <= 0, or --sudo (sudo -n).
-#     srun -N1 --exclusive tools/probe_df_zen6.sh [--sudo]
-# Writes probe_df_<host>.txt. Changes nothing.
+#     srun -N1 --exclusive tools/probe_df_zen6.sh [--sudo] [--cfi-map]
+# Writes probe_df_<host>.txt (probe_df_cfi_<host>.txt). Changes nothing.
 
-AS=""; [ "${1:-}" = "--sudo" ] && AS="sudo -n"
-OUT="probe_df_$(hostname -s).txt"
+AS=""; CFIMAP=0
+for a in "$@"; do case "$a" in --sudo) AS="sudo -n" ;; --cfi-map) CFIMAP=1 ;; esac; done
+OUT="probe_df_$(hostname -s).txt"; [ $CFIMAP = 1 ] && OUT="probe_df_cfi_$(hostname -s).txt"
 CC=${CC:-gcc}
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT; chmod 755 "$TMP"
 
@@ -51,17 +56,44 @@ C
 $CC -O2 -fno-tree-loop-distribute-patterns -o "$TMP/k" "$TMP/k.c" || { echo "cannot build kernel"; exit 1; }
 
 dram_ev() { printf 'amd_df/event=0x%x,umask=0x%x/\n' $((0x1f + 0x40*($1%4) + 0x100*($1/4))) "$2"; }
-cfi_ev()  { printf 'amd_df/event=0x%x,umask=0x%x/\n' $((0x41e + 0x40*($1%4) + 0x100*(($1/4)%2) + $1/8)) "$2"; }
+cfi_ev()  { printf 'amd_df/event=0x%x,umask=0x%x/\n' $((0x41e + 0x40*($1%4) + 0x100*($1/4))) "$2"; }   # Zen 6 port map (--cfi-map)
 
 # measure <label> <numactl args> <kernel mode> <event list...>
 # prints one line per event: label count running% ; then the kernel line
 measure() {
   local lab=$1 na=$2 mode=$3; shift 3
   local evs; evs=$(IFS=,; echo "$*")
-  $AS perf stat -a -x, -D 500 -e "$evs" -o "$TMP/p.csv" -- numactl $na "$TMP/k" "$mode" > "$TMP/k.out" 2>&1
-  awk -F, -v L="$lab" '/^[0-9<]/ {printf "%-6s %-40s %15s %s\n", L, $3, $1, $5}' "$TMP/p.csv"
+  $AS perf stat -a -x';' -D 500 -e "$evs" -o "$TMP/p.csv" -- numactl $na "$TMP/k" "$mode" > "$TMP/k.out" 2>&1
+  [ -s "$TMP/p.csv" ] && awk -F';' -v L="$lab" '/^[0-9<]/ {printf "%-6s %-40s %15s %s\n", L, $3, $1, $5}' "$TMP/p.csv"
   sed "s/^/$lab   /" "$TMP/k.out"
 }
+
+if [ $CFIMAP = 1 ]; then
+# first CPU of each L3 domain on NUMA node 0; memory on the last node, so
+# every byte the kernel reads is "remote" inbound (umask 0xbfe)
+LASTN=$(ls -d /sys/devices/system/node/node* | sed 's/.*node//' | sort -n | tail -1)
+CCDS=$(for c in $(cat /sys/devices/system/node/node0/cpulist | tr ',' '\n' | while IFS=- read a b; do seq $a ${b:-$a}; done); do
+         cut -d, -f1 /sys/devices/system/cpu/cpu$c/cache/index3/shared_cpu_list | cut -d- -f1; done | sort -nu)
+ev()  { printf 'amd_df/event=0x%x,umask=0xbfe/\n' "$1"; }
+{
+  echo "== CFI port map: one core per L3 on node 0, memory on node $LASTN"; date -u; hostname; uname -r
+  grep -m2 -E "^(model\s|model name)" /proc/cpuinfo
+  echo "L3 leaders on node 0: $CCDS"
+  echo "known  (ports 0..7):   0x41e + 0x40*(n%4) + 0x100*(n/4)"
+  echo "turin  (ports 8..15):  0x41f + 0x40*(n%4) + 0x100*((n/4)%2)"
+  echo "linear (ports 8..23):  0x41e + 0x40*(n%4) + 0x100*(n/4)"
+  for c in $CCDS; do
+    echo; echo "== cpu $c"
+    measure "c$c" "--physcpubind=$c --membind=$LASTN" rd \
+      $(for n in $(seq 0 7); do ev $((0x41e + 0x40*(n%4) + 0x100*(n/4))); done) \
+      $(for n in $(seq 8 15); do ev $((0x41f + 0x40*(n%4) + 0x100*((n/4)%2))); done)
+    measure "c$c" "--physcpubind=$c --membind=$LASTN" rd \
+      $(for n in $(seq 8 23); do ev $((0x41e + 0x40*(n%4) + 0x100*(n/4))); done)
+  done
+  echo "== done (an event above 1e8 is a port that CCD uses; 64 B per beat)"
+} 2>&1 | tee "$OUT"
+echo "wrote $OUT"; exit 0
+fi
 
 {
 echo "== system"; date -u; hostname; uname -r

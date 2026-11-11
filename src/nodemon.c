@@ -37,7 +37,8 @@
  *   - DF DRAM slots cs 0..15 (same encoding as Zen 4/5) count 64 B per
  *     beat, 94% of a 1 GiB read or write stream (the rest hits L3);
  *     cs 16..31 count nothing;
- *   - core-inbound CFI beats are 64 B here (perf's Turin table says 32);
+ *   - core-inbound CFI beats are 64 B here (perf's Turin table says 32),
+ *     and ports 8..15 use a linear encoding (see the remote section);
  *     remote (umask 0xbfe) sees node-1 memory read by node-0 cores;
  *   - the one amd_df PMU (CPU 0) sees ONLY NUMA node 0: with core and
  *     memory on node 1 every DF event stays at noise. So Zen 6 results
@@ -284,7 +285,10 @@ df_remote:;
     /* data fabric: data into this socket's cores from the other socket,
      * 32 B per beat (64 B on Zen 6, where it also counts data from the
      * other NUMA node of the same socket).
-     * Zen 5/6: remote_socket_inbound_data_beats_cfi_0..15;
+     * Zen 5: remote_socket_inbound_data_beats_cfi_0..15 (Turin encoding);
+     * Zen 6: ports 0..15 at 0x41e + 0x40*(n%4) + 0x100*(n/4), CCD k of
+     * node 0 on ports 4k..4k+3 (probe_df_zen6.sh --cfi-map; Turin's
+     * encodings for ports 8..15 count exactly zero there);
      * Zen 4: remote_socket_inf0_inbound_data_beats_ccm0..7 (the inf1 half
      * counted 0 in every test and its encoding is unverified). */
     int dtype = pmu_type("amd_df"), dcpus[NM_MAX_SOCKETS];
@@ -294,7 +298,8 @@ df_remote:;
     for (int k = 0; k < nd; k++) {
         int s = sock_index(cpu_socket(dcpus[k]));
         for (int n = 0; n < nport; n++) {
-            unsigned ev = 0x41e + 0x40 * (n % 4) + 0x100 * ((n / 4) % 2) + (n / 8);
+            unsigned ev = zen6 ? 0x41e + 0x40 * (n % 4) + 0x100 * (n / 4)
+                               : 0x41e + 0x40 * (n % 4) + 0x100 * ((n / 4) % 2) + (n / 8);
             open_ev(dtype, df_config(ev, 0xbfe), dcpus[k], EV_DF_REMOTE_IN, s, n, beat, "amd_df");
         }
     }
