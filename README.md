@@ -779,7 +779,14 @@ What a snapshot contains so far:
     bytes are a lower bound, the intensity an upper bound (the point sits
     right of where it belongs) and the DRAM roof is the read-only one.
     `tools/validate_roofline.sh` compares the two on a streaming run
-  - run level only: the node counters cannot be split by user region
+  - per user region (`roofline.regions`): the node counters cannot be
+    split by region, but each region has its own FLOPs and L1D DRAM
+    fills. Region bytes = fills x 64 B x `region_bytes_scale`, the run's
+    measured DRAM bytes per fill byte (1 for an estimate), so regions sit
+    consistently with the whole-run point; rate per node = the region's
+    per-rank rate x ranks per node. Counts are those of the threads that
+    entered the region (a region opened only on the master thread of a
+    hybrid code reflects the master's work)
   - the ceilings are measurements, not datasheet numbers: a well-tuned
     code can land a few percent above them (validation allows 115%).
     On amd4604 (2x EPYC 9754) a streaming run reached 752 GB/s (~82% of

@@ -333,7 +333,7 @@ def roofline_chart(ceil, points, width=960, height=420):
         out.append(f'<circle class="pt" cx="{lx(ai):.1f}" cy="{ly(gf):.1f}" r="5" fill="var(--s{slot})" '
                    f'data-tip="{esc(tip)}"/>')
     placed = []          # direct labels only where they do not collide
-    for label, ai, gf, slot in sorted(points, key=lambda p: -(p[2] or 0))[:6]:
+    for label, ai, gf, slot in sorted(points, key=lambda p: -(p[2] or 0))[:12]:
         if not (ai and gf and ai > 0 and gf > 0):
             continue
         x, y = lx(ai) + 9, ly(gf) + 4
@@ -708,6 +708,11 @@ def render(doc: dict, obs: list) -> str:
                 rn = nds[0]
                 pts = [(nd.get("hostname") or f'node {nd["index"]}', nd["arithmetic_intensity"], nd["gflops_per_s"], 1)
                        for nd in nds[:8]]
+                regs = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+                regs = sorted(regs, key=lambda g: -g["time_s_per_rank"])[:12]
+                pts += [(g["name"], g["arithmetic_intensity"], g["gflops_per_s_node"], 2) for g in regs]
+                if regs:
+                    body += legend([(1, "whole run, per node"), (2, "user regions (rate per node)")])
                 body += roofline_chart({"peak": c["peak_gflops"], "peak_key": c["peak_key"],
                                         "all_gflops": c.get("all_gflops"), "dram": rn["dram_ceiling_gb_s"]}, pts)
                 mix = ("the read-only calibration" if rn.get("read_share_pct") is None
@@ -720,6 +725,18 @@ def render(doc: dict, obs: list) -> str:
                                 f'{nd["dram_gb_s"]:.1f}', f'{nd["arithmetic_intensity"]:.3g}', nd["bound"],
                                 f'{nd["pct_of_attainable"]:.0f}%', f'{nd["pct_of_peak_gflops"]:.1f}%',
                                 f'{nd["pct_of_dram_bw"]:.0f}%') for nd in nds])
+            regs = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+            if regs:
+                body += "<h3>User regions</h3>" + table(
+                    ["region", "time/rank", "GFLOP/s per node", "DRAM GB/s per node", "FLOP/byte", "bound",
+                     "of attainable"],
+                    [(g["name"], ht(g["time_s_per_rank"]), f'{g["gflops_per_s_node"]:.1f}',
+                      f'{g["dram_gb_s_node"]:.1f}', f'{g["arithmetic_intensity"]:.3g}', g["bound"],
+                      f'{g["pct_of_attainable"]:.0f}%') for g in sorted(regs, key=lambda g: -g["time_s_per_rank"])],
+                    text=(5,))
+                body += '<p class="note">Region DRAM bytes come from each region\'s L1D fills from DRAM, scaled by ' \
+                        f'{roof.get("region_bytes_scale", 1):.2f} (the run\'s measured DRAM bytes per fill byte) so ' \
+                        'they line up with the whole-run point. Counts are those of the threads that entered the region.</p>'
             section("roofline", "Roofline", body)
 
     # ---- run details

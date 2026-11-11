@@ -345,6 +345,12 @@ def report(doc: dict, args) -> str:
                   f"ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
                 p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
                   f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
+            rr = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+            if rr:
+                p("   by region           GFLOP/s/node   FLOP/B   bound     of attainable")
+                for g in sorted(rr, key=lambda g: -g["time_s_per_rank"])[:10]:
+                    p(f"     {g['name'][:18]:<18} {g['gflops_per_s_node']:11.1f} {g['arithmetic_intensity']:8.3g}   "
+                      f"{g['bound']:<8} {g['pct_of_attainable']:6.0f}%")
 
     # top-down
     td = (doc.get("metrics") or {}).get("topdown")

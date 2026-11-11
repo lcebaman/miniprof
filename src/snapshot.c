@@ -1411,6 +1411,10 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
                       "names another (fp32_512, fp64_256, ...): the FLOP counter does not "
                       "separate precisions");
     jw_str(w, "scope", "whole run, per node; FLOPs include those inside MPI calls");
+    jw_str(w, "regions", "per user region: the region's FLOPs over its L1D fills from DRAM x 64 B "
+                         "x region_bytes_scale (the run's measured DRAM bytes / fill bytes; 1 "
+                         "for an estimate), rate per node = per-rank rate x ranks per node. "
+                         "Counts are those of the threads that entered the region");
     jw_str(w, "dram_ceiling", "depends on the run's read share of DRAM bytes: the read-only "
                               "calibration for pure reads, the triad one at <= 75% reads "
                               "(writes cost bus turnarounds), linear between");
@@ -1435,6 +1439,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
 
     jw_begin_arr(w, "nodes");
     double sum_ai_w = 0, sum_w = 0;
+    double meas_bytes = 0, meas_fills = 0;     /* for the region scale factor */
     for (int i = 0; i < nn; i++) {
         const nm_result_t *m = &nodes[i].mem;
         if (!est && !m->available) continue;
@@ -1479,9 +1484,52 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         jw_dbl(w, "pct_of_dram_bw", bwc > 0 ? 100.0 * bw / bwc : NAN);
         jw_end_obj(w);
         if (!isnan(ai)) { sum_ai_w += fl; sum_w += bytes; }
+        if (!est) { meas_bytes += bytes; meas_fills += 64.0 * fills; }
     }
     jw_end_arr(w);
     jw_dbl(w, "arithmetic_intensity_all_nodes", sum_w > 0 ? sum_ai_w / sum_w : NAN);
+
+    /* Per user region (MINIPROF_REGION_BEGIN/END): the node counters
+     * cannot be split by region, but each region has its own FLOPs and
+     * L1D DRAM fills. Region DRAM bytes = fills x 64 B x k, where k is
+     * the whole run's measured DRAM bytes / fill bytes (1 for an
+     * estimate): the regions then sit consistently with the run's point.
+     * Rate per node = the region's per-rank rate x average ranks/node. */
+    if (iD >= 0 && g_nrreg > 0) {
+        double k = (!est && meas_fills > 0) ? meas_bytes / meas_fills : 1.0;
+        if (k < 1.0) k = 1.0;
+        double rpn = nn > 0 ? (double)nr / nn : 1.0;
+        double bwc = est ? cal_bw_mix("node", 1.0) : NAN;
+        if (!est && nn > 0 && nodes[0].mem.available) {
+            double rd = 0, all = 0;
+            for (int s = 0; s < nodes[0].mem.nsockets; s++) {
+                rd += (double)nodes[0].mem.s[s].rd_bytes;
+                all += (double)(nodes[0].mem.s[s].rd_bytes + nodes[0].mem.s[s].wr_bytes);
+            }
+            bwc = cal_bw_mix("node", rfrac(rd, all - rd));
+        }
+        jw_dbl(w, "region_bytes_scale", k);
+        jw_begin_arr(w, "regions");
+        for (int u = 0; u < g_nrreg; u++) {
+            const region_red_t *g = &g_rreg[u];
+            double avg_s = g->ranks ? g->ns_sum * 1e-9 / g->ranks : 0.0;
+            double fl = (double)g->ev[0][iF], by = 64.0 * (double)g->ev[0][iD] * k;
+            if (fl <= 0 || avg_s <= 0) continue;
+            double gfl = fl / g->ranks / avg_s * 1e-9 * rpn;
+            double ai = by > 0 ? fl / by : NAN;
+            double att = isnan(ai) ? peak : (ai * bwc < peak ? ai * bwc : peak);
+            jw_begin_obj(w, NULL);
+            jw_str(w, "name", g->name);
+            jw_dbl(w, "time_s_per_rank", avg_s);
+            jw_dbl(w, "gflops_per_s_node", gfl);
+            jw_dbl(w, "dram_gb_s_node", by / g->ranks / avg_s * 1e-9 * rpn);
+            jw_dbl(w, "arithmetic_intensity", ai);
+            jw_str(w, "bound", isnan(ai) || ai >= peak / bwc ? "compute" : "memory");
+            jw_dbl(w, "pct_of_attainable", att > 0 ? 100.0 * gfl / att : NAN);
+            jw_end_obj(w);
+        }
+        jw_end_arr(w);
+    }
     jw_end_obj(w);
 }
 /* ── P2: OpenMP block ───────────────────────────────────────────────── */
