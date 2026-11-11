@@ -229,10 +229,11 @@ def report(doc: dict, args) -> str:
               + ("" if cal.get("same_cpu") else ", DIFFERENT CPU")
               + (" — QUICK calibration, not a measurement" if cal.get("warning") else ""))
             p(f"   ceilings            peak {c['peak_gflops']:.0f} GFLOP/s ({c['peak_key']}), "
-              f"DRAM {c['dram_gb_s']:.0f} GB/s, ridge {c['ridge_flop_per_byte']:.2f} FLOP/B")
+              f"DRAM {c['dram_read_gb_s']:.0f} GB/s read-only / {c['dram_triad_gb_s']:.0f} triad")
             if rn:
                 p(f"   this run (node 0)   {rn['gflops_per_s']:.1f} GFLOP/s at {rn['arithmetic_intensity']:.3g} FLOP/B: "
-                  f"{rn['bound'].upper()}-bound")
+                  f"{rn['bound'].upper()}-bound (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s at "
+                  f"{rn['read_share_pct']:.0f}% reads, ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
                 p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
                   f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
 

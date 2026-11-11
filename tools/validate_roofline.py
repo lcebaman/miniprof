@@ -37,9 +37,9 @@ def main() -> int:
             fails.append(msg)
 
     c = r["ceilings"]
-    check(c["peak_gflops"] > 0 and c["dram_gb_s"] > 0,
-          f"ceilings: peak {c['peak_gflops']:.1f} GFLOP/s ({c['peak_key']}), DRAM {c['dram_gb_s']:.1f} GB/s, "
-          f"ridge {c['ridge_flop_per_byte']:.2f} FLOP/B")
+    check(c["peak_gflops"] > 0 and c["dram_triad_gb_s"] > 0,
+          f"ceilings: peak {c['peak_gflops']:.1f} GFLOP/s ({c['peak_key']}), DRAM read {c['dram_read_gb_s']:.1f} / "
+          f"triad {c['dram_triad_gb_s']:.1f} GB/s")
     check(len(r["nodes"]) >= 1, f"{len(r['nodes'])} node(s)")
     if r["calibration"].get("warning"):
         print(f"  note  {r['calibration']['warning']}")
@@ -48,12 +48,13 @@ def main() -> int:
     if not a.plumbing:
         n = r["nodes"][0]
         print(f"  node {n['hostname']}: {n['gflops_per_s']:.1f} GFLOP/s, {n['dram_gb_s']:.1f} GB/s, "
-              f"AI {n['arithmetic_intensity']:.3g} FLOP/B, {n['bound']}-bound, "
+              f"AI {n['arithmetic_intensity']:.3g} FLOP/B ({n['read_share_pct']:.0f}% reads, DRAM ceiling "
+              f"{n['dram_ceiling_gb_s']:.0f} GB/s), {n['bound']}-bound, "
               f"{n['pct_of_attainable']:.1f}% of attainable, {n['pct_of_peak_gflops']:.1f}% of peak, "
               f"{n['pct_of_dram_bw']:.1f}% of DRAM bandwidth")
         check(n["bound"] == a.expect, f"bound: {n['bound']} (expected {a.expect})")
         if a.expect == "memory":
-            check(n["pct_of_dram_bw"] >= 50, f"{n['pct_of_dram_bw']:.1f}% of calibrated DRAM bandwidth (>= 50)")
+            check(n["pct_of_dram_bw"] >= 80, f"{n['pct_of_dram_bw']:.1f}% of calibrated DRAM bandwidth (>= 80: a streaming run on every core)")
         else:
             check(n["pct_of_peak_gflops"] >= 60, f"{n['pct_of_peak_gflops']:.1f}% of calibrated peak (>= 60)")
         check(n["pct_of_attainable"] <= 115, f"{n['pct_of_attainable']:.1f}% of attainable (<= 115: ceilings hold)")

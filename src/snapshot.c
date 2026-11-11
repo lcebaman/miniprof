@@ -1135,17 +1135,25 @@ static void write_calibration_ref(jw_t *w)
     jw_end_obj(w);
 }
 
-/* bandwidth ceiling, DRAM view: the better of read-only and triad */
-static double cal_bw(const char *scope)
+/* DRAM bandwidth ceiling for a traffic mix (read fraction rf of all DRAM
+ * bytes). DRAM delivers more for pure reads than when writes interleave
+ * (bus turnarounds): on 2x EPYC 9555 read-only 1126 GB/s, triad 1020. A
+ * single "best of both" roof put a triad-like run (72% reads) at 87.7%
+ * of a ceiling it cannot reach (96.8% of the triad one). So: rf >= 1 →
+ * read-only; rf <= 0.75 (triad: 24 of 32 B) → triad; linear between. */
+static double cal_bw_mix(const char *scope, double rf)
 {
     char k1[64], k2[64];
     snprintf(k1, sizeof(k1), "dram_read_gb_s_%s", scope);
     snprintf(k2, sizeof(k2), "dram_triad_gb_s_%s", scope);
-    double a = cal_num(k1), b = cal_num(k2);
-    if (isnan(a)) return b;
-    if (isnan(b)) return a;
-    return a > b ? a : b;
+    double rd = cal_num(k1), tr = cal_num(k2);
+    if (isnan(rd)) return tr;
+    if (isnan(tr) || isnan(rf)) return isnan(tr) ? rd : tr;
+    if (rf <= 0.75) return tr;
+    if (rf >= 1.0) return rd;
+    return tr + (rd - tr) * (rf - 0.75) / 0.25;
 }
+static double rfrac(double rd, double wr) { return rd + wr > 0 ? rd / (rd + wr) : NAN; }
 /* ── P5: memory block (socket-level counters via miniprof-nodemon) ──── */
 
 static double gbs(double bytes, double s) { return s > 0 ? bytes / s * 1e-9 : 0.0; }
@@ -1228,7 +1236,8 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
             {
                 char sk[32];
                 snprintf(sk, sizeof(sk), "socket%d", s);
-                double cb = g_cal.loaded ? cal_bw(sk) : NAN;
+                double cb = g_cal.loaded
+                    ? cal_bw_mix(sk, rfrac((double)so->rd_bytes, (double)so->wr_bytes)) : NAN;
                 if (cb > 0) {
                     jw_dbl(w, "pct_of_calibrated_bw",
                            100.0 * gbs((double)(so->rd_bytes + so->wr_bytes), el) / cb);
@@ -1269,9 +1278,11 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
         jw_dbl(w, "write_gb_s", gbs(wr, el));
         jw_dbl(w, "total_gb_s", gbs(rd + wr, el));
         jw_dbl(w, "peak_gb_s", m->peak_node_bps * 1e-9);
-        if (g_cal.loaded && cal_bw("node") > 0) {
-            jw_dbl(w, "pct_of_calibrated_bw", 100.0 * gbs(rd + wr, el) / cal_bw("node"));
-            jw_dbl(w, "peak_pct_of_calibrated_bw", 100.0 * m->peak_node_bps * 1e-9 / cal_bw("node"));
+        if (g_cal.loaded && cal_bw_mix("node", rfrac(rd, wr)) > 0) {
+            double cb = cal_bw_mix("node", rfrac(rd, wr));
+            jw_dbl(w, "calibrated_bw_gb_s", cb);
+            jw_dbl(w, "pct_of_calibrated_bw", 100.0 * gbs(rd + wr, el) / cb);
+            jw_dbl(w, "peak_pct_of_calibrated_bw", 100.0 * m->peak_node_bps * 1e-9 / cb);
         }
         jw_dbl(w, "energy_j", en);
         jw_dbl(w, "power_w", el > 0 ? en / el : 0.0);
@@ -1348,7 +1359,11 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         snprintf(name, sizeof(name), "%s", k_peaks[i]);
         peak = cal_num(pk);
     }
-    double bwc = cal_bw("node");
+    char k1[64];
+    snprintf(k1, sizeof(k1), "dram_read_gb_s_node");
+    double bw_read = cal_num(k1);
+    snprintf(k1, sizeof(k1), "dram_triad_gb_s_node");
+    double bw_triad = cal_num(k1);
     jw_bool(w, "available", 1);
     write_calibration_ref(w);
     jw_begin_obj(w, "definitions");
@@ -1359,12 +1374,16 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
                       "names another (fp32_512, fp64_256, ...): the FLOP counter does not "
                       "separate precisions");
     jw_str(w, "scope", "whole run, per node; FLOPs include those inside MPI calls");
+    jw_str(w, "dram_ceiling", "depends on the run's read share of DRAM bytes: the read-only "
+                              "calibration for pure reads, the triad one at <= 75% reads "
+                              "(writes cost bus turnarounds), linear between");
     jw_end_obj(w);
     jw_begin_obj(w, "ceilings");
     jw_str(w, "peak_key", name);
     jw_dbl(w, "peak_gflops", peak);
-    jw_dbl(w, "dram_gb_s", bwc);
-    jw_dbl(w, "ridge_flop_per_byte", bwc > 0 ? peak / bwc : NAN);
+    jw_dbl(w, "dram_read_gb_s", bw_read);
+    jw_dbl(w, "dram_triad_gb_s", bw_triad);
+    jw_dbl(w, "ridge_flop_per_byte_triad", bw_triad > 0 ? peak / bw_triad : NAN);
     jw_begin_obj(w, "all_gflops");
     static const char *k_all[] = { "fp64_scalar", "fp64_128", "fp64_256", "fp64_512",
                                    "fp32_scalar", "fp32_128", "fp32_256", "fp32_512" };
@@ -1388,8 +1407,12 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
             fl += (double)r[k].cnt_total[iF];
             if (r[k].elapsed_s > el) el = r[k].elapsed_s;
         }
-        double bytes = 0;
-        for (int s = 0; s < m->nsockets; s++) bytes += (double)(m->s[s].rd_bytes + m->s[s].wr_bytes);
+        double bytes = 0, rdb = 0;
+        for (int s = 0; s < m->nsockets; s++) {
+            bytes += (double)(m->s[s].rd_bytes + m->s[s].wr_bytes);
+            rdb += (double)m->s[s].rd_bytes;
+        }
+        double bwc = cal_bw_mix("node", rfrac(rdb, bytes - rdb));
         double gfl = el > 0 ? fl / el * 1e-9 : 0;
         double bw = m->elapsed_s > 0 ? bytes / m->elapsed_s * 1e-9 : 0;
         double ai = bytes > 0 ? fl / bytes : NAN;
@@ -1400,6 +1423,9 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         jw_dbl(w, "gflops_per_s", gfl);
         jw_dbl(w, "dram_gb_s", bw);
         jw_dbl(w, "arithmetic_intensity", ai);
+        jw_dbl(w, "read_share_pct", bytes > 0 ? 100.0 * rdb / bytes : NAN);
+        jw_dbl(w, "dram_ceiling_gb_s", bwc);
+        jw_dbl(w, "ridge_flop_per_byte", bwc > 0 ? peak / bwc : NAN);
         jw_str(w, "bound", isnan(ai) || ai >= peak / bwc ? "compute" : "memory");
         jw_dbl(w, "attainable_gflops", att);
         jw_dbl(w, "pct_of_attainable", att > 0 ? 100.0 * gfl / att : NAN);
