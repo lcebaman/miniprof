@@ -121,6 +121,16 @@ __attribute__((noinline)) static void branch(const uint8_t *bits, long n)
                    (now() - t0_) * 1e3);                            \
     } while (0)
 
+/* L3 size of one CCD (sysfs), 32 MiB if unknown */
+static long l3_bytes(void)
+{
+    long kb = 0; char u = 'K';
+    FILE *f = fopen("/sys/devices/system/cpu/cpu0/cache/index3/size", "r");
+    if (f) { if (fscanf(f, "%ld%c", &kb, &u) < 1) kb = 0; fclose(f); }
+    if (kb <= 0) return 32L << 20;
+    return u == 'M' ? kb << 20 : kb << 10;
+}
+
 int main(int argc, char **argv)
 {
     MPI_Init(&argc, &argv);
@@ -130,11 +140,21 @@ int main(int argc, char **argv)
     double scale = argc > 1 ? atof(argv[1]) : 1.0;
     if (scale <= 0) scale = 1.0;
 
-    /* sizes: chase 128 MiB of indices, stream 3 x 128 MiB — far beyond L3 */
-    long nchase  = (long)(32L * 1024 * 1024 * scale);
-    long nstream = (long)(16L * 1024 * 1024 * scale);
+    /* sizes: at least 4x the L3 of a CCD, so the ranks sharing a CCD and
+     * a lone process (the perf reference) both miss: chase >= 128 MiB of
+     * indices, stream 3 arrays >= 128 MiB each. Zen 4/5 (32 MiB L3) keep
+     * the original sizes; Zen 6 (128 MiB) gets 512 MiB. The chase length
+     * stays 8M steps whatever the array size. */
+    long l3 = l3_bytes();
+    long ch = 32L * 1024 * 1024, st = 16L * 1024 * 1024;
+    if (4 * l3 / 4 > ch) ch = 4 * l3 / 4;
+    if (4 * l3 / 8 > st) st = 4 * l3 / 8;
+    long nchase  = (long)(ch * scale);
+    long nstream = (long)(st * scale);
+    long nsteps  = (long)(8L * 1024 * 1024 * scale);
     long nbranch = (long)(16L * 1024 * 1024 * scale);
     if (nchase < 1024) nchase = 1024;
+    if (nsteps < 256) nsteps = 256;
     if (nstream < 1024) nstream = 1024;
     if (nbranch < 1024) nbranch = 1024;
 
@@ -158,7 +178,7 @@ int main(int argc, char **argv)
     if (rank == 0) printf("topdown_validate: %d ranks, scale %g\n", nprocs, scale);
     TIMED_REGION("alu",     alu(50L * 1000 * 1000));
     TIMED_REGION("fpchain", fpchain(20L * 1000 * 1000));
-    TIMED_REGION("chase",   chase(next, nchase / 4));
+    TIMED_REGION("chase",   chase(next, nsteps < nchase ? nsteps : nchase));
     TIMED_REGION("stream",  stream(a, b, c, nstream, 3.0));
     TIMED_REGION("branch",  branch(bits, nbranch));
 
