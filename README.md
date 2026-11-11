@@ -748,6 +748,10 @@ What a snapshot contains so far:
     the widest FP64 rate unless `MINIPROF_ROOFLINE_PEAK` names another
     (`fp32_512`, `fp64_256`, ...)
   - run level only: the node counters cannot be split by user region
+  - the ceilings are measurements, not datasheet numbers: a well-tuned
+    code can land a few percent above them (validation allows 115%).
+    On amd4604 (2x EPYC 9754) a streaming run reached 752 GB/s (~82% of
+    the 922 GB/s DDR5-4800 theoretical) and an FMA run 12.46 TFLOP/s FP64
   - validation: `make run-calibrate-test` (tool and plumbing) and
     `tools/validate_roofline.sh` on a node: a streaming run must be
     memory-bound at >= 50% of the calibrated bandwidth and an FMA run
