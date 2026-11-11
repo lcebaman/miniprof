@@ -95,12 +95,27 @@ void sysinfo_classify_uarch(const char *vendor, int family, int model,
             else if (model <= 0x7F)                  { u = "zen4"; nm = "Zen 4 client"; }
             else if (model >= 0xA0 && model <= 0xAF) { u = "zen4"; nm = "Bergamo / Siena"; }
         } else if (family == 0x1A) {
-            /* Zen 5. Turin occupies the low model range; client parts
-             * sit above it. Newer (e.g. Venice) models are left
-             * unclassified until their IDs are confirmed — the raw
-             * family/model in the JSON is what event tables key on. */
-            if      (model <= 0x1F) { u = "zen5"; nm = "Turin"; }
-            else if (model <= 0x7F) { u = "zen5"; nm = "Zen 5 client"; }
+            /* Zen 5 and Zen 6 share family 1Ah. Ranges as in Linux
+             * arch/x86/kernel/cpu/amd.c bsp_init_amd() (July 2026, after
+             * "Carve out a Zen5 models range"):
+             *   Zen 5: 00-2F, 40-4F, 60-7F, D0-D7
+             *   Zen 6: 50-5F, 80-AF, C0-CF, D8-EF
+             * Zen 6 client models named in AMD's EPP patches: 80, 81, 84,
+             * 85, E0; other Zen 6 models are labelled Venice. A uarch
+             * without event tables (zen6 for now) gets the generic
+             * counter group, and top-down / memory say unsupported:
+             * never another generation's encodings. */
+            if      (model <= 0x1F)                  { u = "zen5"; nm = "Turin"; }
+            else if (model <= 0x2F ||
+                     (model >= 0x40 && model <= 0x4F) ||
+                     (model >= 0x60 && model <= 0x7F) ||
+                     (model >= 0xD0 && model <= 0xD7)) { u = "zen5"; nm = "Zen 5 client"; }
+            else if (model == 0x80 || model == 0x81 || model == 0x84 ||
+                     model == 0x85 || model == 0xE0)   { u = "zen6"; nm = "Zen 6 client"; }
+            else if ((model >= 0x50 && model <= 0x5F) ||
+                     (model >= 0x80 && model <= 0xAF) ||
+                     (model >= 0xC0 && model <= 0xCF) ||
+                     (model >= 0xD8 && model <= 0xEF)) { u = "zen6"; nm = "Venice"; }
         }
     } else if (strcmp(vendor, "GenuineIntel") == 0 && family == 6) {
         switch (model) {
