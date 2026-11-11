@@ -192,8 +192,10 @@ def report(doc: dict, args) -> str:
             p(f" Memory (node)          not measured: {mem.get('reason')}")
         else:
             pn = mem["per_node"]
-            p(f" Memory (node)          {mem['nodes_measured']} node(s), whole-node DRAM traffic"
+            p(f" Memory (node)          {mem['nodes_measured']} node(s), " + ("partial" if mem.get("coverage") else "whole-node") + " DRAM traffic"
               + (f"; {mem['nodes_without']} node(s) without: {mem.get('reason_missing')}" if mem.get("nodes_without") else ""))
+            if mem.get("coverage"):
+                p(f"   ! partial coverage: {mem['coverage']}")
             p(f"   DRAM bandwidth      read {pn['read_gb_s']['avg']:.1f} + write {pn['write_gb_s']['avg']:.1f} GB/s "
               f"per node (avg); peak {pn['peak_gb_s_max']:.1f} GB/s over {mem['interval_ms']} ms")
             n0m = mem["nodes"][0]
@@ -357,7 +359,8 @@ def report(doc: dict, args) -> str:
                        "branch mispredictions or pipeline restarts.")
     if mem and mem.get("available"):
         if mem["remote_read_share_pct"] > args.remote_pct:
-            obs.append(f"{mem['remote_read_share_pct']:.1f}% of DRAM reads cross sockets (> {args.remote_pct:g}%): "
+            where = "come from another NUMA node" if mem.get("coverage") else "cross sockets"
+            obs.append(f"{mem['remote_read_share_pct']:.1f}% of DRAM reads {where} (> {args.remote_pct:g}%): "
                        "check binding and first-touch initialisation.")
         for so in mem["nodes"][0]["sockets"]:
             ch = so["channels"]

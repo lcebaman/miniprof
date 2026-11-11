@@ -20,7 +20,7 @@ case "$FAM" in
   26) if   [ "$MOD" -le 47 ] || { [ "$MOD" -ge 64 ] && [ "$MOD" -le 79 ]; } || \
            { [ "$MOD" -ge 96 ] && [ "$MOD" -le 127 ]; } || { [ "$MOD" -ge 208 ] && [ "$MOD" -le 215 ]; }
       then UA=zen5
-      else echo "family 1Ah model $MOD is Zen 6 (Venice): no event tables yet"; exit 1; fi ;;
+      else UA=zen6; fi ;;
   *)  echo "unsupported CPU family $FAM"; exit 1 ;;
 esac
 NN=$(ls -d /sys/devices/system/node/node* | wc -l)

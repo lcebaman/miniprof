@@ -8,7 +8,7 @@
  *
  * Kept deliberately small and closed:
  *   - takes no paths, event lists or other free-form input: only --uarch
- *     (zen4|zen5) and --interval-ms (10..10000);
+ *     (zen4|zen5|zen6) and --interval-ms (10..10000);
  *   - opens a fixed set of events on the amd_umc_*, amd_df and power PMUs,
  *     found through sysfs, then DROPS all capabilities before sampling;
  *   - counts only node-wide hardware events: it cannot attach to, read
@@ -29,6 +29,21 @@
  * setup_zen4_dram: its amd_umc PMUs cover only half the channels). On
  * Zen 4 that is 24 DRAM + 8 remote events on 16 DF counters per socket,
  * so the kernel time-multiplexes them (reported; totals are scaled).
+ *
+ * Zen 6 (Venice), checked on EPYC 9996 (NPS2, RHEL 9.6 kernel 5.14) with
+ * tools/probe_df_zen6.sh against kernels moving a known byte count:
+ *   - the amd_umc PMUs have no counters ("amd_uncore: 0 amd_umc_N
+ *     counters detected"): DRAM comes from the DF, as on Zen 4;
+ *   - DF DRAM slots cs 0..15 (same encoding as Zen 4/5) count 64 B per
+ *     beat, 94% of a 1 GiB read or write stream (the rest hits L3);
+ *     cs 16..31 count nothing;
+ *   - core-inbound CFI beats are 64 B here (perf's Turin table says 32);
+ *     remote (umask 0xbfe) sees node-1 memory read by node-0 cores;
+ *   - the one amd_df PMU (CPU 0) sees ONLY NUMA node 0: with core and
+ *     memory on node 1 every DF event stays at noise. So Zen 6 results
+ *     cover node 0's channels and cores, and the helper says so
+ *     ("coverage" line). 32 DRAM + 16 inbound events on 16 counters:
+ *     multiplexed.
  */
 
 #define _GNU_SOURCE
@@ -141,6 +156,7 @@ static int sock_index(int id)
     return g_nsockets++;
 }
 
+static const char *g_coverage = NULL;   /* set when the counters see only part of the node */
 static int g_self_only = 0;   /* swtest: count this process (no privilege needed) */
 
 static void open_ev(int type, uint64_t config, int cpu, ev_kind_t kind, int sock, int chan,
@@ -200,21 +216,21 @@ static void setup_swtest(void)
     open_ev(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_MIGRATIONS, -1, EV_DF_REMOTE_IN, s, 0, 32.0, "mig");
 }
 
-/* Zen 4 DRAM traffic from the data fabric. On EPYC 9754 / RHEL 9 the
+/* Zen 4 / Zen 6 DRAM traffic from the data fabric. On EPYC 9754 / RHEL 9 the
  * amd_umc PMUs are DDR5 sub-channels and the kernel exposes 12 per
  * socket: they cover 6 of the 12 channels (NUMA nodes 0,1,4,5 of 8 in
  * NPS4; tools/diag_umc_coverage.sh). The DF counts every channel: DRAM
  * channel cs N = event 0x1f + 0x40 N, umask 0xffe (reads requested by
  * any socket = 0x7fe local + 0xbfe remote, checked to the count) or
- * 0xfff (writes); 64 B per beat. */
-static void setup_zen4_dram(void)
+ * 0xfff (writes); 64 B per beat. Zen 6: cs 0..15 (see the top). */
+static void setup_df_dram(int nchan)
 {
     int dtype = pmu_type("amd_df"), dcpus[NM_MAX_SOCKETS];
     int nd = dtype >= 0 ? pmu_cpus("amd_df", dcpus, NM_MAX_SOCKETS) : 0;
     if (nd == 0) die("no amd_df PMU");
     for (int k = 0; k < nd; k++) {
         int s = sock_index(cpu_socket(dcpus[k]));
-        for (int cs = 0; cs < 12; cs++) {
+        for (int cs = 0; cs < nchan; cs++) {
             unsigned ev = 0x1f + 0x40 * (unsigned)cs;
             g_nchans[s] = cs + 1;
             open_ev(dtype, df_config(ev, 0xffe), dcpus[k], EV_UMC_RD, s, cs, 64.0, "amd_df dram read");
@@ -226,9 +242,21 @@ static void setup_zen4_dram(void)
 static void setup(const char *uarch)
 {
     if (strcmp(uarch, "swtest") == 0) { setup_swtest(); return; }
-    int zen5 = strcmp(uarch, "zen5") == 0;
+    if (strcmp(uarch, "swtest-partial") == 0) {   /* test the coverage path */
+        setup_swtest();
+        g_coverage = "test: part of the node";
+        return;
+    }
+    int zen5 = strcmp(uarch, "zen5") == 0, zen6 = strcmp(uarch, "zen6") == 0;
     double umc_bytes = 64.0;
-    if (!zen5) { setup_zen4_dram(); goto df_remote; }
+    if (zen6) {
+        setup_df_dram(16);
+        g_coverage = "NUMA node 0 only: on Zen 6 this kernel exposes one data-fabric "
+                     "PMU, which counts node 0's DRAM channels and cores; other NUMA "
+                     "nodes are not counted (energy is the whole package)";
+        goto df_remote;
+    }
+    if (!zen5) { setup_df_dram(12); goto df_remote; }
 
     /* memory controllers: one PMU per channel, cpumask = a CPU of its socket */
     static char names[64][32];
@@ -254,17 +282,20 @@ static void setup(const char *uarch)
 
 df_remote:;
     /* data fabric: data into this socket's cores from the other socket,
-     * 32 B per beat. Zen 5: remote_socket_inbound_data_beats_cfi_0..15;
+     * 32 B per beat (64 B on Zen 6, where it also counts data from the
+     * other NUMA node of the same socket).
+     * Zen 5/6: remote_socket_inbound_data_beats_cfi_0..15;
      * Zen 4: remote_socket_inf0_inbound_data_beats_ccm0..7 (the inf1 half
      * counted 0 in every test and its encoding is unverified). */
     int dtype = pmu_type("amd_df"), dcpus[NM_MAX_SOCKETS];
     int nd = dtype >= 0 ? pmu_cpus("amd_df", dcpus, NM_MAX_SOCKETS) : 0;
-    int nport = zen5 ? 16 : 8;
+    int nport = (zen5 || zen6) ? 16 : 8;
+    double beat = zen6 ? 64.0 : 32.0;
     for (int k = 0; k < nd; k++) {
         int s = sock_index(cpu_socket(dcpus[k]));
         for (int n = 0; n < nport; n++) {
             unsigned ev = 0x41e + 0x40 * (n % 4) + 0x100 * ((n / 4) % 2) + (n / 8);
-            open_ev(dtype, df_config(ev, 0xbfe), dcpus[k], EV_DF_REMOTE_IN, s, n, 32.0, "amd_df");
+            open_ev(dtype, df_config(ev, 0xbfe), dcpus[k], EV_DF_REMOTE_IN, s, n, beat, "amd_df");
         }
     }
 
@@ -329,11 +360,12 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--uarch") == 0 && i + 1 < argc) uarch = argv[++i];
         else if (strcmp(argv[i], "--interval-ms") == 0 && i + 1 < argc) interval = atoi(argv[++i]);
-        else die("usage: miniprof-nodemon --uarch zen4|zen5 [--interval-ms 10..10000]");
+        else die("usage: miniprof-nodemon --uarch zen4|zen5|zen6 [--interval-ms 10..10000]");
     }
     if (!uarch || (strcmp(uarch, "zen4") != 0 && strcmp(uarch, "zen5") != 0 &&
-                   strcmp(uarch, "swtest") != 0))
-        die("unsupported uarch '%s' (zen4, zen5)", uarch ? uarch : "");
+                   strcmp(uarch, "zen6") != 0 && strcmp(uarch, "swtest") != 0 &&
+                   strcmp(uarch, "swtest-partial") != 0))
+        die("unsupported uarch '%s' (zen4, zen5, zen6)", uarch ? uarch : "");
     if (interval < 10 || interval > 10000) die("interval-ms out of range");
     setvbuf(stdout, NULL, _IOLBF, 0);
     prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);   /* never outlive the rank */
@@ -422,6 +454,7 @@ int main(int argc, char **argv)
                    (unsigned long long)cwr);
         }
     }
+    if (g_coverage) printf("coverage %s\n", g_coverage);
     printf("peak node=%.6g\nend\n", peak_node);
     return 0;
 }

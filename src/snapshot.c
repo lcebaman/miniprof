@@ -1187,8 +1187,13 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
     jw_int(w, "nodes_without", nn - avail);
     for (int i = 0; i < nn; i++)
         if (!nodes[i].mem.available) { jw_str(w, "reason_missing", nodes[i].mem.reason); break; }
-    jw_str(w, "source", "miniprof-nodemon: memory-controller CAS (amd_umc), data-fabric "
+    jw_str(w, "source", "miniprof-nodemon: DRAM from memory-controller CAS (amd_umc, Zen 5) "
+                        "or data-fabric DRAM beats (amd_df, Zen 4 / Zen 6), data-fabric "
                         "remote inbound (amd_df), package energy (power)");
+    const char *cov = NULL;
+    for (int i = 0; i < nn && !cov; i++)
+        if (nodes[i].mem.available && nodes[i].mem.coverage[0]) cov = nodes[i].mem.coverage;
+    if (cov) jw_str(w, "coverage", cov);
     jw_int(w, "interval_ms", nodes[0].mem.interval_ms);
     if (g_cal.loaded) write_calibration_ref(w);
     jw_begin_obj(w, "definitions");
@@ -1236,7 +1241,7 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
             {
                 char sk[32];
                 snprintf(sk, sizeof(sk), "socket%d", s);
-                double cb = g_cal.loaded
+                double cb = g_cal.loaded && !m->coverage[0]
                     ? cal_bw_mix(sk, rfrac((double)so->rd_bytes, (double)so->wr_bytes)) : NAN;
                 if (cb > 0) {
                     jw_dbl(w, "pct_of_calibrated_bw",
@@ -1278,7 +1283,7 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
         jw_dbl(w, "write_gb_s", gbs(wr, el));
         jw_dbl(w, "total_gb_s", gbs(rd + wr, el));
         jw_dbl(w, "peak_gb_s", m->peak_node_bps * 1e-9);
-        if (g_cal.loaded && cal_bw_mix("node", rfrac(rd, wr)) > 0) {
+        if (g_cal.loaded && !m->coverage[0] && cal_bw_mix("node", rfrac(rd, wr)) > 0) {
             double cb = cal_bw_mix("node", rfrac(rd, wr));
             jw_dbl(w, "calibrated_bw_gb_s", cb);
             jw_dbl(w, "pct_of_calibrated_bw", 100.0 * gbs(rd + wr, el) / cb);
@@ -1327,8 +1332,11 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     jw_begin_obj(w, "roofline");
     const char *why = NULL;
     int iF = kind_index(CK_FLOPS, g_cnt.n_active);
-    int mem_any = 0;
-    for (int i = 0; i < nn; i++) mem_any |= nodes[i].mem.available;
+    int mem_any = 0, mem_part = 0;
+    for (int i = 0; i < nn; i++) {
+        mem_any |= nodes[i].mem.available;
+        mem_part |= nodes[i].mem.available && nodes[i].mem.coverage[0];
+    }
     if (!g_cal.loaded)
         why = getenv("MINIPROF_CALIBRATION") ? "MINIPROF_CALIBRATION set but no usable "
               "calibration file found (run miniprof-calibrate -o DIR)"
@@ -1338,6 +1346,9 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
               "levels count other events)";
     else if (!mem_any)
         why = "needs DRAM bytes from the memory block (miniprof-nodemon)";
+    else if (mem_part)
+        why = "DRAM bytes cover only part of the node (memory.coverage): an arithmetic "
+              "intensity from them would be wrong";
     if (why) {
         jw_bool(w, "available", 0);
         jw_str(w, "reason", why);

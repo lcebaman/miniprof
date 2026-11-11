@@ -35,6 +35,7 @@
  *   result elapsed_ns=<ns> samples=<n> multiplexed=<0|1>
  *   socket <s> rd=<B> wr=<B> remote_in=<B> energy_uj=<uJ> peak_rd=<B/s> peak_wr=<B/s>
  *   chan <s> <c> rd=<B> wr=<B>
+ *   coverage <text>                          only when part of the node is counted (Zen 6)
  *   peak node=<B/s>
  *   end
  */
@@ -62,6 +63,7 @@ typedef struct {
     int      multiplexed;
     double   elapsed_s;
     double   peak_node_bps;               /* sum over sockets, best interval */
+    char     coverage[256];               /* non-empty: counters see only part of the node */
     nm_socket_t s[NM_MAX_SOCKETS];
 } nm_result_t;
 

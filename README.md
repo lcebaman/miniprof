@@ -598,7 +598,7 @@ What a snapshot contains so far:
     user/system time, peak RSS, context switches
 - **overhead**: the profiler's own init/finalize cost
 
-- **metrics.counters** (hardware counters, AMD Zen 4 / Zen 5; other CPUs
+- **metrics.counters** (hardware counters, AMD Zen 4 / 5 / 6; other CPUs
   get cycles and instructions only):
   - one counter group per run, chosen by `MINIPROF_SNAPSHOT`: `basic`
     collects cycles, instructions and FLOPs, plus (if they fit) L1D fills
@@ -650,7 +650,7 @@ What a snapshot contains so far:
     static loop; imbalance per region is within 3 points of the analytic
     value, wall times within 5%
 
-- **metrics.topdown** (`MINIPROF_SNAPSHOT=topdown`; AMD Zen 4 / Zen 5):
+- **metrics.topdown** (`MINIPROF_SNAPSHOT=topdown`; AMD Zen 4 / 5 / 6):
   - AMD's pipeline-utilisation model, the one behind `perf stat -M
     PipelineL1,PipelineL2`, as a percentage of dispatch slots (6 per
     cycle on Zen 4, 8 on Zen 5): level 1 frontend bound, bad speculation,
@@ -681,7 +681,7 @@ What a snapshot contains so far:
     `tools/validate_topdown.sh` on a node also checks every raw encoding
     against perf's and compares with `perf stat -M PipelineL1/L2`
 
-- **metrics.memory** (AMD Zen 4 / Zen 5, any `MINIPROF_SNAPSHOT` level):
+- **metrics.memory** (AMD Zen 4 / 5 / 6, any `MINIPROF_SNAPSHOT` level):
   socket-level counters, per node and per socket:
   - DRAM read and write bandwidth from the memory controllers, average
     and peak (best 100 ms interval), per channel and how many channels
@@ -702,9 +702,17 @@ What a snapshot contains so far:
     system-wide and no capability is needed: `make nodemon` is enough
     (`make nodemon-setcap` says so and does nothing).
     `tools/nodemon_ready.sh` tells you whether the helper can work here.
-    Zen 6 (Venice) is recognised but has no event tables yet: there the
-    counters use the generic group and top-down and the memory block
-    report it as unsupported, rather than borrowing Zen 5 encodings.
+    Zen 6 (Venice): the core counters and top-down use the Zen 5 tables
+    (W = 8), after checking against perf on an EPYC 9996 that every event
+    has the same encoding there; the counters block reports
+    `"uarch": "zen5"`, the table used. Memory on Zen 6 comes from the
+    data fabric (the RHEL 9 kernel finds no memory-controller counters)
+    and, on that kernel, its one PMU sees only NUMA node 0: the block
+    then carries `"coverage"` saying so, drops the `pct_of_calibrated_bw`
+    fields, and the roofline is not computed (it needs every DRAM byte).
+    Run the job's ranks on node 0 to measure them; reads from the other
+    node show as remote. Mapped with `tools/probe_df_zen6.sh` on an EPYC
+    9996 in NPS2.
     One rank per node starts it at `MPI_Init`; it opens a fixed set of
     events, drops every capability, samples, and returns totals over a
     pipe at `MPI_Finalize`. It is looked for next to `libminiprof.so`
