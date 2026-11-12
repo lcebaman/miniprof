@@ -537,6 +537,17 @@ python3 tools/miniprof_report.py miniprof_snapshot.json
 python3 tools/miniprof_report.py miniprof_snapshot.json --html report.html
 ```
 
+**Comparing two runs.** `python3 tools/miniprof_diff.py A.json B.json
+[--html diff.html] [--label-a Genoa --label-b Turin]` explains why B took
+more or less time than A: the change per average rank split into
+compute, MPI and I/O; the compute change split exactly into instructions
+per rank, IPC, clock and busy cores per rank (T = I / (IPC x f x P), so
+the ratios multiply back to the time ratio; needs the `basic` counter
+group in both); top-down, regions and MPI functions with the largest
+changes; memory bandwidth, power and energy to solution; and both
+roofline points. Use it for two CPU generations, two compilers, two
+layouts, or before and after a change.
+
 `--csv DIR` writes the snapshot's tables as CSV files (summary, ranks,
 MPI functions, message sizes, I/O, regions with counters + top-down +
 roofline joined by name, OpenMP regions, memory per node / socket /

@@ -799,6 +799,8 @@ test-report-html:
 	@echo "--- HTML report (miniprof_report.py --html)"
 	@python3 tests/check_report_html.py tests/fixtures/report_demo.json tests/fixtures/report_escape.json \
 	    $$(ls miniprof_snapshot_*.json 2>/dev/null)
+	@echo "--- snapshot diff (miniprof_diff.py)"
+	@python3 tests/check_diff.py $$(ls miniprof_snapshot_*.json 2>/dev/null)
 
 check: lib nodemon calibrate examples mpa-check
 	@echo "=========================================="

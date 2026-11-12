@@ -266,7 +266,31 @@ def rank_chart(ranks, width=960, height=240):
     return "".join(out)
 
 
-def roofline_chart(ceil, points, width=960, height=420):
+def paired_bars(rows, names=("A", "B"), width=960, bar_h=11, label_w=170, unit=" s", fmt="{:.2f}"):
+    """Two series per row (A slot 1, B slot 2): rows = [(label, a, b)]."""
+    gap = 12
+    plot_w = width - label_w - 90
+    vmax = nice_max(max([max(a or 0, b or 0) for _, a, b in rows] + [1e-12]))
+    h = len(rows) * (2 * bar_h + 2 + gap) + 4
+    out = [f'<svg class="chart" viewBox="0 0 {width} {h}" role="img">']
+    for i, (label, a, b) in enumerate(rows):
+        y = i * (2 * bar_h + 2 + gap) + 2
+        out.append(f'<text class="lab" x="{label_w - 8}" y="{y + bar_h + 5}" text-anchor="end">{esc(label)}</text>')
+        for j, (v, nm) in enumerate(((a, names[0]), (b, names[1]))):
+            yy = y + j * (bar_h + 2)
+            if v is None:
+                out.append(f'<text class="val" x="{label_w + 4}" y="{yy + bar_h - 2}">{esc(nm)}: –</text>')
+                continue
+            w = max(v / vmax * plot_w, 0.5)
+            tip = f"{label} — {nm}: {fmt.format(v)}{unit}"
+            out.append(f'<path d="{bar_path(label_w, yy, w, bar_h, 3, "right")}" fill="var(--s{j + 1})" '
+                       f'data-tip="{esc(tip)}"/>')
+            out.append(f'<text class="val" x="{label_w + w + 6:.1f}" y="{yy + bar_h - 2}">{esc(fmt.format(v))}{esc(unit)}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def roofline_chart(ceil, points, width=960, height=420, ceil2=None):
     """Log-log roofline. ceil: peak, peak_key, all_gflops, dram (the run's
     mix-aware ceiling), dram_read, dram_triad. points: [(label, ai, gflops,
     slot)]."""
@@ -276,11 +300,11 @@ def roofline_chart(ceil, points, width=960, height=420):
     bw = ceil["dram"]
     bw_rd = ceil.get("dram_read")          # read-only roof, for region points
     ridge = peak / bw
-    ais = [p[1] for p in points if p[1] and p[1] > 0] + [ridge]
+    ais = [p[1] for p in points if p[1] and p[1] > 0] + [ridge] + ([ceil2["peak"] / ceil2["dram"]] if ceil2 else [])
     gfs = [p[2] for p in points if p[2] and p[2] > 0]
     x0 = 10 ** math.floor(math.log10(min(ais)) - 0.5)
     x1 = 10 ** math.ceil(math.log10(max(ais)) + 0.5)
-    y1 = 10 ** math.ceil(math.log10(peak * 1.6))
+    y1 = 10 ** math.ceil(math.log10(max(peak, ceil2["peak"] if ceil2 else 0) * 1.6))
     y0 = 10 ** math.floor(math.log10(min(gfs + [bw * x0, peak / 100])))
     lx = lambda v: ml + (math.log10(v) - math.log10(x0)) / (math.log10(x1) - math.log10(x0)) * pw
     ly = lambda v: mt + ph - (math.log10(v) - math.log10(y0)) / (math.log10(y1) - math.log10(y0)) * ph
@@ -315,6 +339,13 @@ def roofline_chart(ceil, points, width=960, height=420):
     if ya < y0:
         xa = y0 / bw
         ya = y0
+    if ceil2:   # a second machine's roof (diff), dashed in the second series colour
+        p2, b2 = ceil2["peak"], ceil2["dram"]
+        x2 = max(x0, y0 / b2)
+        out.append(f'<path class="roofb" d="M{lx(x2):.1f},{ly(b2 * x2):.1f}L{lx(p2 / b2):.1f},{ly(p2):.1f}H{ml + pw}" '
+                   f'data-tip="{esc(ceil2.get("label", "B"))}: DRAM {b2:.0f} GB/s, peak {gflops(p2)}"/>')
+        out.append(f'<text class="rl" x="{ml + pw - 4}" y="{ly(p2) + 14:.1f}" text-anchor="end">'
+                   f'{esc(ceil2.get("label", "B"))} peak {gflops(p2)}</text>')
     if bw_rd and abs(bw_rd - bw) / bw > 0.01:
         xr = max(x0, y0 / bw_rd)
         out.append(f'<path class="roofr" d="M{lx(xr):.1f},{ly(bw_rd * xr):.1f}L{lx(peak / bw_rd):.1f},{ly(peak):.1f}" '
@@ -419,6 +450,7 @@ svg .hit{fill:transparent}
 svg .hitl{stroke:transparent;stroke-width:12}
 svg .roof{fill:none;stroke:var(--ink2);stroke-width:2;stroke-linejoin:round}
 svg .roof2{stroke:var(--axis);stroke-width:1.5}
+svg .roofb{fill:none;stroke:var(--s2);stroke-width:1.5;stroke-dasharray:6 4}
 svg .roofr{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
 svg .rl{fill:var(--ink2);font-size:11.5px}
 svg .rl2{fill:var(--muted);font-size:11px}
