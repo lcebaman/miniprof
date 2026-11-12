@@ -268,7 +268,10 @@ def report(doc: dict, args) -> str:
                     p(f"   FLOPs per cycle     {cd['flops_per_cycle']:.2f}")
             if "l2_misses_per_kilo_instr" in cd:
                 p(f"   L2 misses           {cd['l2_misses_per_kilo_instr']:.2f} per 1000 instructions")
-            if "dram_fill_gb_per_s" in cd:
+            if "dram_read_gb_per_s" in cd:
+                p(f"   DRAM reads          {cd['dram_read_gb_per_s']:.2f} GB/s (this job's threads: L1D fills + "
+                  f"L2-prefetch misses; {cd.get('flops_per_dram_read_byte', 0):.3g} FLOP per byte read)")
+            elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 p(f"   DRAM fills          >= {cd['dram_fill_gb_per_s']:.2f} GB/s (L1D fills from DRAM, "
                   f"lower bound)" + (f"; {rem:.1f}% from a remote NUMA node" if rem is not None else ""))
@@ -336,7 +339,9 @@ def report(doc: dict, args) -> str:
             p(f"   ceilings            peak {c['peak_gflops']:.0f} GFLOP/s ({c['peak_key']}), "
               f"DRAM {c['dram_read_gb_s']:.0f} GB/s read-only / {c['dram_triad_gb_s']:.0f} triad")
             if roof.get("estimate"):
-                p("   ! ESTIMATE: DRAM bytes from L1D fills (a lower bound): intensity is an upper bound")
+                src = ("core-counter DRAM reads (fills + L2-prefetch misses; no writes)"
+                       if "L2-prefetch" in (roof.get("dram_bytes") or "") else "L1D fills")
+                p(f"   ! ESTIMATE: DRAM bytes from {src}, a lower bound: intensity is an upper bound")
             if rn:
                 mix = ("read-only" if rn.get("read_share_pct") is None
                        else f"at {rn['read_share_pct']:.0f}% reads")
@@ -345,12 +350,14 @@ def report(doc: dict, args) -> str:
                   f"ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
                 p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
                   f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
-            rr = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+            rr = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity_read")]
             if rr:
-                p("   by region           GFLOP/s/node   FLOP/B   bound     of attainable")
+                p("   by region           GFLOP/s/node   FLOP per byte READ   bound     of attainable (read roof)")
                 for g in sorted(rr, key=lambda g: -g["time_s_per_rank"])[:10]:
-                    p(f"     {g['name'][:18]:<18} {g['gflops_per_s_node']:11.1f} {g['arithmetic_intensity']:8.3g}   "
-                      f"{g['bound']:<8} {g['pct_of_attainable']:6.0f}%")
+                    p(f"     {g['name'][:18]:<18} {g['gflops_per_s_node']:11.1f} {g['arithmetic_intensity_read']:12.3g}"
+                      f"         {g['bound']:<8} {g['pct_of_attainable']:6.0f}%")
+            elif roof.get("regions_reason"):
+                p(f"   by region           {roof['regions_reason']}")
 
     # top-down
     td = (doc.get("metrics") or {}).get("topdown")

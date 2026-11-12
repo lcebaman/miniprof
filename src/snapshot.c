@@ -203,11 +203,13 @@ void snapshot_init(int verbose)
     sysinfo_collect_rank(&g_rank);
     if (rank == 0) read_cmdline(g_cmdline, sizeof(g_cmdline));
 
-    /* Counter groups by level: basic (and, until P7, full) = base group,
-     * roofline = vector widths, topdown = the three top-down sets. */
+    /* Counter groups by level: basic = base group, roofline = FLOPs + DRAM
+     * reads (fills + L2-prefetch misses) for per-region points, topdown =
+     * the three top-down sets, full = vector widths. */
     {
-        const char *grp = g_level == SNAPSHOT_ROOFLINE ? "vector" :
-                          g_level == SNAPSHOT_TOPDOWN  ? "topdown" : "base";
+        const char *grp = g_level == SNAPSHOT_ROOFLINE ? "roofline" :
+                          g_level == SNAPSHOT_TOPDOWN  ? "topdown" :
+                          g_level == SNAPSHOT_FULL     ? "vector" : "base";
         int ok = cnt_init(g_node.uarch[0] ? g_node.uarch : "generic", grp, rank);
         if (g_verbose || (!ok && rank == 0)) {
             cnt_result_t st;
@@ -826,6 +828,13 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     }
     if (iL2 >= 0 && iI >= 0)
         jw_dbl(w, "l2_misses_per_kilo_instr", 1000.0 * ratio((double)tot[iL2], (double)tot[iI]));
+    int iPf = kind_index(CK_DRAM_L2PF, n_active);
+    if (iD >= 0 && iPf >= 0) {
+        double rb = 64.0 * ((double)tot[iD] + (double)tot[iPf]);
+        jw_dbl(w, "dram_read_bytes", rb);
+        jw_dbl(w, "dram_read_gb_per_s", el_max > 0 ? rb / el_max * 1e-9 : 0.0);
+        if (iF >= 0) jw_dbl(w, "flops_per_dram_read_byte", ratio((double)tot[iF], rb));
+    }
     if (iD >= 0) {
         double bytes = 64.0 * (double)tot[iD];
         jw_dbl(w, "dram_fill_bytes", bytes);
@@ -1106,13 +1115,14 @@ static void cal_load(const sysinfo_node_t *n0)
     struct stat st;
     if (stat(env, &st) == 0 && S_ISDIR(st.st_mode)) {
         char p[1024];
-        snprintf(p, sizeof(p), "%s/calibration_%s.json", env, n0->hostname);
+        const char *sep = env[strlen(env) - 1] == '/' ? "" : "/";
+        snprintf(p, sizeof(p), "%s%scalibration_%s.json", env, sep, n0->hostname);
         if (cal_read(p) != 0) {
             DIR *d = opendir(env);
             struct dirent *de;
             while (d && (de = readdir(d))) {
                 if (strncmp(de->d_name, "calibration_", 12) != 0) continue;
-                snprintf(p, sizeof(p), "%s/%s", env, de->d_name);
+                snprintf(p, sizeof(p), "%s%s%s", env, sep, de->d_name);
                 if (cal_read(p) == 0 && strcmp(g_cal.brand, n0->cpu_brand) == 0) break;
                 g_cal.loaded = 0;
             }
@@ -1333,6 +1343,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     const char *why = NULL;
     int iF = kind_index(CK_FLOPS, g_cnt.n_active);
     int iD = kind_index(CK_DRAM_FILLS, g_cnt.n_active);
+    int iPf = kind_index(CK_DRAM_L2PF, g_cnt.n_active);
     int mem_any = 0, mem_part = 0;
     for (int i = 0; i < nn; i++) {
         mem_any |= nodes[i].mem.available;
@@ -1343,7 +1354,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
               "calibration file found (run miniprof-calibrate -o DIR)"
             : "no calibration: run miniprof-calibrate once per node type and set MINIPROF_CALIBRATION";
     else if (g_cnt.nsets > 1 || iF < 0)
-        why = "needs the FLOP counter: MINIPROF_SNAPSHOT=basic (top-down and roofline-width "
+        why = "needs the FLOP counter: MINIPROF_SNAPSHOT=basic or roofline (top-down and vector-width "
               "levels count other events)";
     /* Without whole-node DRAM bytes (no helper, or it sees part of the
      * node) fall back to the job's L1D fills from DRAM x 64 B: reads only,
@@ -1387,11 +1398,17 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     jw_bool(w, "available", 1);
     jw_bool(w, "estimate", est);
     if (est)
-        jw_str(w, "dram_bytes", mem_part
-               ? "estimate: the memory block covers only part of the node, so DRAM bytes are "
-                 "this job's L1D fills from DRAM x 64 B (core counters, every NUMA node)"
-               : "estimate: no memory block (miniprof-nodemon), so DRAM bytes are this job's "
-                 "L1D fills from DRAM x 64 B (core counters)");
+        jw_str(w, "dram_bytes", iPf >= 0
+               ? (mem_part ? "estimate: the memory block covers only part of the node, so DRAM bytes "
+                             "are this job's DRAM reads from core counters (L1D fills + L2-prefetch "
+                             "misses, x 64 B, every NUMA node); writes not included"
+                           : "estimate: no memory block (miniprof-nodemon), so DRAM bytes are this "
+                             "job's DRAM reads from core counters (L1D fills + L2-prefetch misses, "
+                             "x 64 B); writes not included")
+               : (mem_part ? "estimate: the memory block covers only part of the node, so DRAM bytes "
+                             "are this job's L1D fills from DRAM x 64 B (core counters, every NUMA node)"
+                           : "estimate: no memory block (miniprof-nodemon), so DRAM bytes are this "
+                             "job's L1D fills from DRAM x 64 B (core counters)"));
     else
         jw_str(w, "dram_bytes", "measured: whole-node DRAM reads + writes (miniprof-nodemon)");
     write_calibration_ref(w);
@@ -1411,10 +1428,11 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
                       "names another (fp32_512, fp64_256, ...): the FLOP counter does not "
                       "separate precisions");
     jw_str(w, "scope", "whole run, per node; FLOPs include those inside MPI calls");
-    jw_str(w, "regions", "per user region: the region's FLOPs over its L1D fills from DRAM x 64 B "
-                         "x region_bytes_scale (the run's measured DRAM bytes / fill bytes; 1 "
-                         "for an estimate), rate per node = per-rank rate x ranks per node. "
-                         "Counts are those of the threads that entered the region");
+    jw_str(w, "regions", "per user region (MINIPROF_SNAPSHOT=roofline): FLOPs per DRAM byte READ, "
+                         "reads = (L1D fills from DRAM + L2-prefetcher misses to DRAM) x 64 B; "
+                         "compared with the read-only DRAM ceiling; rate per node = per-rank "
+                         "rate x ranks per node. Counts are those of the threads that entered "
+                         "the region");
     jw_str(w, "dram_ceiling", "depends on the run's read share of DRAM bytes: the read-only "
                               "calibration for pure reads, the triad one at <= 75% reads "
                               "(writes cost bus turnarounds), linear between");
@@ -1439,7 +1457,6 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
 
     jw_begin_arr(w, "nodes");
     double sum_ai_w = 0, sum_w = 0;
-    double meas_bytes = 0, meas_fills = 0;     /* for the region scale factor */
     for (int i = 0; i < nn; i++) {
         const nm_result_t *m = &nodes[i].mem;
         if (!est && !m->available) continue;
@@ -1449,6 +1466,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
             if (r[k].node_index != nodes[i].node_index || !r[k].cnt_available) continue;
             fl += (double)r[k].cnt_total[iF];
             if (iD >= 0) fills += (double)r[k].cnt_total[iD];
+            if (iPf >= 0) fills += (double)r[k].cnt_total[iPf];
             if (r[k].elapsed_s > el) el = r[k].elapsed_s;
             nc++;
         }
@@ -1484,51 +1502,44 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         jw_dbl(w, "pct_of_dram_bw", bwc > 0 ? 100.0 * bw / bwc : NAN);
         jw_end_obj(w);
         if (!isnan(ai)) { sum_ai_w += fl; sum_w += bytes; }
-        if (!est) { meas_bytes += bytes; meas_fills += 64.0 * fills; }
     }
     jw_end_arr(w);
     jw_dbl(w, "arithmetic_intensity_all_nodes", sum_w > 0 ? sum_ai_w / sum_w : NAN);
 
-    /* Per user region (MINIPROF_REGION_BEGIN/END): the node counters
-     * cannot be split by region, but each region has its own FLOPs and
-     * L1D DRAM fills. Region DRAM bytes = fills x 64 B x k, where k is
-     * the whole run's measured DRAM bytes / fill bytes (1 for an
-     * estimate): the regions then sit consistently with the run's point.
-     * Rate per node = the region's per-rank rate x average ranks/node. */
-    if (iD >= 0 && g_nrreg > 0) {
-        double k = (!est && meas_fills > 0) ? meas_bytes / meas_fills : 1.0;
-        if (k < 1.0) k = 1.0;
+    /* Per user region: the node counters cannot be split by region, so
+     * regions use core counters only, and only with the roofline group:
+     * DRAM reads = (L1D fills from DRAM + L2-prefetch misses) x 64 B, which
+     * saw 99.9% of the reads of known kernels. L1D fills alone saw 0.1-15%
+     * on streaming code, so they are not used for regions. Writes are not
+     * counted: the intensity is per byte READ and the read-only ceiling
+     * applies. Rate per node = the region's per-rank rate x ranks/node. */
+    if (iD >= 0 && iPf >= 0 && g_nrreg > 0) {
         double rpn = nn > 0 ? (double)nr / nn : 1.0;
-        double bwc = est ? cal_bw_mix("node", 1.0) : NAN;
-        if (!est && nn > 0 && nodes[0].mem.available) {
-            double rd = 0, all = 0;
-            for (int s = 0; s < nodes[0].mem.nsockets; s++) {
-                rd += (double)nodes[0].mem.s[s].rd_bytes;
-                all += (double)(nodes[0].mem.s[s].rd_bytes + nodes[0].mem.s[s].wr_bytes);
-            }
-            bwc = cal_bw_mix("node", rfrac(rd, all - rd));
-        }
-        jw_dbl(w, "region_bytes_scale", k);
+        double bwr = cal_bw_mix("node", 1.0);
         jw_begin_arr(w, "regions");
         for (int u = 0; u < g_nrreg; u++) {
             const region_red_t *g = &g_rreg[u];
             double avg_s = g->ranks ? g->ns_sum * 1e-9 / g->ranks : 0.0;
-            double fl = (double)g->ev[0][iF], by = 64.0 * (double)g->ev[0][iD] * k;
+            double fl = (double)g->ev[0][iF];
+            double by = 64.0 * ((double)g->ev[0][iD] + (double)g->ev[0][iPf]);
             if (fl <= 0 || avg_s <= 0) continue;
             double gfl = fl / g->ranks / avg_s * 1e-9 * rpn;
             double ai = by > 0 ? fl / by : NAN;
-            double att = isnan(ai) ? peak : (ai * bwc < peak ? ai * bwc : peak);
+            double att = isnan(ai) ? peak : (ai * bwr < peak ? ai * bwr : peak);
             jw_begin_obj(w, NULL);
             jw_str(w, "name", g->name);
             jw_dbl(w, "time_s_per_rank", avg_s);
             jw_dbl(w, "gflops_per_s_node", gfl);
-            jw_dbl(w, "dram_gb_s_node", by / g->ranks / avg_s * 1e-9 * rpn);
-            jw_dbl(w, "arithmetic_intensity", ai);
-            jw_str(w, "bound", isnan(ai) || ai >= peak / bwc ? "compute" : "memory");
+            jw_dbl(w, "dram_read_gb_s_node", by / g->ranks / avg_s * 1e-9 * rpn);
+            jw_dbl(w, "arithmetic_intensity_read", ai);
+            jw_str(w, "bound", isnan(ai) || ai >= peak / bwr ? "compute" : "memory");
             jw_dbl(w, "pct_of_attainable", att > 0 ? 100.0 * gfl / att : NAN);
             jw_end_obj(w);
         }
         jw_end_arr(w);
+    } else if (g_nrreg > 0) {
+        jw_str(w, "regions_reason", "per-region points need MINIPROF_SNAPSHOT=roofline (FLOPs and "
+                                    "DRAM reads by region from core counters)");
     }
     jw_end_obj(w);
 }

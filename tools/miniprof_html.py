@@ -274,6 +274,7 @@ def roofline_chart(ceil, points, width=960, height=420):
     pw, ph = width - ml - mr, height - mt - mb
     peak = ceil["peak"]
     bw = ceil["dram"]
+    bw_rd = ceil.get("dram_read")          # read-only roof, for region points
     ridge = peak / bw
     ais = [p[1] for p in points if p[1] and p[1] > 0] + [ridge]
     gfs = [p[2] for p in points if p[2] and p[2] > 0]
@@ -314,6 +315,10 @@ def roofline_chart(ceil, points, width=960, height=420):
     if ya < y0:
         xa = y0 / bw
         ya = y0
+    if bw_rd and abs(bw_rd - bw) / bw > 0.01:
+        xr = max(x0, y0 / bw_rd)
+        out.append(f'<path class="roofr" d="M{lx(xr):.1f},{ly(bw_rd * xr):.1f}L{lx(peak / bw_rd):.1f},{ly(peak):.1f}" '
+                   f'data-tip="read-only DRAM ceiling (for the regions\' per-byte-read points): {bw_rd:.0f} GB/s"/>')
     out.append(f'<path class="roof" d="M{lx(xa):.1f},{ly(ya):.1f}L{lx(ridge):.1f},{ly(peak):.1f}H{ml + pw}"/>')
     out.append(f'<line class="hitl" x1="{lx(xa):.1f}" y1="{ly(ya):.1f}" x2="{lx(ridge):.1f}" y2="{ly(peak):.1f}" '
                f'data-tip="DRAM ceiling for this run\'s read mix: {bw:.0f} GB/s"/>')
@@ -322,8 +327,11 @@ def roofline_chart(ceil, points, width=960, height=420):
     out.append(f'<text class="rl" x="{ml + pw - 4}" y="{ly(peak) - 6:.1f}" text-anchor="end">'
                f'{esc(ceil["peak_key"])} peak {gflops(peak)}</text>')
     ang = math.degrees(math.atan2(ly(peak) - ly(ya), lx(ridge) - lx(xa)))
-    mx = lx(xa) + (lx(ridge) - lx(xa)) * 0.35
-    my = ly(ya) + (ly(peak) - ly(ya)) * 0.35
+    # the roof label sits along the slope away from the points
+    xs_pts = [lx(p[1]) for p in points if p[1] and p[1] > 0]
+    f = 0.6 if xs_pts and min(xs_pts) < lx(xa) + (lx(ridge) - lx(xa)) * 0.45 else 0.3
+    mx = lx(xa) + (lx(ridge) - lx(xa)) * f
+    my = ly(ya) + (ly(peak) - ly(ya)) * f
     out.append(f'<text class="rl" transform="translate({mx:.1f},{my - 6:.1f}) rotate({ang:.1f})">'
                f'DRAM {bw:.0f} GB/s</text>')
     for label, ai, gf, slot in points:
@@ -332,15 +340,24 @@ def roofline_chart(ceil, points, width=960, height=420):
         tip = f"{label}: {gflops(gf)} at {ai:.3g} FLOP/B"
         out.append(f'<circle class="pt" cx="{lx(ai):.1f}" cy="{ly(gf):.1f}" r="5" fill="var(--s{slot})" '
                    f'data-tip="{esc(tip)}"/>')
-    placed = []          # direct labels only where they do not collide
+    # direct labels, right of the point or else left of it, never over
+    # another label or another point; the rest are named in the table
+    dots = [(lx(p[1]), ly(p[2])) for p in points if p[1] and p[2] and p[1] > 0 and p[2] > 0]
+    boxes = []
+    def clear(x0b, x1b, yc):
+        if any(not (x1b < bx0 or x0b > bx1) and abs(yc - by) < 13 for bx0, bx1, by in boxes):
+            return False
+        return not any(x0b - 4 <= dx <= x1b + 4 and abs(yc - dy) < 9 for dx, dy in dots)
     for label, ai, gf, slot in sorted(points, key=lambda p: -(p[2] or 0))[:12]:
         if not (ai and gf and ai > 0 and gf > 0):
             continue
-        x, y = lx(ai) + 9, ly(gf) + 4
-        if any(abs(y - py) < 14 and abs(x - px) < 120 for px, py in placed):
-            continue
-        placed.append((x, y))
-        out.append(f'<text class="pl" x="{x:.1f}" y="{y:.1f}">{esc(label)}</text>')
+        px, py = lx(ai), ly(gf)
+        w = 6.6 * len(label)
+        for x0b, anchor, tx in ((px + 9, "start", px + 9), (px - 9 - w, "end", px - 9)):
+            if x0b >= ml and x0b + w <= ml + pw and clear(x0b, x0b + w, py):
+                boxes.append((x0b, x0b + w, py))
+                out.append(f'<text class="pl" x="{tx:.1f}" y="{py + 4:.1f}" text-anchor="{anchor}">{esc(label)}</text>')
+                break
     out.append("</svg>")
     return "".join(out)
 
@@ -402,6 +419,7 @@ svg .hit{fill:transparent}
 svg .hitl{stroke:transparent;stroke-width:12}
 svg .roof{fill:none;stroke:var(--ink2);stroke-width:2;stroke-linejoin:round}
 svg .roof2{stroke:var(--axis);stroke-width:1.5}
+svg .roofr{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:5 4}
 svg .rl{fill:var(--ink2);font-size:11.5px}
 svg .rl2{fill:var(--muted);font-size:11px}
 svg .pt{stroke:var(--surface);stroke-width:2}
@@ -588,7 +606,11 @@ def render(doc: dict, obs: list) -> str:
                 rows.append(("FLOPs per cycle", f'{cd["flops_per_cycle"]:.2f}', ""))
             if "l2_misses_per_kilo_instr" in cd:
                 rows.append(("L2 misses", f'{cd["l2_misses_per_kilo_instr"]:.2f}', "per 1000 instructions"))
-            if "dram_fill_gb_per_s" in cd:
+            if "dram_read_gb_per_s" in cd:
+                rows.append(("DRAM reads", f'{cd["dram_read_gb_per_s"]:.1f} GB/s',
+                             f'this job\'s threads: L1D fills + L2-prefetch misses; '
+                             f'{cd.get("flops_per_dram_read_byte", 0):.3g} FLOP per byte read'))
+            elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 rows.append(("DRAM fills", f'≥ {cd["dram_fill_gb_per_s"]:.1f} GB/s',
                              "L1D fills from DRAM (lower bound)" + (f"; {rem:.1f}% remote" if rem is not None else "")))
@@ -607,11 +629,13 @@ def render(doc: dict, obs: list) -> str:
                                vmax=100, label_w=110)
             regs = cnt.get("regions") or []
             if regs:
+                has_ipc = any((r.get("derived") or {}).get("ipc") is not None for r in regs)
                 body += "<h3>Instrumented regions</h3>" + table(
-                    ["region", "calls", "time/rank", "% of elapsed", "GFLOP/s/rank", "IPC"],
+                    ["region", "calls", "time/rank", "% of elapsed", "GFLOP/s/rank"] + (["IPC"] if has_ipc else []),
                     [(r["name"], f'{r["calls"]:,}', ht(r["time_s"]["avg"]), num(r.get("pct_of_elapsed"), "{:.1f}%"),
-                      num((r.get("derived") or {}).get("gflops_per_s_per_rank"), "{:.1f}"),
-                      num((r.get("derived") or {}).get("ipc"), "{:.2f}")) for r in regs[:20]])
+                      num((r.get("derived") or {}).get("gflops_per_s_per_rank"), "{:.1f}"))
+                     + ((num((r.get("derived") or {}).get("ipc"), "{:.2f}"),) if has_ipc else ())
+                     for r in regs[:20]])
             section("counters", "Hardware counters", body)
 
     # ---- top-down
@@ -708,13 +732,16 @@ def render(doc: dict, obs: list) -> str:
                 rn = nds[0]
                 pts = [(nd.get("hostname") or f'node {nd["index"]}', nd["arithmetic_intensity"], nd["gflops_per_s"], 1)
                        for nd in nds[:8]]
-                regs = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+                regs = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity_read")]
                 regs = sorted(regs, key=lambda g: -g["time_s_per_rank"])[:12]
-                pts += [(g["name"], g["arithmetic_intensity"], g["gflops_per_s_node"], 2) for g in regs]
+                pts += [(g["name"], g["arithmetic_intensity_read"], g["gflops_per_s_node"], 2) for g in regs]
                 if regs:
-                    body += legend([(1, "whole run, per node"), (2, "user regions (rate per node)")])
+                    body += legend([(1, "whole run, per node"), (2, "user regions: FLOP per byte read, rate per node")])
+                    body += '<p class="note">Solid roof: DRAM ceiling for the whole run\'s read/write mix. ' \
+                            'Dashed: read-only ceiling, which the region points are compared with.</p>'
                 body += roofline_chart({"peak": c["peak_gflops"], "peak_key": c["peak_key"],
-                                        "all_gflops": c.get("all_gflops"), "dram": rn["dram_ceiling_gb_s"]}, pts)
+                                        "all_gflops": c.get("all_gflops"), "dram": rn["dram_ceiling_gb_s"],
+                                        "dram_read": c["dram_read_gb_s"] if regs else None}, pts)
                 mix = ("the read-only calibration" if rn.get("read_share_pct") is None
                        else f'node 0\'s read share ({rn["read_share_pct"]:.0f}% reads)')
                 body += f'<p class="note">The DRAM roof is for {mix}: ' \
@@ -725,18 +752,21 @@ def render(doc: dict, obs: list) -> str:
                                 f'{nd["dram_gb_s"]:.1f}', f'{nd["arithmetic_intensity"]:.3g}', nd["bound"],
                                 f'{nd["pct_of_attainable"]:.0f}%', f'{nd["pct_of_peak_gflops"]:.1f}%',
                                 f'{nd["pct_of_dram_bw"]:.0f}%') for nd in nds])
-            regs = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+            regs = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity_read")]
             if regs:
                 body += "<h3>User regions</h3>" + table(
-                    ["region", "time/rank", "GFLOP/s per node", "DRAM GB/s per node", "FLOP/byte", "bound",
-                     "of attainable"],
+                    ["region", "time/rank", "GFLOP/s per node", "DRAM read GB/s per node", "FLOP per byte read",
+                     "bound", "of attainable"],
                     [(g["name"], ht(g["time_s_per_rank"]), f'{g["gflops_per_s_node"]:.1f}',
-                      f'{g["dram_gb_s_node"]:.1f}', f'{g["arithmetic_intensity"]:.3g}', g["bound"],
+                      f'{g["dram_read_gb_s_node"]:.1f}', f'{g["arithmetic_intensity_read"]:.3g}', g["bound"],
                       f'{g["pct_of_attainable"]:.0f}%') for g in sorted(regs, key=lambda g: -g["time_s_per_rank"])],
                     text=(5,))
-                body += '<p class="note">Region DRAM bytes come from each region\'s L1D fills from DRAM, scaled by ' \
-                        f'{roof.get("region_bytes_scale", 1):.2f} (the run\'s measured DRAM bytes per fill byte) so ' \
-                        'they line up with the whole-run point. Counts are those of the threads that entered the region.</p>'
+                body += '<p class="note">Regions: FLOPs per DRAM byte <b>read</b> (L1D fills from DRAM + ' \
+                        'L2-prefetcher misses to DRAM, from core counters), against the read-only ceiling; writes ' \
+                        'are not counted, so a region that writes a lot sits further right than its true intensity. ' \
+                        'Counts are those of the threads that entered the region.</p>'
+            elif roof.get("regions_reason"):
+                body += f'<p class="note">Per-region points: {esc(roof["regions_reason"])}.</p>'
             section("roofline", "Roofline", body)
 
     # ---- run details

@@ -1753,43 +1753,42 @@
     }
    ],
    "arithmetic_intensity_all_nodes": 2.893081761006289,
-   "region_bytes_scale": 1.31,
    "regions": [
     {
      "name": "advance_uv",
      "time_s_per_rank": 9.8,
      "gflops_per_s_node": 1536.0,
-     "dram_gb_s_node": 808.421052631579,
-     "arithmetic_intensity": 1.9,
      "bound": "memory",
-     "pct_of_attainable": 77.28690751735937
+     "pct_of_attainable": 55.17855795724381,
+     "arithmetic_intensity_read": 2.4699999999999998,
+     "dram_read_gb_s_node": 621.8623481781376
     },
     {
      "name": "microphysics",
      "time_s_per_rank": 7.4,
      "gflops_per_s_node": 496.0,
-     "dram_gb_s_node": 145.88235294117646,
-     "arithmetic_intensity": 3.4,
      "bound": "memory",
-     "pct_of_attainable": 13.94668766168035
+     "pct_of_attainable": 9.957160121573713,
+     "arithmetic_intensity_read": 4.42,
+     "dram_read_gb_s_node": 112.21719457013573
     },
     {
      "name": "radiation",
      "time_s_per_rank": 5.5,
      "gflops_per_s_node": 2272.0,
-     "dram_gb_s_node": 94.66666666666667,
-     "arithmetic_intensity": 24.0,
      "bound": "compute",
-     "pct_of_attainable": 12.982857142857142
+     "pct_of_attainable": 12.982857142857142,
+     "arithmetic_intensity_read": 31.200000000000003,
+     "dram_read_gb_s_node": 72.82051282051282
     },
     {
      "name": "halo_pack",
      "time_s_per_rank": 2.3,
      "gflops_per_s_node": 6.4,
-     "dram_gb_s_node": 320.0,
-     "arithmetic_intensity": 0.02,
      "bound": "memory",
-     "pct_of_attainable": 30.592734225621413
+     "pct_of_attainable": 21.841512524742335,
+     "arithmetic_intensity_read": 0.026000000000000002,
+     "dram_read_gb_s_node": 246.15384615384613
     }
    ]
   }

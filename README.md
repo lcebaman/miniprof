@@ -612,7 +612,9 @@ What a snapshot contains so far:
   - one counter group per run, chosen by `MINIPROF_SNAPSHOT`: `basic`
     collects cycles, instructions and FLOPs, plus (if they fit) L1D fills
     from DRAM, from a remote NUMA node, and L2 misses; `roofline` collects
-    FP operations by width (scalar, 128, 256, 512-bit) and cycles
+    cycles, FLOPs and DRAM reads (L1D fills from DRAM + L2-prefetcher
+    misses to DRAM) for per-region roofline points; `full` collects FP
+    operations by width (scalar, 128, 256, 512-bit) and cycles
   - Zen has 6 general-purpose counters per thread, the FLOP event takes
     two, and the NMI watchdog (on by default on RHEL-family systems)
     takes one more. Optional events are dropped from the end of the group
@@ -774,19 +776,24 @@ What a snapshot contains so far:
     (`fp32_512`, `fp64_256`, ...)
   - without the memory block (no helper, or partial coverage) the
     roofline is an **estimate** (`"estimate": true`, `dram_bytes` says
-    why): DRAM bytes are the job's L1D fills from DRAM x 64 B. Fills miss
-    write-backs and lines only the L2 prefetchers brought in, so the
-    bytes are a lower bound, the intensity an upper bound (the point sits
+    why). At `MINIPROF_SNAPSHOT=roofline` DRAM bytes are the job's reads
+    from core counters (fills + L2-prefetch misses; no writes); at
+    `basic` only L1D fills, which can miss most of a streaming read. Both
+    are lower bounds, so the intensity is an upper bound (the point sits
     right of where it belongs) and the DRAM roof is the read-only one.
     `tools/validate_roofline.sh` compares the two on a streaming run
-  - per user region (`roofline.regions`): the node counters cannot be
-    split by region, but each region has its own FLOPs and L1D DRAM
-    fills. Region bytes = fills x 64 B x `region_bytes_scale`, the run's
-    measured DRAM bytes per fill byte (1 for an estimate), so regions sit
-    consistently with the whole-run point; rate per node = the region's
-    per-rank rate x ranks per node. Counts are those of the threads that
-    entered the region (a region opened only on the master thread of a
-    hybrid code reflects the master's work)
+  - per user region (`roofline.regions`, `MINIPROF_SNAPSHOT=roofline`):
+    the node counters cannot be split by region, so regions use core
+    counters: FLOPs per DRAM byte READ, reads = (L1D fills from DRAM +
+    L2-prefetcher requests that miss L2 and L3) x 64 B, against the
+    read-only ceiling. On EPYC 9754 the two together saw 99.9% of the
+    reads of five known kernels (`tools/probe_fills.sh`); fills alone saw
+    0.1-15% on streaming code (the L2 prefetcher brings the line, the L1
+    fill then comes from L2), so fills alone are never used per region.
+    Writes are not counted. Rate per node = per-rank rate x ranks per
+    node. Counts are those of the threads that entered the region (a
+    region opened only on the master thread of a hybrid code reflects the
+    master's work)
   - the ceilings are measurements, not datasheet numbers: a well-tuned
     code can land a few percent above them (validation allows 115%).
     On amd4604 (2x EPYC 9754) a streaming run reached 752 GB/s (~82% of
@@ -795,7 +802,7 @@ What a snapshot contains so far:
     `tools/validate_roofline.sh` on a node: a streaming run must be
     memory-bound at >= 50% of the calibrated bandwidth and an FMA run
     compute-bound at >= 60% of the calibrated peak, every physical core
-`MINIPROF_SNAPSHOT=full` currently collects the `basic` group.
+`MINIPROF_SNAPSHOT=full` collects the FP-width (`vector`) group.
 
 Counter validation on a real node: `tools/pmu_probe.sh` records what the
 node's PMU and perf support; `tools/validate_counters.sh` checks exact
