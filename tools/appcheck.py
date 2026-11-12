@@ -200,8 +200,13 @@ def check_hardware(rep, r):
             rep.warn(f"{c['multiplexed_ranks']} ranks multiplexed (NMI watchdog or another perf user?)")
         d = c.get("derived", {})
         ipc = d.get("ipc_compute") or d.get("ipc")
-        rep.check(bool(ipc) and 0.2 <= ipc <= 5,
-                  f"IPC in compute {ipc}, GHz {d.get('ghz_effective')}, GFLOP/s {d.get('gflops_per_s')}")
+        # instructions are in the base group only: the topdown and roofline
+        # groups spend those counters on slots, FLOPs and DRAM fills
+        if lvl == "basic":
+            rep.check(bool(ipc) and 0.2 <= ipc <= 5,
+                      f"IPC in compute {ipc}, GHz {d.get('ghz_effective')}, GFLOP/s {d.get('gflops_per_s')}")
+        elif lvl == "roofline":
+            rep.check(bool(d.get("gflops_per_s")), f"GFLOP/s {d.get('gflops_per_s')}, GHz {d.get('ghz_effective')}")
         if lvl in ("basic", "roofline") and d.get("flops_in_mpi_pct") is not None:
             rep.check(d["flops_in_mpi_pct"] < 2, f"FLOPs inside MPI {d['flops_in_mpi_pct']}% (should be ~0)")
     else:
@@ -236,7 +241,8 @@ def check_hardware(rep, r):
                      f"{n0.get('pct_of_attainable')}% of attainable")
             rep.check(0 < (n0.get("pct_of_attainable") or 0) <= 110, "roofline point under its roof (<= 110%)")
             regs = rf.get("regions") or []
-            rep.info(f"{len(regs)} roofline regions" if regs else f"no per-region roofline: {rf.get('regions_reason')}")
+            rep.info(f"{len(regs)} roofline regions" if regs else
+                     f"no per-region roofline: {rf.get('regions_reason') or 'no miniprof regions in the application'}")
         elif rf.get("estimate"):
             rep.warn(f"roofline is an estimate only: {rf.get('reason')}")
         else:
