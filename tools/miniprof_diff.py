@@ -137,7 +137,8 @@ def analyse(A: Run, B: Run) -> dict:
     for k, a, b in (("compute", A.comp, B.comp), ("MPI", A.mpi, B.mpi), ("I/O", A.io, B.io)):
         comps.append((k, a, b, None if a is None or b is None else b - a))
     dsum = sum(d for _, _, _, d in comps if d is not None)
-    out["components"] = [(k, a, b, d, (100 * d / dsum if dsum and d is not None else None))
+    out["components"] = [(k, a, b, d, (0.0 if d is not None and abs(d) < 1e-9 else
+                                       100 * d / dsum if dsum and d is not None else None))
                          for k, a, b, d in comps]
     fa, fb = A.compute_factors(), B.compute_factors()
     if fa and fb:
@@ -149,7 +150,8 @@ def analyse(A: Run, B: Run) -> dict:
                                 ("busy_cores_per_rank", "busy cores per rank", -1)):
             r = fb[key] / fa[key]
             contrib = sign * math.log(r)          # contribution to ln(T_B/T_A)
-            rows.append((name, fa[key], fb[key], r, contrib, 100 * contrib / lt if abs(lt) > 1e-9 else None))
+            sh = 100 * contrib / lt if abs(lt) > 1e-9 else None
+            rows.append((name, fa[key], fb[key], r, contrib, 0.0 if sh is not None and abs(sh) < 0.5 else sh))
         out["factors"] = {"rows": rows, "time_ratio": B.comp / A.comp,
                           "check": math.exp(sum(r[4] for r in rows))}
     # top-down
@@ -202,7 +204,8 @@ def analyse(A: Run, B: Run) -> dict:
                          ("serial_pct_of_elapsed", "imbalance_pct", "lock_wait_pct")]
     out["counters"] = [(k, A.cd.get(k), B.cd.get(k)) for k in
                        ("ipc", "ipc_compute", "ghz_effective", "gflops_per_s", "flops_per_cycle",
-                        "dram_read_gb_per_s", "dram_fill_gb_per_s", "l2_misses_per_kilo_instr")
+                        "dram_read_bytes", "dram_read_gb_per_s", "dram_fill_bytes", "dram_fill_gb_per_s",
+                        "l2_misses_per_kilo_instr")
                        if A.cd.get(k) is not None or B.cd.get(k) is not None]
     out["verdict"] = verdict(A, B, out)
     return out
@@ -233,6 +236,15 @@ def verdict(A, B, d) -> list:
         v.append(f"Compute time ratio {f['time_ratio']:.2f}: driven mostly by {name} "
                  f"({fa:.3g} -> {fb:.3g}, x{rr:.2f}), which {direction} it"
                  + (f" ({abs(share):.0f}% of the log change)." if share is not None else "."))
+        if lead[0].startswith("IPC"):
+            for key, what in (("dram_read_bytes", "DRAM reads"), ("dram_fill_bytes", "L1D fills from DRAM")):
+                ba, bb = A.cd.get(key), B.cd.get(key)
+                if ba and bb:
+                    v.append(f"Same work, {what}: {ba / 1e9:.1f} GB in A vs {bb / 1e9:.1f} GB in B "
+                             f"(x{bb / ba:.2f}); a cache that holds more of the working set lowers this "
+                             "and raises IPC. MINIPROF_SNAPSHOT=topdown in both runs shows where the "
+                             "cycles went.")
+                    break
     regs = [x for x in d["regions"] if x[1] is not None and x[2] is not None]
     if regs:
         n, a, b, dd, rr, *_ = regs[0]
