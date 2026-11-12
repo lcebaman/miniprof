@@ -20,13 +20,13 @@ FAIL=0
 export MINIPROF_CALIBRATION=$D
 
 echo; echo "==================== memory-bound: membw_validate, $P ranks ===================="
-MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_mem.json \
+MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=roofline MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_mem.json \
     mpirun -n "$P" --bind-to core ./examples/membw_validate 8388608 20 || exit 1
 python3 tools/validate_roofline.py miniprof_snapshot_roof_mem.json --expect memory || FAIL=1
 
 echo; echo "==================== compute-bound: roofline_fma, $P ranks ===================="
 W=$(grep -q avx512f /proc/cpuinfo && echo fp64_512 || echo fp64_256)
-MINIPROF_ROOFLINE_PEAK=$W MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_fma.json \
+MINIPROF_ROOFLINE_PEAK=$W MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=roofline MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_fma.json \
     mpirun -n "$P" --bind-to core ./examples/roofline_fma 3 || exit 1
 MINIPROF_ROOFLINE_PEAK=$W python3 tools/validate_roofline.py miniprof_snapshot_roof_fma.json --expect compute || FAIL=1
 
@@ -45,7 +45,9 @@ def check(c, msg):
     global ok
     print(("  ok    " if c else "  FAIL  ") + msg); ok &= bool(c)
 check(e.get("available") and e.get("estimate"), f"fallback used: {e.get('dram_bytes', e.get('reason'))}")
-if e.get("available") and m.get("available"):
+if m.get("estimate"):
+    print("  skip  the reference run is itself an estimate (memory block partial or missing): no measurement to compare")
+elif e.get("available") and m.get("available"):
     am, ae = m["nodes"][0]["arithmetic_intensity"], e["nodes"][0]["arithmetic_intensity"]
     bm, be = m["nodes"][0]["dram_gb_s"], e["nodes"][0]["dram_gb_s"]
     print(f"  measured {bm:.1f} GB/s, AI {am:.4f}; estimate {be:.1f} GB/s, AI {ae:.4f}: "
@@ -72,9 +74,14 @@ check(e.get("available") and e.get("estimate"), f"fallback used: {e.get('dram_by
 nd = m["memory"]["nodes"][0] if m["memory"].get("available") else None
 if e.get("available") and nd:
     be = e["nodes"][0]["dram_gb_s"]
-    print(f"  measured DRAM reads {nd['read_gb_s']:.1f} GB/s; estimated reads {be:.1f} GB/s "
-          f"({100 * be / nd['read_gb_s']:.0f}%)")
-    check(0.85 <= be / nd["read_gb_s"] <= 1.10, "core-counter reads within -15%..+10% of the measured DRAM reads")
+    ref, what = nd["read_gb_s"], "measured DRAM reads"
+    if m["memory"].get("coverage"):
+        # the helper sees NUMA node 0 only; first-touch spreads this run's
+        # memory evenly over the NUMA nodes, so scale node 0 by their count
+        k = json.load(open(sys.argv[2]))["nodes"][0].get("numa_nodes") or 1
+        ref, what = ref * k, f"node-0 DRAM reads x {k} NUMA nodes (memory block covers node 0 only)"
+    print(f"  {what}: {ref:.1f} GB/s; estimated reads {be:.1f} GB/s ({100 * be / ref:.0f}%)")
+    check(0.85 <= be / ref <= 1.10, "core-counter reads within -15%..+10% of the DRAM reads")
 sys.exit(0 if ok else 1)
 PY
 
