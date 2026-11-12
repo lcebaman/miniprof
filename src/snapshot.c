@@ -1115,13 +1115,14 @@ static void cal_load(const sysinfo_node_t *n0)
     struct stat st;
     if (stat(env, &st) == 0 && S_ISDIR(st.st_mode)) {
         char p[1024];
-        snprintf(p, sizeof(p), "%s/calibration_%s.json", env, n0->hostname);
+        const char *sep = env[strlen(env) - 1] == '/' ? "" : "/";
+        snprintf(p, sizeof(p), "%s%scalibration_%s.json", env, sep, n0->hostname);
         if (cal_read(p) != 0) {
             DIR *d = opendir(env);
             struct dirent *de;
             while (d && (de = readdir(d))) {
                 if (strncmp(de->d_name, "calibration_", 12) != 0) continue;
-                snprintf(p, sizeof(p), "%s/%s", env, de->d_name);
+                snprintf(p, sizeof(p), "%s%s%s", env, sep, de->d_name);
                 if (cal_read(p) == 0 && strcmp(g_cal.brand, n0->cpu_brand) == 0) break;
                 g_cal.loaded = 0;
             }
