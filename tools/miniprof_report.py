@@ -509,7 +509,8 @@ def main() -> int:
     ap.add_argument("--write-thresholds", metavar="FILE",
                     help="write the default thresholds, with what each one means, to FILE and exit")
     for k, (dflt, hlp) in THRESHOLDS.items():
-        ap.add_argument("--" + k.replace("_", "-"), type=float, default=None, help=f"{hlp} (default {dflt:g})")
+        ap.add_argument("--" + k.replace("_", "-"), type=float, default=None,
+                        help=f"{hlp} (default {dflt:g})".replace("%", "%%"))   # argparse formats help with %
     args = ap.parse_args()
     if args.write_thresholds:
         with open(args.write_thresholds, "w") as f:
