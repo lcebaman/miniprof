@@ -39,14 +39,20 @@ int main(int argc, char **argv) {
 }
 C
 ${CC:-gcc} -O2 -fno-tree-loop-distribute-patterns -o "$TMP/k" "$TMP/k.c" || exit 1
-EV=ls_any_fills_from_sys.dram_io_all,l2_pf_miss_l2_l3.l2_hwpf,l2_pf_miss_l2_l3.l1_dc_hwpf,l2_pf_miss_l2_l3.l1_dc_l2_hwpf
+# raw encodings (Zen 4/5/6 share them); perf's symbolic names differ between
+# perf versions and generations
+EV="cpu/event=0x44,umask=0x48,name=fills_from_dram/u"
+EV="$EV,cpu/event=0x72,umask=0x1f,name=l2pf_miss_l3_from_l2pf/u"
+EV="$EV,cpu/event=0x72,umask=0xe0,name=l2pf_miss_l3_from_l1pf/u"
+EV="$EV,cpu/event=0x72,umask=0xff,name=l2pf_miss_l3_all/u"
 {
 echo "== $(hostname) $(date -u)"; grep -m1 "model name" /proc/cpuinfo; uname -r
+perf stat -e "$EV" -- true 2>&1 | grep -i -E "not supported|error|invalid" && echo "(events above failed)"
 echo "kernel  event                                   counted GB   % of DRAM reads   (running%)"
 for k in dot sum daxpy copy stride; do
     # init pass alone, to subtract: the arrays' first touch is in both runs
-    perf stat -x';' -e "$EV:u" -o "$TMP/p0" -- taskset -c 2 "$TMP/k" "$k" 0 > /dev/null
-    perf stat -x';' -e "$EV:u" -o "$TMP/p1" -- taskset -c 2 "$TMP/k" "$k" 4 > "$TMP/out"
+    perf stat -x';' -e "$EV" -o "$TMP/p0" -- taskset -c 2 "$TMP/k" "$k" 0 > /dev/null
+    perf stat -x';' -e "$EV" -o "$TMP/p1" -- taskset -c 2 "$TMP/k" "$k" 4 > "$TMP/out"
     rb=$(awk '/READ_BYTES/{print $2}' "$TMP/out")
     paste -d';' <(grep -v '^#' "$TMP/p0" | grep -v '^$') <(grep -v '^#' "$TMP/p1" | grep -v '^$') |
     awk -F';' -v k="$k" -v rb="$rb" 'NF > 8 { c = $(NF/2 + 1) - $1; printf "%-7s %-40s %9.2f   %6.1f%%   (%s)\n", k, $3, c*64/1e9, 100*c*64/rb, $(NF/2 + 5) }'
