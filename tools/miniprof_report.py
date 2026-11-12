@@ -268,7 +268,10 @@ def report(doc: dict, args) -> str:
                     p(f"   FLOPs per cycle     {cd['flops_per_cycle']:.2f}")
             if "l2_misses_per_kilo_instr" in cd:
                 p(f"   L2 misses           {cd['l2_misses_per_kilo_instr']:.2f} per 1000 instructions")
-            if "dram_fill_gb_per_s" in cd:
+            if "dram_read_gb_per_s" in cd:
+                p(f"   DRAM reads          {cd['dram_read_gb_per_s']:.2f} GB/s (this job's threads: L1D fills + "
+                  f"L2-prefetch misses; {cd.get('flops_per_dram_read_byte', 0):.3g} FLOP per byte read)")
+            elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 p(f"   DRAM fills          >= {cd['dram_fill_gb_per_s']:.2f} GB/s (L1D fills from DRAM, "
                   f"lower bound)" + (f"; {rem:.1f}% from a remote NUMA node" if rem is not None else ""))
