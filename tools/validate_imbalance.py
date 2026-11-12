@@ -79,8 +79,8 @@ def main() -> int:
         check(close(ar["time_s"]["avg"], w_avg_wait),
               f"MPI_Allreduce avg wait {ar['time_s']['avg']:.4f} s vs injected {w_avg_wait:.4f} s")
     bar = funcs.get("MPI_Barrier")
-    check(bar is not None and bar["calls"] == 2 * n,
-          f"MPI_Barrier calls {bar and bar['calls']} == {2 * n}")
+    check(bar is not None and bar["calls"] == 3 * n,   # start-up + after each MPI-IO file
+          f"MPI_Barrier calls {bar and bar['calls']} == {3 * n}")
 
     # ── cross-check against trace mode's Table 2 ─────────────────────────
     if a.trace_report and ar:
@@ -102,10 +102,11 @@ def main() -> int:
         (px["calls"]["open"],  4 * n, "POSIX opens"),
         (px["calls"]["close"], 4 * n, "POSIX closes"),
         (px["calls"]["sync"],  n,     "POSIX syncs"),
-        (mi["bytes"]["write"], n * MPIIO_BYTES, "MPI-IO write bytes"),
+        # write_at + write_all through a file view + iwrite_at (PnetCDF pattern)
+        (mi["bytes"]["write"], 3 * n * MPIIO_BYTES, "MPI-IO write bytes"),
         (mi["bytes"]["read"],  n * MPIIO_BYTES, "MPI-IO read bytes"),
-        (mi["calls"]["open"],  n, "MPI-IO opens"),
-        (mi["calls"]["close"], n, "MPI-IO closes"),
+        (mi["calls"]["open"],  2 * n, "MPI-IO opens"),
+        (mi["calls"]["close"], 2 * n, "MPI-IO closes"),
     ]
     for got, want_v, what in exact:
         check(got == want_v, f"{what}: {got} == {want_v}")
