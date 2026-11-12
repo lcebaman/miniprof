@@ -537,6 +537,17 @@ python3 tools/miniprof_report.py miniprof_snapshot.json
 python3 tools/miniprof_report.py miniprof_snapshot.json --html report.html
 ```
 
+`--csv DIR` writes the snapshot's tables as CSV files (summary, ranks,
+MPI functions, message sizes, I/O, regions with counters + top-down +
+roofline joined by name, OpenMP regions, memory per node / socket /
+channel, roofline per node), one row per entity, nested values as dotted
+column names (`time_s.avg`).
+
+The observations use thresholds (MPI > 20% of the run, imbalance > 10%,
+...). `--write-thresholds FILE` writes them with what each means; edit
+the file and pass it with `--thresholds FILE` or `MINIPROF_THRESHOLDS`,
+e.g. one per benchmark. Options such as `--mpi-pct 30` override the file.
+
 `--html` also writes one self-contained page (no external files, fonts
 or scripts; opens offline, can be mailed): headline figures, the
 observations, time per rank, MPI functions and message sizes, I/O,

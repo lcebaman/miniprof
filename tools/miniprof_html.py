@@ -442,7 +442,7 @@ if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+h>innerHeight-8)y=e.clientY-h-14;t.sty
 """
 
 
-def render(doc: dict, obs: list) -> str:
+def render(doc: dict, obs: list, thresholds: str = "") -> str:
     run = doc.get("run") or {}
     nodes = doc.get("nodes") or []
     m = doc.get("metrics") or {}
@@ -489,14 +489,17 @@ def render(doc: dict, obs: list) -> str:
                           + (" · estimate" if roof.get("estimate") else "")))
 
     # ---- observations
+    thr = (f'<p class="note">Thresholds from <code>{esc(thresholds)}</code>.</p>' if thresholds
+           else '<p class="note">Default thresholds (<code>miniprof_report.py --write-thresholds FILE</code> '
+                'to tune them).</p>')
     if obs:
         items = "".join(f'<li><span class="ic" aria-hidden="true">!</span><span>{esc(o["text"])}'
                         f'<a class="sec" href="#{esc(o["section"])}">{esc(o["section"])} ↓</a></span></li>'
                         for o in obs)
-        S.append(f'<section id="observations"><h2>Observations</h2><ul class="obs">{items}</ul></section>')
+        S.append(f'<section id="observations"><h2>Observations</h2><ul class="obs">{items}</ul>{thr}</section>')
     elif par:
         S.append('<section id="observations"><h2>Observations</h2><ul class="obs"><li class="ok">'
-                 '<span class="ic" aria-hidden="true">✓</span><span>No threshold exceeded.</span></li></ul></section>')
+                 '<span class="ic" aria-hidden="true">✓</span><span>No threshold exceeded.</span></li></ul>' + thr + '</section>')
 
     # ---- time and ranks
     if par:
