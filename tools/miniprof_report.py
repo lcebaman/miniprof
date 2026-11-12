@@ -51,6 +51,59 @@ def bin_label(lower: int) -> str:
     return f"{human_bytes(lower)}-{human_bytes(lower * 2)}"
 
 
+# Observation thresholds: name -> (default, meaning). Resolution, highest
+# first: command line, the --thresholds / $MINIPROF_THRESHOLDS file, default.
+THRESHOLDS = {
+    "mpi_pct":           (20.0, "flag MPI above this % of the run"),
+    "imbalance_pct":     (10.0, "flag compute imbalance across ranks above this %"),
+    "io_pct":            (10.0, "flag I/O above this % of the run"),
+    "cpu_util_pct":      (80.0, "flag CPU utilisation per core below this %"),
+    "remote_pct":        (20.0, "flag remote-NUMA share of DRAM reads/fills above this %"),
+    "packed_pct":        (50.0, "flag packed (vector) FP ops below this % of FP ops"),
+    "serial_pct":        (20.0, "flag OpenMP serial time above this % of the run"),
+    "omp_imbalance_pct": (10.0, "flag OpenMP barrier or lock wait above this % of thread time"),
+    "td_memory_pct":     (30.0, "flag top-down backend-memory (or backend-core) above this % of slots"),
+    "td_frontend_pct":   (20.0, "flag top-down frontend-bound above this % of slots"),
+    "td_badspec_pct":    (10.0, "flag top-down bad speculation above this % of slots"),
+    "roof_dram_pct":     (50.0, "flag a memory-bound run below this % of the DRAM ceiling"),
+    "roof_peak_pct":     (20.0, "flag a compute-bound run below this % of peak FLOPs"),
+}
+
+
+def thresholds_template() -> str:
+    out = ["# miniprof_report.py observation thresholds.",
+           "# Use with --thresholds FILE or MINIPROF_THRESHOLDS=FILE; command-line",
+           "# options (--mpi-pct 30 ...) override what is set here.", "", "[thresholds]"]
+    for k, (d, h) in THRESHOLDS.items():
+        out += [f"# {h}", f"{k} = {d:g}"]
+    return "\n".join(out) + "\n"
+
+
+def apply_thresholds(args) -> str:
+    """Fill args.<threshold> from the file, then defaults. Returns the file used, or ''."""
+    import configparser
+    path = args.thresholds or os.environ.get("MINIPROF_THRESHOLDS") or ""
+    vals = {}
+    if path:
+        cp = configparser.ConfigParser(inline_comment_prefixes=("#", ";"))
+        if not cp.read(path):
+            raise ValueError(f"cannot read thresholds file {path}")
+        if not cp.has_section("thresholds"):
+            raise ValueError(f"{path}: no [thresholds] section")
+        for k, v in cp.items("thresholds"):
+            key = k.replace("-", "_")
+            if key not in THRESHOLDS:
+                raise ValueError(f"{path}: unknown threshold '{k}' (known: {', '.join(THRESHOLDS)})")
+            try:
+                vals[key] = float(v)
+            except ValueError:
+                raise ValueError(f"{path}: {k} = {v!r} is not a number")
+    for k, (d, _) in THRESHOLDS.items():
+        if getattr(args, k, None) is None:
+            setattr(args, k, vals.get(k, d))
+    return path
+
+
 def _sections(doc):
     """The values the observation rules read, extracted once."""
     m = doc.get("metrics") or {}
@@ -113,10 +166,10 @@ def observations(doc: dict, args) -> list:
         if omp["lock_wait_pct"] > args.omp_imbalance_pct:
             add("openmp", f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
     if rn:
-        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < 50 and not v["roof_est"]:
+        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < args.roof_dram_pct and not v["roof_est"]:
             add("roofline", f"Memory-bound but only {rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth: "
                        "latency-bound access (pointer chasing, poor prefetching) or too few cores/channels in use.")
-        if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < 20:
+        if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < args.roof_peak_pct:
             add("roofline", f"Compute-bound by intensity but at {rn['pct_of_peak_gflops']:.0f}% of peak FLOPs: "
                        "vectorisation, dependency chains or front-end limits (see top-down).")
     if tdc:
@@ -432,7 +485,8 @@ def report(doc: dict, args) -> str:
 
     obs = observations(doc, args)
     p("")
-    p(" Observations")
+    src = getattr(args, "thresholds_source", "")
+    p(" Observations" + (f"           (thresholds: {src})" if src else ""))
     if obs:
         for o in obs:
             p(f"   ! {o['text']}")
@@ -448,26 +502,40 @@ def main() -> int:
     ap.add_argument("-o", "--output")
     ap.add_argument("--html", metavar="OUT.html",
                     help="also write a self-contained HTML report (charts, tables, observations)")
-    ap.add_argument("--mpi-pct", type=float, default=20.0)
-    ap.add_argument("--imbalance-pct", type=float, default=10.0)
-    ap.add_argument("--io-pct", type=float, default=10.0)
-    ap.add_argument("--cpu-util-pct", type=float, default=80.0)
-    ap.add_argument("--remote-pct", type=float, default=20.0)
-    ap.add_argument("--packed-pct", type=float, default=50.0)
-    ap.add_argument("--serial-pct", type=float, default=20.0)
-    ap.add_argument("--td-memory-pct", type=float, default=30.0)
-    ap.add_argument("--td-frontend-pct", type=float, default=20.0)
-    ap.add_argument("--td-badspec-pct", type=float, default=10.0)
-    ap.add_argument("--omp-imbalance-pct", type=float, default=10.0)
+    ap.add_argument("--csv", metavar="DIR", help="also write the snapshot's tables as CSV files into DIR")
+    ap.add_argument("--thresholds", metavar="FILE",
+                    help="observation thresholds ([thresholds] section, key = value); also "
+                         "$MINIPROF_THRESHOLDS. Command-line options override the file")
+    ap.add_argument("--write-thresholds", metavar="FILE",
+                    help="write the default thresholds, with what each one means, to FILE and exit")
+    for k, (dflt, hlp) in THRESHOLDS.items():
+        ap.add_argument("--" + k.replace("_", "-"), type=float, default=None,
+                        help=f"{hlp} (default {dflt:g})".replace("%", "%%"))   # argparse formats help with %
     args = ap.parse_args()
+    if args.write_thresholds:
+        with open(args.write_thresholds, "w") as f:
+            f.write(thresholds_template())
+        print(f"wrote {args.write_thresholds}")
+        return 0
+    try:
+        args.thresholds_source = apply_thresholds(args)
+    except ValueError as e:
+        print(f"miniprof_report: {e}", file=sys.stderr)
+        return 2
     with open(args.file) as f:
         doc = json.load(f)
     text = report(doc, args)
+    if args.csv:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import miniprof_csv
+        files = miniprof_csv.write_csv(doc, args.csv)
+        print(f"wrote {len(files)} CSV file(s) to {args.csv}", file=sys.stderr)
     if args.html:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import miniprof_html
         with open(args.html, "w") as f:
-            f.write(miniprof_html.render(doc, observations(doc, args)))
+            f.write(miniprof_html.render(doc, observations(doc, args),
+                                        thresholds=getattr(args, "thresholds_source", "")))
     if args.output:
         with open(args.output, "w") as f:
             f.write(text)
