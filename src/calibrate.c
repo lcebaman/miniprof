@@ -360,7 +360,8 @@ int main(int argc, char **argv)
     char path[1024];
     struct stat st;
     if (stat(out, &st) == 0 && S_ISDIR(st.st_mode))
-        snprintf(path, sizeof(path), "%s/calibration_%s.json", out, node.hostname);
+        snprintf(path, sizeof(path), "%s%scalibration_%s.json", out,
+                 out[strlen(out) - 1] == '/' ? "" : "/", node.hostname);
     else
         snprintf(path, sizeof(path), "%s", out);
     FILE *f = fopen(path, "w");
