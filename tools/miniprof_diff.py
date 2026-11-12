@@ -59,6 +59,13 @@ def fmt(x, f="{:.2f}", none="–"):
     return none if x is None else f.format(x)
 
 
+def energy(j):
+    """J below 10 kJ, kJ above; j in joules."""
+    if j is None:
+        return "–"
+    return f"{j:.0f} J" if j < 1e4 else f"{j / 1e3:.1f} kJ"
+
+
 def label_of(doc, path):
     n = (doc.get("nodes") or [{}])[0]
     cpu = g(n, "cpu", "uarch_name") or g(n, "cpu", "uarch") or "?"
@@ -130,6 +137,14 @@ class Run:
 
 # ----------------------------------------------------------------- analysis
 
+def dram_gb(R):
+    """Measured DRAM bytes moved in the whole run, all measured nodes (GB)."""
+    tot = 0.0
+    for nd in (R.mem.get("nodes") or []):
+        tot += ((nd.get("read_gb_s") or 0) + (nd.get("write_gb_s") or 0)) * (nd.get("elapsed_s") or 0)
+    return tot or None
+
+
 def analyse(A: Run, B: Run) -> dict:
     out = {"A": A.label, "B": B.label}
     out["elapsed"] = (A.elapsed, B.elapsed, ratio(B.elapsed, A.elapsed))
@@ -137,7 +152,8 @@ def analyse(A: Run, B: Run) -> dict:
     for k, a, b in (("compute", A.comp, B.comp), ("MPI", A.mpi, B.mpi), ("I/O", A.io, B.io)):
         comps.append((k, a, b, None if a is None or b is None else b - a))
     dsum = sum(d for _, _, _, d in comps if d is not None)
-    out["components"] = [(k, a, b, d, (100 * d / dsum if dsum and d is not None else None))
+    out["components"] = [(k, a, b, d, (0.0 if d is not None and abs(d) < 1e-9 else
+                                       100 * d / dsum if dsum and d is not None else None))
                          for k, a, b, d in comps]
     fa, fb = A.compute_factors(), B.compute_factors()
     if fa and fb:
@@ -149,7 +165,8 @@ def analyse(A: Run, B: Run) -> dict:
                                 ("busy_cores_per_rank", "busy cores per rank", -1)):
             r = fb[key] / fa[key]
             contrib = sign * math.log(r)          # contribution to ln(T_B/T_A)
-            rows.append((name, fa[key], fb[key], r, contrib, 100 * contrib / lt if abs(lt) > 1e-9 else None))
+            sh = 100 * contrib / lt if abs(lt) > 1e-9 else None
+            rows.append((name, fa[key], fb[key], r, contrib, 0.0 if sh is not None and abs(sh) < 0.5 else sh))
         out["factors"] = {"rows": rows, "time_ratio": B.comp / A.comp,
                           "check": math.exp(sum(r[4] for r in rows))}
     # top-down
@@ -185,6 +202,8 @@ def analyse(A: Run, B: Run) -> dict:
             return {"read": g(pn, "read_gb_s", "avg"), "write": g(pn, "write_gb_s", "avg"),
                     "peak": pn.get("peak_gb_s_max"), "power": pn.get("power_w_avg"),
                     "energy_kj": (R.mem.get("energy_j_all_nodes") or 0) / 1e3 if R.mem else None,
+                    "energy_j": R.mem.get("energy_j_all_nodes"),
+                    "dram_gb": dram_gb(R),
                     "remote": R.mem.get("remote_read_share_pct"), "coverage": R.mem.get("coverage")}
         out["memory"] = (memrow(A) if A.mem else None, memrow(B) if B.mem else None)
     # roofline
@@ -202,7 +221,8 @@ def analyse(A: Run, B: Run) -> dict:
                          ("serial_pct_of_elapsed", "imbalance_pct", "lock_wait_pct")]
     out["counters"] = [(k, A.cd.get(k), B.cd.get(k)) for k in
                        ("ipc", "ipc_compute", "ghz_effective", "gflops_per_s", "flops_per_cycle",
-                        "dram_read_gb_per_s", "dram_fill_gb_per_s", "l2_misses_per_kilo_instr")
+                        "dram_read_bytes", "dram_read_gb_per_s", "dram_fill_bytes", "dram_fill_gb_per_s",
+                        "l2_misses_per_kilo_instr")
                        if A.cd.get(k) is not None or B.cd.get(k) is not None]
     out["verdict"] = verdict(A, B, out)
     return out
@@ -233,6 +253,21 @@ def verdict(A, B, d) -> list:
         v.append(f"Compute time ratio {f['time_ratio']:.2f}: driven mostly by {name} "
                  f"({fa:.3g} -> {fb:.3g}, x{rr:.2f}), which {direction} it"
                  + (f" ({abs(share):.0f}% of the log change)." if share is not None else "."))
+        if lead[0].startswith("IPC"):
+            mem = d.get("memory") or (None, None)
+            pairs = []
+            if mem[0] and mem[1] and mem[0].get("dram_gb") and mem[1].get("dram_gb") \
+                    and not (mem[0].get("coverage") or mem[1].get("coverage")):
+                pairs.append(("DRAM traffic (measured, reads + writes)", mem[0]["dram_gb"] * 1e9, mem[1]["dram_gb"] * 1e9))
+            for key, what in (("dram_read_bytes", "DRAM reads (core counters)"),
+                              ("dram_fill_bytes", "L1D fills from DRAM")):
+                if A.cd.get(key) and B.cd.get(key):
+                    pairs.append((what, A.cd[key], B.cd[key]))
+            if pairs and abs(pairs[0][2] / pairs[0][1] - 1) > 0.10:
+                what, ba, bb = pairs[0]
+                v.append(f"Same work, {what}: {ba / 1e9:.1f} GB in A vs {bb / 1e9:.1f} GB in B (x{bb / ba:.2f}). "
+                         "Fewer bytes from DRAM for the same instructions means more of the working set "
+                         "stayed in cache, which raises IPC.")
     regs = [x for x in d["regions"] if x[1] is not None and x[2] is not None]
     if regs:
         n, a, b, dd, rr, *_ = regs[0]
@@ -241,11 +276,26 @@ def verdict(A, B, d) -> list:
     if fn:
         n, a, b, dd, *_ = fn[0]
         v.append(f"Largest MPI change: {n}, {fmt(a)} s -> {fmt(b)} s per rank ({dd:+.2f} s).")
+    td = d.get("topdown")
+    if td:
+        l1 = [x for x in td if x[0] in ("frontend_bound", "bad_speculation", "backend_bound", "retiring")
+              and x[1] is not None and x[2] is not None]
+        if l1:
+            k, a, b = max(l1, key=lambda x: abs(x[2] - x[1]))
+            bm = next((x for x in td if x[0] == "backend_memory"), None)
+            extra = (f"; backend-memory {bm[1]:.0f}% -> {bm[2]:.0f}%" if bm and bm[1] is not None and bm[2] is not None
+                     and k == "backend_bound" else "")
+            v.append(f"Top-down (compute): largest shift is {k.replace('_', ' ')}, {a:.0f}% -> {b:.0f}% of slots{extra}.")
+    for tag, x in zip("AB", d["roofline"]):
+        if x and x["bound"] == "memory" and not x["estimate"] and x["att"] < 50:
+            v.append(f"{tag} is memory-bound yet at {x['att']:.0f}% of its DRAM roof over the whole run: "
+                     "this suggests memory latency rather than bandwidth limits it (or that much of the "
+                     "run is spent outside compute).")
     mem = d.get("memory")
-    if mem and mem[0] and mem[1] and mem[0]["energy_kj"] and mem[1]["energy_kj"]:
-        er = mem[1]["energy_kj"] / mem[0]["energy_kj"]
-        v.append(f"Energy to solution (package, all nodes): {mem[0]['energy_kj']:.1f} -> "
-                 f"{mem[1]['energy_kj']:.1f} kJ (x{er:.2f}).")
+    if mem and mem[0] and mem[1] and mem[0].get("energy_j") and mem[1].get("energy_j"):
+        er = mem[1]["energy_j"] / mem[0]["energy_j"]
+        v.append(f"Energy to solution (package, all nodes): {energy(mem[0]['energy_j'])} -> "
+                 f"{energy(mem[1]['energy_j'])} (x{er:.2f}) at {mem[0]['power'] or 0:.0f} W -> {mem[1]['power'] or 0:.0f} W.")
     if mem and ((mem[0] or {}).get("coverage") or (mem[1] or {}).get("coverage")):
         v.append("Memory figures for a run with partial coverage count part of the node only (see memory).")
     return v
@@ -317,10 +367,12 @@ def text(d, A, B) -> str:
         p(" Memory (per node, average)              A            B         B/A")
         ma, mb = mem[0] or {}, mem[1] or {}
         for k, lab in (("read", "DRAM read GB/s"), ("write", "DRAM write GB/s"), ("peak", "peak GB/s"),
-                       ("power", "package power W"), ("energy_kj", "energy, all nodes kJ"),
+                       ("dram_gb", "DRAM moved, whole run GB"), ("power", "package power W"),
                        ("remote", "remote reads %")):
             a, b = ma.get(k), mb.get(k)
             p(f"   {lab:<30} {fmt(a, '{:10.1f}'):>11} {fmt(b, '{:12.1f}'):>12} {fmt(ratio(b, a), '{:10.3f}'):>11}")
+        p(f"   {'energy, all nodes':<30} {energy(ma.get('energy_j')):>11} {energy(mb.get('energy_j')):>12} "
+          f"{fmt(ratio(mb.get('energy_j'), ma.get('energy_j')), '{:10.3f}'):>11}")
         for tag, mm in (("A", ma), ("B", mb)):
             if mm.get("coverage"):
                 p(f"   ! {tag}: partial coverage: {mm['coverage']}")
@@ -362,9 +414,9 @@ def html(d, A, B) -> str:
     if r:
         tiles.append(H.tile("B vs A", f"{1 / r:.2f}x faster" if r < 1 else f"{r:.2f}x slower", "slowest rank"))
     mem = d.get("memory")
-    if mem and mem[0] and mem[1] and mem[0]["energy_kj"] and mem[1]["energy_kj"]:
-        tiles.append(H.tile("Energy B/A", f'x{mem[1]["energy_kj"] / mem[0]["energy_kj"]:.2f}',
-                            f'{mem[0]["energy_kj"]:.1f} → {mem[1]["energy_kj"]:.1f} kJ'))
+    if mem and mem[0] and mem[1] and mem[0].get("energy_j") and mem[1].get("energy_j"):
+        tiles.append(H.tile("Energy B/A", f'x{mem[1]["energy_j"] / mem[0]["energy_j"]:.2f}',
+                            f'{energy(mem[0]["energy_j"])} → {energy(mem[1]["energy_j"])}'))
     f = d.get("factors")
     if f:
         tiles.append(H.tile("Compute time B/A", f"x{f['time_ratio']:.2f}", "average rank"))
@@ -431,10 +483,12 @@ def html(d, A, B) -> str:
         ma, mb = mem[0] or {}, mem[1] or {}
         rows = []
         for k, lab, u in (("read", "DRAM read", " GB/s"), ("write", "DRAM write", " GB/s"), ("peak", "peak", " GB/s"),
-                          ("power", "package power", " W"), ("energy_kj", "energy, all nodes", " kJ"),
+                          ("dram_gb", "DRAM moved, whole run", " GB"), ("power", "package power", " W"),
                           ("remote", "remote reads", "%")):
             rows.append((lab, H.num(ma.get(k), "{:.1f}" + u), H.num(mb.get(k), "{:.1f}" + u),
                          H.num(ratio(mb.get(k), ma.get(k)), "{:.3f}")))
+        rows.append(("energy, all nodes", energy(ma.get("energy_j")), energy(mb.get("energy_j")),
+                     H.num(ratio(mb.get("energy_j"), ma.get("energy_j")), "{:.3f}")))
         body = H.table(["per node, average", "A", "B", "B/A"], rows)
         for tag, mm in (("A", ma), ("B", mb)):
             if mm.get("coverage"):
