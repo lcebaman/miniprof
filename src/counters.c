@@ -74,6 +74,26 @@ static const cnt_group_t k_groups[] = {
         { CK_DRAM_FILLS_REMOTE, "ls_any_fills_from_sys.dram_io_far",  RAW(0x044, 0x40) },
         { CK_L2_MISSES,         "l2_cache_req_stat.ic_dc_miss_in_l2", RAW(0x064, 0x09) },
     } },
+    /* roofline: DRAM reads by region. A streaming read is mostly brought in
+     * by the L2 prefetcher; the L1D fill then comes from L2 and the fill
+     * event does not see it. Fills from DRAM + L2-prefetcher requests that
+     * miss L2 and L3 (event 0x72, umask 0x1f: L2 prefetchers only, so the
+     * L1-prefetcher requests already counted as fills are not doubled)
+     * covered 99.9% of the known reads of five kernels on EPYC 9754
+     * (tools/probe_fills.sh: dot, sum, daxpy, copy, strided); fills alone
+     * 0.1-15%. 5 counters: fits with the NMI watchdog on. */
+    { "zen4", "roofline", 4, 4, {
+        { CK_CYCLES,     "ls_not_halted_cyc",                  RAW(0x076, 0x00) },
+        { CK_FLOPS,      "fp_ret_sse_avx_ops.all",             RAW(0x003, 0x1f) },
+        { CK_DRAM_FILLS, "ls_any_fills_from_sys.dram_io_all",  RAW(0x044, 0x48) },
+        { CK_DRAM_L2PF,  "l2_pf_miss_l2_l3.l2_hwpf",           RAW(0x072, 0x1f) },
+    } },
+    { "zen5", "roofline", 4, 4, {
+        { CK_CYCLES,     "ls_not_halted_cyc",                  RAW(0x076, 0x00) },
+        { CK_FLOPS,      "fp_ret_sse_avx_ops.all",             RAW(0x003, 0x0f) },
+        { CK_DRAM_FILLS, "ls_any_fills_from_sys.dram_io_all",  RAW(0x044, 0x48) },
+        { CK_DRAM_L2PF,  "l2_pf_miss_l2_l3.l2_hwpf",           RAW(0x072, 0x1f) },
+    } },
     /* Zen 5 FLOP precision split, for the roofline group (P6). The precision
      * field (umask bits 7:5) only filters: it must be combined with the
      * op-type bits 3:0. Measured on EPYC 9555 (perf 5.14 RHEL 9.7), the
@@ -201,6 +221,12 @@ static const cnt_group_t k_groups[] = {
         { CK_L2_MISSES,    "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
         { CK_DRAM_FILLS,   "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
     } },
+    { "swtest", "roofline", 4, 4, {
+        { CK_CYCLES,     "task-clock",       PERF_TYPE_SOFTWARE, PERF_COUNT_SW_TASK_CLOCK },
+        { CK_FLOPS,      "minor-faults",     PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS_MIN },
+        { CK_DRAM_FILLS, "page-faults",      PERF_TYPE_SOFTWARE, PERF_COUNT_SW_PAGE_FAULTS },
+        { CK_DRAM_L2PF,  "context-switches", PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CONTEXT_SWITCHES },
+    } },
     /* anything else (incl. Intel until P8): architectural events only */
     { "generic", "base", 2, 2, {
         { CK_CYCLES,       "cycles",       HW(CPU_CYCLES) },
@@ -215,7 +241,7 @@ static const char *k_kind_names[CK_COUNT] = {
     "fp_packed256_ops", "fp_packed512_ops",
     "ret_ops", "disp_ops", "fe_empty_slots", "be_stall_slots", "smt_slots",
     "fe_latency_cycles", "noret_load_cycles", "noret_notcomplete_cycles",
-    "ucode_ops", "br_misp", "resyncs"
+    "ucode_ops", "br_misp", "resyncs", "dram_l2pf"
 };
 
 int cnt_dispatch_width(const char *uarch)

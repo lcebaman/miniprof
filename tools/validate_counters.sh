@@ -58,7 +58,7 @@ PERF_FLOPS=$(cat "$TMP"/perf.*.txt 2>/dev/null | grep -v '^#' | grep fp_ret | \
 echo "perf stat FLOPs summed over $(ls "$TMP"/perf.*.txt 2>/dev/null | wc -l) ranks: ${PERF_FLOPS:-none}"
 cat "$TMP"/perf.*.txt 2>/dev/null | grep -v '^#' | head -4
 
-for lvl in basic roofline; do
+for lvl in basic roofline full; do
   sec "snapshot MINIPROF_SNAPSHOT=$lvl"
   J="miniprof_snapshot_cv_${lvl}_${HOST}.json"
   MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=$lvl MINIPROF_SNAPSHOT_OUTPUT="$J" MINIPROF_VERBOSE=1 \

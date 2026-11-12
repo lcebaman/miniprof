@@ -10,7 +10,9 @@ Checks (see the header of counters_validate.c for the expected values):
     - FLOPs inside MPI ~ 0; IPC, effective GHz plausible
     - run total FLOPs within the known range (regions + init + checksum)
     - with --perf-flops: total within 1% of `perf stat` on the same binary
-  vector group (MINIPROF_SNAPSHOT=roofline):
+  roofline group (MINIPROF_SNAPSHOT=roofline): the same FLOP checks, plus
+    DRAM reads (fills + L2-prefetch misses) reported per region
+  vector group (MINIPROF_SNAPSHOT=full):
     - dot_scalar: scalar ops = N*REPS (FMA) or 2*N*REPS (exact arithmetic)
     - daxpy: packed ops dominate (vectorised)
     (width events include FP loads/stores/moves, so no exact packed counts)
@@ -151,6 +153,13 @@ def main() -> int:
             print(f"INFO: dram_fill_gb_per_s={d.get('dram_fill_gb_per_s'):.2f} "
                   f"remote_dram_fill_pct={d['remote_dram_fill_pct']:.2f} "
                   f"l2_mpki={d.get('l2_misses_per_kilo_instr', 0):.2f}")
+    elif group == "roofline":
+        for n in ("daxpy", "dot_scalar"):
+            t = regions[n]["totals"]
+            rb = 64 * (t.get("dram_fills", 0) + t.get("dram_l2pf", 0))
+            print(f"INFO: {n}: DRAM reads {rb / 1e9:.3f} GB (fills {t.get('dram_fills', 0)}, "
+                  f"L2-prefetch misses {t.get('dram_l2pf', 0)}); streamed {16 * N * R * nranks / 1e9:.3f} GB")
+        check("dram_read_bytes" in d, "run-level DRAM reads derived")
     elif group == "vector":
         # fp_ops_retired_by_width counts every FP-unit uop of that width,
         # INCLUDING loads, stores and register moves — not just arithmetic
