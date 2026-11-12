@@ -9,19 +9,21 @@
 #                                               v4.4 conus12km benchmark tar
 #
 # Environment (all optional):
-#   TOOLCHAIN  aocc | intel | gcc (default: the first found, in that order).
+#   TOOLCHAIN  aocc | intel | gcc | llvm (default: the first of aocc, intel,
+#              gcc found). llvm = upstream clang + flang (flang-new).
 #              aocc or intel are best for miniprof: their OpenMP runtimes
 #              (libomp, libiomp5) support OMPT, so the OpenMP block is filled;
 #              GCC's libgomp has no OMPT.
 #   MPI        the MPI wrappers (mpicc/mpif90) on PATH must be built with the
 #              same Fortran compiler (checked below)
 #   PREFIX     where everything goes (default ./wrf-build)
-#   JOBS       parallel make jobs (default nproc)
+#   JOBS       parallel make jobs (default nproc; WRF's compile takes <= 20)
 #   MARCH      target CPU (default znver4 = Genoa; Intel default core-avx2,
 #              never -x..., which refuses to run on AMD)
 #   WRF_VERSION default v4.8.0
 #   NETCDF, PNETCDF  existing installs (netCDF-C and -Fortran in one prefix);
 #              skips building them
+#   RECONFIGURE=1  clean the WRF tree and configure again
 #   SRC_DIR    pre-fetched sources for air-gapped clusters (git checkouts
 #              named hdf5, netcdf-c, netcdf-fortran, WRF, and
 #              pnetcdf-<version>.tar.gz); default
@@ -33,6 +35,7 @@ PREFIX=$(mkdir -p "${PREFIX:-$PWD/wrf-build}" && cd "${PREFIX:-$PWD/wrf-build}" 
 SRC_DIR=${SRC_DIR:-$PREFIX/src}
 DEPS=$PREFIX/deps
 JOBS=${JOBS:-$(nproc)}
+WRF_JOBS=$(( JOBS > 20 ? 20 : JOBS ))
 WRF_VERSION=${WRF_VERSION:-v4.8.0}
 HDF5_TAG=${HDF5_TAG:-hdf5_1.14.6}
 NETCDF_C_TAG=${NETCDF_C_TAG:-v4.9.3}
@@ -54,7 +57,8 @@ case $TOOLCHAIN in
   aocc)  CC=clang; CXX=clang++; FC=flang; MARCH=${MARCH:-znver4}; WRF_ROW='AMD \(flang/clang\)' ;;
   intel) CC=icx;   CXX=icpx;    FC=ifx;   MARCH=${MARCH:-core-avx2}; WRF_ROW='INTEL \(ifx/icx\)' ;;
   gcc)   CC=gcc;   CXX=g++;     FC=gfortran; MARCH=${MARCH:-znver4}; WRF_ROW='GNU \(gfortran/gcc\)' ;;
-  *) die "TOOLCHAIN must be aocc, intel or gcc" ;;
+  llvm)  CC=clang; CXX=clang++; FC=flang; MARCH=${MARCH:-znver4}; WRF_ROW='AMD \(flang/clang\)' ;;
+  *) die "TOOLCHAIN must be aocc, intel, gcc or llvm" ;;
 esac
 for c in $CC $FC mpicc mpif90 make cmake m4 perl; do
     command -v "$c" >/dev/null || die "$c not found on PATH (load the $TOOLCHAIN, MPI and cmake modules)"
@@ -158,18 +162,53 @@ build_deps() {
 }
 
 # ── WRF ────────────────────────────────────────────────────────────────────
+# AOCC 5+ ships LLVM flang (flang-new); WRF's AOCC stanza is written for the
+# classic flang driver (-Mfreeform, -Mbyteswapio, -finline-hint-functions...)
+new_flang() {
+    local t; t=$(mktemp -d); printf 'end\n' > "$t/t.f90"
+    ! (cd "$t" && $FC -Mfreeform -c t.f90 >/dev/null 2>&1); local r=$?; rm -rf "$t"; return $r
+}
+fix_new_flang() {
+    say "LLVM flang: replacing the classic-flang options in configure.wrf"
+    local lib="" veclib=""
+    if [ "$TOOLCHAIN" = aocc ]; then veclib='$(AMDMATHLIB)'; lib="-lamdlibm"; fi
+    sed -i -E \
+        -e "s/^FCOPTIM\s*=.*/FCOPTIM         =       -O3 -ffast-math \$(AMDARCH) -fstack-arrays -funroll-loops $veclib/" \
+        -e 's/^FORMAT_FIXED\s*=.*/FORMAT_FIXED    =       -ffixed-form/' \
+        -e 's/^FORMAT_FREE\s*=.*/FORMAT_FREE     =       -ffree-form/' \
+        -e 's/^BYTESWAPIO\s*=.*/BYTESWAPIO      =       -fconvert=big-endian/' \
+        -e "s/^LDFLAGS_LOCAL\s*=.*/LDFLAGS_LOCAL   =       -m64 -O3 \$(AMDARCH) $veclib $lib -fopenmp/" \
+        -e 's/^AMDLDFLAGS\s*=.*/AMDLDFLAGS      =/' \
+        -e 's/^AMDFCFLAGS\s*=.*/AMDFCFLAGS      =/' \
+        configure.wrf
+    [ "$TOOLCHAIN" = aocc ] || sed -i -E 's/^AMDMATHLIB\s*=.*/AMDMATHLIB      =/' configure.wrf
+    # the same options on any other line (FCREDUCEDOPT, ...)
+    sed -i -E -e 's/-Mstack_arrays/-fstack-arrays/g; s/-Mfreeform/-ffree-form/g; s/-Mfixed/-ffixed-form/g' \
+              -e 's/ -Mbyteswapio//g; s/ -finline-aggressive//g; s/ -finline-hint-functions//g' configure.wrf
+    # -Ofast is deprecated in LLVM flang (= -O3 -ffast-math -fstack-arrays)
+    sed -i -E 's/^(FCBASEOPTS\s*=\s*)-Ofast/\1-O3 -fstack-arrays/' configure.wrf
+    # any classic option left (-M..., inline hints) would stop the build
+    if grep -nE "^[A-Z_]+\s*=.*(\s-M[a-z_]+|-finline-(aggressive|hint))" configure.wrf; then
+        die "classic flang options left in configure.wrf (above)"
+    fi
+}
+
 build_wrf() {
     export NETCDF=${NETCDF:-$DEPS} PNETCDF=${PNETCDF:-$DEPS}
     [ -f "$NETCDF/lib/libnetcdff.so" ] || [ -f "$NETCDF/lib/libnetcdff.a" ] || [ -f "$NETCDF/lib64/libnetcdff.so" ] \
         || die "no netCDF-Fortran in NETCDF=$NETCDF (run: $0 deps)"
-    check_mpi_fortran
+    [ "${SKIP_MPI_CHECK:-0}" = 1 ] || check_mpi_fortran
     fetch WRF https://github.com/wrf-model/WRF "$WRF_VERSION"
     local W=$SRC_DIR/WRF
     cd "$W"
     # HDF5 set would add WRF's own HDF5 I/O layer (needs HDF5 Fortran): keep it off
     unset HDF5 PHDF5 ADIOS2 NETCDFPAR
     export WRFIO_NCD_LARGE_FILE_SUPPORT=1
-    if [ ! -f configure.wrf ] || [ "${RECONFIGURE:-0}" = 1 ]; then
+    if [ "${RECONFIGURE:-0}" = 1 ]; then
+        say "RECONFIGURE=1: ./clean -a (objects from an earlier build go too)"
+        ./clean -a > /dev/null 2>&1 || true
+    fi
+    if [ ! -f configure.wrf ]; then
         say "configure WRF $WRF_VERSION, $TOOLCHAIN dm+sm"
         local opt
         # configure re-prompts forever on EOF: keep the first listing only
@@ -183,17 +222,21 @@ build_wrf() {
         # local adjustments: target CPU, rpath to the libraries, plain wrappers
         local R="-Wl,-rpath,$NETCDF/lib -Wl,-rpath,$PNETCDF/lib"
         case $TOOLCHAIN in
-          aocc)  sed -i "s/^AMDARCH .*/AMDARCH         =       -march=$MARCH/" configure.wrf ;;
+          aocc|llvm)
+                 sed -i "s/^AMDARCH .*/AMDARCH         =       -march=$MARCH/" configure.wrf
+                 new_flang && fix_new_flang ;;
           intel) sed -i -E "s/^(FCOPTIM\s*=.*)/\1 -march=$MARCH/; s/^(CFLAGS_LOCAL\s*=\s*)/\1-march=$MARCH /" configure.wrf
                  # -f90=/-cc= are MPICH/Intel MPI options; Open MPI uses OMPI_FC/OMPI_CC
                  [ $MPI_KIND = openmpi ] && sed -i -E 's/^(DM_FC\s*=\s*)mpif90 .*/\1mpif90/; s/^(DM_CC\s*=\s*)mpicc .*/\1mpicc/' configure.wrf ;;
           gcc)   sed -i -E "s/^(FCOPTIM\s*=.*)/\1 -march=$MARCH/; s/^(CFLAGS_LOCAL\s*=\s*)/\1-march=$MARCH /" configure.wrf ;;
         esac
         sed -i -E "s|^(LDFLAGS_LOCAL\s*=\s*)|\1$R |" configure.wrf
-        grep -E "^(DM_FC|DM_CC|FCOPTIM|CFLAGS_LOCAL|LDFLAGS_LOCAL|OMP |AMDARCH)\s*=" configure.wrf
+        # WRF wraps every compile in `time`, which minimal installs lack
+        sed -i -E 's/^(\s*FC\s*=\s*)time /\1/' configure.wrf
+        grep -E "^(FC|DM_FC|DM_CC|FCOPTIM|FORMAT_FREE|FORMAT_FIXED|BYTESWAPIO|CFLAGS_LOCAL|LDFLAGS_LOCAL|OMP |AMDARCH)\s*=" configure.wrf
     fi
-    say "compile em_real with $JOBS jobs  [log: $LOG/wrf-compile.log; 30-60 min]"
-    ./compile -j "$JOBS" em_real > "$LOG/wrf-compile.log" 2>&1 || true
+    say "compile em_real with $WRF_JOBS jobs  [log: $LOG/wrf-compile.log; 30-60 min]"
+    ./compile -j "$WRF_JOBS" em_real > "$LOG/wrf-compile.log" 2>&1 || true
     [ -x main/wrf.exe ] || { grep -n -m20 -iE " error|Error [0-9]" "$LOG/wrf-compile.log"; die "wrf.exe not built: see $LOG/wrf-compile.log"; }
     say "built $W/main/wrf.exe"
     ldd main/wrf.exe | grep -E "netcdf|pnetcdf|hdf5|mpi|omp" || true
