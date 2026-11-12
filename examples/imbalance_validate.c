@@ -13,8 +13,10 @@
  * I/O phase: a fixed, known byte volume per rank through every
  * interposed path — write/pread on a raw fd, fwrite/fread on a FILE*,
  * fsync, and MPI-IO write_at/read_at on a shared file:
- *   POSIX  write 1.5 MiB (1 MiB write() + 512 KiB fwrite()), 4 open, 4 close, 1 sync
- *   POSIX  read  1.5 MiB (1 MiB pread()  + 512 KiB fread())
+ *   POSIX  write 1.5 MiB (1 MiB write() + 512 KiB fwrite()) + 64000 B text
+ *          (fprintf + fputs), 6 open, 6 close, 1 sync
+ *   POSIX  read  1.5 MiB (1 MiB pread()  + 512 KiB fread()) + 64000 B text
+ *          (fgets + getline + fscanf)
  *   MPI-IO write 256 KiB, read 256 KiB, 1 open, 1 close
  * Data read back is verified, so the run also proves the wrappers pass
  * I/O through intact.
@@ -37,6 +39,9 @@
 #define RAW_BYTES (4 * CHUNK)        /* 1 MiB   */
 #define STD_BYTES (8 * FCHUNK)       /* 512 KiB */
 #define MPIIO_BYTES CHUNK            /* 256 KiB */
+#define TEXT_LINES 2000
+#define TEXT_TAIL  "abcdefghijklmnopqrs"  /* "line %06d <tail>\n" = 32 bytes */
+#define TEXT_LINE  32
 
 static double now(void)
 {
@@ -114,6 +119,38 @@ static void io_phase(int rank)
         if (fread(chk, 1, FCHUNK, f) != FCHUNK) die(rank, "fread failed");
         if (memcmp(chk, buf, FCHUNK) != 0) die(rank, "fread data mismatch");
     }
+    fclose(f);
+    unlink(path);
+
+    /* text stdio, as input decks and logs are handled: 2000 lines of
+     * exactly TEXT_LINE bytes written with fprintf and fputs, read back
+     * with fgets, getline and fscanf, verified */
+    f = fopen(path, "w");
+    if (!f) die(rank, "fopen for text write failed");
+    char line[64];
+    for (int k = 0; k < TEXT_LINES / 2; k++)
+        if (fprintf(f, "line %06d %s\n", k, TEXT_TAIL) != TEXT_LINE) die(rank, "fprintf failed");
+    for (int k = TEXT_LINES / 2; k < TEXT_LINES; k++) {
+        snprintf(line, sizeof line, "line %06d %s\n", k, TEXT_TAIL);
+        if (fputs(line, f) < 0) die(rank, "fputs failed");
+    }
+    fclose(f);
+    f = fopen(path, "r");
+    if (!f) die(rank, "fopen for text read failed");
+    char *gl = NULL; size_t gn = 0; int k = 0;
+    for (; k < TEXT_LINES / 2; k++) {
+        if (!fgets(line, sizeof line, f)) die(rank, "fgets failed");
+        if (atoi(line + 5) != k) die(rank, "fgets data mismatch");
+    }
+    for (; k < 3 * TEXT_LINES / 4; k++) {
+        if (getline(&gl, &gn, f) != TEXT_LINE) die(rank, "getline failed");
+        if (atoi(gl + 5) != k) die(rank, "getline data mismatch");
+    }
+    for (; k < TEXT_LINES; k++) {
+        int v; char tail[32];
+        if (fscanf(f, "line %d %19s\n", &v, tail) != 2 || v != k) die(rank, "fscanf failed");
+    }
+    free(gl);
     fclose(f);
     unlink(path);
 

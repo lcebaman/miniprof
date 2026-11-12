@@ -21,7 +21,7 @@ import re
 import sys
 
 KIB = 1024
-POSIX_BYTES = 1536 * KIB      # 1 MiB raw + 512 KiB stdio, each direction
+POSIX_BYTES = 1536 * KIB + 64000  # 1 MiB raw + 512 KiB stdio + 2000 text lines, each direction
 MPIIO_BYTES = 256 * KIB
 REL = 0.02                    # 2 %
 ABS_S = 0.005                 # 5 ms floor for timing comparisons
@@ -99,8 +99,8 @@ def main() -> int:
     exact = [
         (px["bytes"]["write"], n * POSIX_BYTES, "POSIX write bytes"),
         (px["bytes"]["read"],  n * POSIX_BYTES, "POSIX read bytes"),
-        (px["calls"]["open"],  4 * n, "POSIX opens"),
-        (px["calls"]["close"], 4 * n, "POSIX closes"),
+        (px["calls"]["open"],  6 * n, "POSIX opens"),
+        (px["calls"]["close"], 6 * n, "POSIX closes"),
         (px["calls"]["sync"],  n,     "POSIX syncs"),
         # write_at + write_all through a file view + iwrite_at (PnetCDF pattern)
         (mi["bytes"]["write"], 3 * n * MPIIO_BYTES, "MPI-IO write bytes"),
