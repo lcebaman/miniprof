@@ -23,6 +23,7 @@
 #   WRF_VERSION default v4.8.0
 #   NETCDF, PNETCDF  existing installs (netCDF-C and -Fortran in one prefix);
 #              skips building them
+#   RECONFIGURE=1  clean the WRF tree and configure again
 #   SRC_DIR    pre-fetched sources for air-gapped clusters (git checkouts
 #              named hdf5, netcdf-c, netcdf-fortran, WRF, and
 #              pnetcdf-<version>.tar.gz); default
@@ -203,7 +204,11 @@ build_wrf() {
     # HDF5 set would add WRF's own HDF5 I/O layer (needs HDF5 Fortran): keep it off
     unset HDF5 PHDF5 ADIOS2 NETCDFPAR
     export WRFIO_NCD_LARGE_FILE_SUPPORT=1
-    if [ ! -f configure.wrf ] || [ "${RECONFIGURE:-0}" = 1 ]; then
+    if [ "${RECONFIGURE:-0}" = 1 ]; then
+        say "RECONFIGURE=1: ./clean -a (objects from an earlier build go too)"
+        ./clean -a > /dev/null 2>&1 || true
+    fi
+    if [ ! -f configure.wrf ]; then
         say "configure WRF $WRF_VERSION, $TOOLCHAIN dm+sm"
         local opt
         # configure re-prompts forever on EOF: keep the first listing only
