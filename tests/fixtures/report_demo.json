@@ -1084,10 +1084,9 @@
     "l2_misses": 0
    },
    "compute": {
-    "cycles": 1119712174,
-    "instructions": 163,
-    "flops": 147,
-    "l2_misses": 0
+    "cycles": 15163827064386.717,
+    "instructions": 20926081348853.668,
+    "flops": 73600000000000.0
    },
    "mpi": {
     "cycles": 1075103,
