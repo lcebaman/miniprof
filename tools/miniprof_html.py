@@ -588,7 +588,11 @@ def render(doc: dict, obs: list) -> str:
                 rows.append(("FLOPs per cycle", f'{cd["flops_per_cycle"]:.2f}', ""))
             if "l2_misses_per_kilo_instr" in cd:
                 rows.append(("L2 misses", f'{cd["l2_misses_per_kilo_instr"]:.2f}', "per 1000 instructions"))
-            if "dram_fill_gb_per_s" in cd:
+            if "dram_read_gb_per_s" in cd:
+                rows.append(("DRAM reads", f'{cd["dram_read_gb_per_s"]:.1f} GB/s',
+                             f'this job\'s threads: L1D fills + L2-prefetch misses; '
+                             f'{cd.get("flops_per_dram_read_byte", 0):.3g} FLOP per byte read'))
+            elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 rows.append(("DRAM fills", f'≥ {cd["dram_fill_gb_per_s"]:.1f} GB/s',
                              "L1D fills from DRAM (lower bound)" + (f"; {rem:.1f}% remote" if rem is not None else "")))

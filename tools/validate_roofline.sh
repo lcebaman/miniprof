@@ -56,6 +56,28 @@ if e.get("available") and m.get("available"):
 sys.exit(0 if ok else 1)
 PY
 
+echo; echo "==================== estimate at MINIPROF_SNAPSHOT=roofline (fills + L2-prefetch misses) ===================="
+MINIPROF_NODEMON=/nonexistent MINIPROF_SNAPSHOT=roofline MINIPROF_MODE=snapshot \
+    MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_est2.json \
+    mpirun -n "$P" --bind-to core ./examples/membw_validate 8388608 20 >/dev/null || exit 1
+python3 - miniprof_snapshot_roof_mem.json miniprof_snapshot_roof_est2.json <<'PY' || FAIL=1
+import json, sys
+m = json.load(open(sys.argv[1]))["metrics"]
+e = json.load(open(sys.argv[2]))["metrics"]["roofline"]
+ok = True
+def check(c, msg):
+    global ok
+    print(("  ok    " if c else "  FAIL  ") + msg); ok &= bool(c)
+check(e.get("available") and e.get("estimate"), f"fallback used: {e.get('dram_bytes', e.get('reason'))}")
+nd = m["memory"]["nodes"][0] if m["memory"].get("available") else None
+if e.get("available") and nd:
+    be = e["nodes"][0]["dram_gb_s"]
+    print(f"  measured DRAM reads {nd['read_gb_s']:.1f} GB/s; estimated reads {be:.1f} GB/s "
+          f"({100 * be / nd['read_gb_s']:.0f}%)")
+    check(0.85 <= be / nd["read_gb_s"] <= 1.10, "core-counter reads within -15%..+10% of the measured DRAM reads")
+sys.exit(0 if ok else 1)
+PY
+
 echo; echo "==================== per-region points: counters_validate, $P ranks ===================="
 # MINIPROF_SNAPSHOT=roofline: regions get FLOPs per DRAM byte READ (fills +
 # L2-prefetch misses). daxpy and dot both read 16 B per 2 FLOPs: 0.125.
