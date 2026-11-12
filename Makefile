@@ -140,7 +140,7 @@ EXAMPLE_MPI_EXT_VALIDATE := $(EXAMPLE_DIR)/mpi_ext_validate
 EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
 
 # ── rules ─────────────────────────────────────────────────────────────────────
-.PHONY: all lib examples example example-trace example-f example-f-trace \
+.PHONY: test-report-html all lib examples example example-trace example-f example-f-trace \
         example-3d example-3d-trace example-hwc-validate \
         example-hwc-validate-omp example-hwc-validate-smear \
         example-mpi-ext-validate mpa-check \
@@ -165,6 +165,10 @@ NODEMON := miniprof-nodemon
 nodemon: $(NODEMON)
 $(NODEMON): src/nodemon.c src/nodemon.h
 	$(CC_HOST) -O2 -Wall -Wextra -o $@ src/nodemon.c
+	@# a freshly written binary carries no file capability
+	@if [ "$$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo 2)" -gt 0 ]; then \
+		echo "NOTE: $@ rebuilt; perf_event_paranoid > 0, so the memory block needs"; \
+		echo "      'make nodemon-setcap' (sudo) again, or it will report itself unavailable."; fi
 # Owner-only execute first: with the capability, the helper reads
 # node-wide energy and memory traffic, which the kernel otherwise keeps
 # from unprivileged users (RAPL is root-only since the PLATYPUS side
@@ -789,6 +793,13 @@ overhead-3d: $(EXAMPLE_3D)
 #
 # Override MPIRUN_FLAGS/NRANKS for constrained environments, e.g.:
 #   make check MPIRUN_FLAGS=--oversubscribe NRANKS=2
+# HTML report: fixtures (a full demo snapshot, hostile strings) plus every
+# snapshot the suite wrote above.
+test-report-html:
+	@echo "--- HTML report (miniprof_report.py --html)"
+	@python3 tests/check_report_html.py tests/fixtures/report_demo.json tests/fixtures/report_escape.json \
+	    $$(ls miniprof_snapshot_*.json 2>/dev/null)
+
 check: lib nodemon calibrate examples mpa-check
 	@echo "=========================================="
 	@echo " miniprof test suite"
@@ -814,6 +825,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-topdown-validate || FAIL=1; \
 	$(MAKE) run-memory-validate || FAIL=1; \
 	$(MAKE) run-calibrate-test || FAIL=1; \
+	$(MAKE) test-report-html || FAIL=1; \
 	echo ""; \
 	echo "=========================================="; \
 	if [ $$FAIL -eq 0 ]; then \

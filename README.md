@@ -534,7 +534,16 @@ happen.
 ```bash
 MINIPROF_MODE=snapshot mpirun -n 64 ./your_app       # no rebuild needed
 python3 tools/miniprof_report.py miniprof_snapshot.json
+python3 tools/miniprof_report.py miniprof_snapshot.json --html report.html
 ```
+
+`--html` also writes one self-contained page (no external files, fonts
+or scripts; opens offline, can be mailed): headline figures, the
+observations, time per rank, MPI functions and message sizes, I/O,
+OpenMP regions, counters, top-down by region, memory per socket and per
+channel, and the roofline. Every chart has its numbers in a table beside
+it; hovering a mark shows its value; it follows the viewer's light/dark
+setting. Python 3 standard library only.
 
 Snapshot mode is a low-overhead, whole-run characterisation in the
 spirit of Intel APS and AMDuProfPcm. It records no individual samples or
@@ -709,7 +718,8 @@ What a snapshot contains so far:
     data fabric (the RHEL 9 kernel finds no memory-controller counters)
     and, on that kernel, its one PMU sees only NUMA node 0: the block
     then carries `"coverage"` saying so, drops the `pct_of_calibrated_bw`
-    fields, and the roofline is not computed (it needs every DRAM byte).
+    fields, and the roofline falls back to the core-counter estimate
+    below (it needs every DRAM byte).
     Run the job's ranks on node 0 to measure them; reads from the other
     node show as remote. Mapped with `tools/probe_df_zen6.sh` on an EPYC
     9996 in NPS2.
@@ -762,7 +772,21 @@ What a snapshot contains so far:
     The FLOP counter does not separate precisions, so the compute roof is
     the widest FP64 rate unless `MINIPROF_ROOFLINE_PEAK` names another
     (`fp32_512`, `fp64_256`, ...)
-  - run level only: the node counters cannot be split by user region
+  - without the memory block (no helper, or partial coverage) the
+    roofline is an **estimate** (`"estimate": true`, `dram_bytes` says
+    why): DRAM bytes are the job's L1D fills from DRAM x 64 B. Fills miss
+    write-backs and lines only the L2 prefetchers brought in, so the
+    bytes are a lower bound, the intensity an upper bound (the point sits
+    right of where it belongs) and the DRAM roof is the read-only one.
+    `tools/validate_roofline.sh` compares the two on a streaming run
+  - per user region (`roofline.regions`): the node counters cannot be
+    split by region, but each region has its own FLOPs and L1D DRAM
+    fills. Region bytes = fills x 64 B x `region_bytes_scale`, the run's
+    measured DRAM bytes per fill byte (1 for an estimate), so regions sit
+    consistently with the whole-run point; rate per node = the region's
+    per-rank rate x ranks per node. Counts are those of the threads that
+    entered the region (a region opened only on the master thread of a
+    hybrid code reflects the master's work)
   - the ceilings are measurements, not datasheet numbers: a well-tuned
     code can land a few percent above them (validation allows 115%).
     On amd4604 (2x EPYC 9754) a streaming run reached 752 GB/s (~82% of

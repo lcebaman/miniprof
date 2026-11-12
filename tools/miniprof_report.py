@@ -8,7 +8,7 @@ short list of observations from simple thresholds. Version 0: the
 threshold rules here are placeholders for the guidance engine of phase P7.
 
 Usage:
-    miniprof_report.py SNAPSHOT.json [-o OUT.txt]
+    miniprof_report.py SNAPSHOT.json [-o OUT.txt] [--html OUT.html]
                        [--mpi-pct 20] [--imbalance-pct 10]
                        [--io-pct 10] [--cpu-util-pct 80]
                        [--remote-pct 20] [--packed-pct 50]
@@ -16,6 +16,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 
 W = 78
@@ -48,6 +49,108 @@ def bin_label(lower: int) -> str:
     if lower == 0:
         return "0 B"
     return f"{human_bytes(lower)}-{human_bytes(lower * 2)}"
+
+
+def _sections(doc):
+    """The values the observation rules read, extracted once."""
+    m = doc.get("metrics") or {}
+    par = m.get("parallel") or {}
+    cnt = m.get("counters") or {}
+    roof = m.get("roofline") or {}
+    td = m.get("topdown") or {}
+    tdc = {}
+    if td.get("available"):
+        tdc = dict((td.get("compute") or {}).get("level1") or {})
+        tdc.update((td.get("compute") or {}).get("level2") or {})
+    return {
+        "split": par.get("time_split_pct") or {},
+        "comp": par.get("compute") or {},
+        "funcs": (par.get("mpi") or {}).get("by_function") or [],
+        "cpuu": ((par.get("cpu") or {}).get("utilisation_per_core_pct")
+                 or (par.get("cpu") or {}).get("utilisation_pct") or {}),
+        "omp": m.get("openmp"),
+        "rn": (roof.get("nodes") or [{}])[0] if roof.get("available") else {},
+        "roof_est": bool(roof.get("estimate")),
+        "tdc": tdc,
+        "mem": m.get("memory"),
+        "cd": cnt.get("derived") or {} if cnt.get("available") else {},
+    }
+
+
+def observations(doc: dict, args) -> list:
+    """Threshold rules shared by the text and HTML reports: a list of
+    {"section", "text"} in the order the rules run."""
+    if not (doc.get("metrics") or {}).get("parallel"):
+        return []
+    v = _sections(doc)
+    split, comp, funcs, cpuu = v["split"], v["comp"], v["funcs"], v["cpuu"]
+    omp, rn, tdc, mem, cd = v["omp"], v["rn"], v["tdc"], v["mem"], v["cd"]
+    obs = []
+    add = lambda sec, text: obs.append({"section": sec, "text": text})
+    if split.get("mpi", 0) > args.mpi_pct:
+        top = funcs[0]["name"] if funcs else "MPI"
+        add("mpi", f"MPI takes {split['mpi']:.1f}% of the run (> {args.mpi_pct:g}%); "
+                   f"largest contributor {top}.")
+    if comp["imbalance_pct"] > args.imbalance_pct:
+        add("parallel", f"Compute is imbalanced across ranks ({comp['imbalance_pct']:.1f}% > "
+                   f"{args.imbalance_pct:g}%); much of the MPI wait time is likely ranks "
+                   "waiting for the slowest ones.")
+    if split["io"] > args.io_pct:
+        add("io", f"I/O takes {split['io']:.1f}% of the run (> {args.io_pct:g}%).")
+    if cpuu["avg"] < args.cpu_util_pct:
+        add("parallel", f"CPU utilisation is {cpuu['avg']:.1f}% (< {args.cpu_util_pct:g}%): "
+                   "ranks may be bound to more cores than they use, or be idle/blocked.")
+    if omp and omp.get("available"):
+        if omp["serial_pct_of_elapsed"] > args.serial_pct:
+            add("openmp", f"{omp['serial_pct_of_elapsed']:.1f}% of the run is outside OpenMP parallel "
+                       f"regions (> {args.serial_pct:g}%): only one thread per rank works there.")
+        if omp["imbalance_pct"] > args.omp_imbalance_pct:
+            worst = max(omp.get("regions") or [{}], key=lambda r: r.get("barrier_wait_s", 0))
+            add("openmp", f"OpenMP threads spend {omp['imbalance_pct']:.1f}% of their time waiting at "
+                       f"barriers (> {args.omp_imbalance_pct:g}%)"
+                       + (f"; most in {worst['name']}" if worst.get("name") else "")
+                       + ": consider dynamic/guided scheduling or a finer work split.")
+        if omp["lock_wait_pct"] > args.omp_imbalance_pct:
+            add("openmp", f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
+    if rn:
+        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < 50 and not v["roof_est"]:
+            add("roofline", f"Memory-bound but only {rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth: "
+                       "latency-bound access (pointer chasing, poor prefetching) or too few cores/channels in use.")
+        if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < 20:
+            add("roofline", f"Compute-bound by intensity but at {rn['pct_of_peak_gflops']:.0f}% of peak FLOPs: "
+                       "vectorisation, dependency chains or front-end limits (see top-down).")
+    if tdc:
+        if tdc.get("backend_memory", 0) > args.td_memory_pct:
+            add("topdown", f"{tdc['backend_memory']:.1f}% of slots stall on memory (backend_memory > "
+                       f"{args.td_memory_pct:g}%): data locality, prefetching, bandwidth.")
+        elif tdc.get("backend_cpu", 0) > args.td_memory_pct:
+            add("topdown", f"{tdc['backend_cpu']:.1f}% of slots stall on execution resources or "
+                       "dependency chains (backend_cpu): instruction-level parallelism, vectorisation.")
+        if tdc.get("frontend_bound", 0) > args.td_frontend_pct:
+            add("topdown", f"Frontend bound {tdc['frontend_bound']:.1f}% (> {args.td_frontend_pct:g}%): "
+                       "instruction fetch/decode — code size, i-cache/op-cache misses, branchy code.")
+        if tdc.get("bad_speculation", 0) > args.td_badspec_pct:
+            add("topdown", f"Bad speculation {tdc['bad_speculation']:.1f}% (> {args.td_badspec_pct:g}%): "
+                       "branch mispredictions or pipeline restarts.")
+    if mem and mem.get("available"):
+        if mem["remote_read_share_pct"] > args.remote_pct:
+            where = "come from another NUMA node" if mem.get("coverage") else "cross sockets"
+            add("memory", f"{mem['remote_read_share_pct']:.1f}% of DRAM reads {where} (> {args.remote_pct:g}%): "
+                       "check binding and first-touch initialisation.")
+        for so in mem["nodes"][0]["sockets"]:
+            ch = so["channels"]
+            if so["read_gb_s"] > 1 and ch["count"] and ch["active"] < ch["count"] / 2:
+                add("memory", f"Socket {so['socket']} of node 0 uses {ch['active']} of {ch['count']} memory "
+                           "channels: memory is concentrated in a few NUMA domains (placement, or NPS mode).")
+                break
+    rem = cd.get("remote_dram_fill_pct")
+    if rem is not None and rem > args.remote_pct:
+        add("counters", f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
+                   "check process/thread binding and first-touch initialisation.")
+    if "packed_fp_ops_pct" in cd and cd["packed_fp_ops_pct"] < args.packed_pct:
+        add("counters", f"Only {cd['packed_fp_ops_pct']:.1f}% of FP-unit ops are packed (< {args.packed_pct:g}%): "
+                   "little use of vector instructions (includes FP data movement).")
+    return obs
 
 
 def report(doc: dict, args) -> str:
@@ -232,12 +335,22 @@ def report(doc: dict, args) -> str:
               + (" — QUICK calibration, not a measurement" if cal.get("warning") else ""))
             p(f"   ceilings            peak {c['peak_gflops']:.0f} GFLOP/s ({c['peak_key']}), "
               f"DRAM {c['dram_read_gb_s']:.0f} GB/s read-only / {c['dram_triad_gb_s']:.0f} triad")
+            if roof.get("estimate"):
+                p("   ! ESTIMATE: DRAM bytes from L1D fills (a lower bound): intensity is an upper bound")
             if rn:
+                mix = ("read-only" if rn.get("read_share_pct") is None
+                       else f"at {rn['read_share_pct']:.0f}% reads")
                 p(f"   this run (node 0)   {rn['gflops_per_s']:.1f} GFLOP/s at {rn['arithmetic_intensity']:.3g} FLOP/B: "
-                  f"{rn['bound'].upper()}-bound (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s at "
-                  f"{rn['read_share_pct']:.0f}% reads, ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
+                  f"{rn['bound'].upper()}-bound (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s {mix}, "
+                  f"ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
                 p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
                   f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
+            rr = [g for g in (roof.get("regions") or []) if g.get("arithmetic_intensity")]
+            if rr:
+                p("   by region           GFLOP/s/node   FLOP/B   bound     of attainable")
+                for g in sorted(rr, key=lambda g: -g["time_s_per_rank"])[:10]:
+                    p(f"     {g['name'][:18]:<18} {g['gflops_per_s_node']:11.1f} {g['arithmetic_intensity']:8.3g}   "
+                      f"{g['bound']:<8} {g['pct_of_attainable']:6.0f}%")
 
     # top-down
     td = (doc.get("metrics") or {}).get("topdown")
@@ -310,76 +423,12 @@ def report(doc: dict, args) -> str:
                     p(f"   {r['name'][:20]:<20} {cpr:>9g}  {human_time(r['wall_s_per_rank']):>10}"
                       f"  {r['avg_team']:5.1f}  {r['imbalance_pct']:5.1f}   {r.get('location', '')}")
 
-    # observations
-    obs = []
-    if split["mpi"] > args.mpi_pct:
-        top = funcs[0]["name"] if funcs else "MPI"
-        obs.append(f"MPI takes {split['mpi']:.1f}% of the run (> {args.mpi_pct:g}%); "
-                   f"largest contributor {top}.")
-    if comp["imbalance_pct"] > args.imbalance_pct:
-        obs.append(f"Compute is imbalanced across ranks ({comp['imbalance_pct']:.1f}% > "
-                   f"{args.imbalance_pct:g}%); much of the MPI wait time is likely ranks "
-                   "waiting for the slowest ones.")
-    if split["io"] > args.io_pct:
-        obs.append(f"I/O takes {split['io']:.1f}% of the run (> {args.io_pct:g}%).")
-    if cpuu["avg"] < args.cpu_util_pct:
-        obs.append(f"CPU utilisation is {cpuu['avg']:.1f}% (< {args.cpu_util_pct:g}%): "
-                   "ranks may be bound to more cores than they use, or be idle/blocked.")
-    if omp and omp.get("available"):
-        if omp["serial_pct_of_elapsed"] > args.serial_pct:
-            obs.append(f"{omp['serial_pct_of_elapsed']:.1f}% of the run is outside OpenMP parallel "
-                       f"regions (> {args.serial_pct:g}%): only one thread per rank works there.")
-        if omp["imbalance_pct"] > args.omp_imbalance_pct:
-            worst = max(omp.get("regions") or [{}], key=lambda r: r.get("barrier_wait_s", 0))
-            obs.append(f"OpenMP threads spend {omp['imbalance_pct']:.1f}% of their time waiting at "
-                       f"barriers (> {args.omp_imbalance_pct:g}%)"
-                       + (f"; most in {worst['name']}" if worst.get("name") else "")
-                       + ": consider dynamic/guided scheduling or a finer work split.")
-        if omp["lock_wait_pct"] > args.omp_imbalance_pct:
-            obs.append(f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
-    if rn:
-        if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < 50:
-            obs.append(f"Memory-bound but only {rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth: "
-                       "latency-bound access (pointer chasing, poor prefetching) or too few cores/channels in use.")
-        if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < 20:
-            obs.append(f"Compute-bound by intensity but at {rn['pct_of_peak_gflops']:.0f}% of peak FLOPs: "
-                       "vectorisation, dependency chains or front-end limits (see top-down).")
-    if tdc:
-        if tdc.get("backend_memory", 0) > args.td_memory_pct:
-            obs.append(f"{tdc['backend_memory']:.1f}% of slots stall on memory (backend_memory > "
-                       f"{args.td_memory_pct:g}%): data locality, prefetching, bandwidth.")
-        elif tdc.get("backend_cpu", 0) > args.td_memory_pct:
-            obs.append(f"{tdc['backend_cpu']:.1f}% of slots stall on execution resources or "
-                       "dependency chains (backend_cpu): instruction-level parallelism, vectorisation.")
-        if tdc.get("frontend_bound", 0) > args.td_frontend_pct:
-            obs.append(f"Frontend bound {tdc['frontend_bound']:.1f}% (> {args.td_frontend_pct:g}%): "
-                       "instruction fetch/decode — code size, i-cache/op-cache misses, branchy code.")
-        if tdc.get("bad_speculation", 0) > args.td_badspec_pct:
-            obs.append(f"Bad speculation {tdc['bad_speculation']:.1f}% (> {args.td_badspec_pct:g}%): "
-                       "branch mispredictions or pipeline restarts.")
-    if mem and mem.get("available"):
-        if mem["remote_read_share_pct"] > args.remote_pct:
-            where = "come from another NUMA node" if mem.get("coverage") else "cross sockets"
-            obs.append(f"{mem['remote_read_share_pct']:.1f}% of DRAM reads {where} (> {args.remote_pct:g}%): "
-                       "check binding and first-touch initialisation.")
-        for so in mem["nodes"][0]["sockets"]:
-            ch = so["channels"]
-            if so["read_gb_s"] > 1 and ch["count"] and ch["active"] < ch["count"] / 2:
-                obs.append(f"Socket {so['socket']} of node 0 uses {ch['active']} of {ch['count']} memory "
-                           "channels: memory is concentrated in a few NUMA domains (placement, or NPS mode).")
-                break
-    rem = cd.get("remote_dram_fill_pct")
-    if rem is not None and rem > args.remote_pct:
-        obs.append(f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
-                   "check process/thread binding and first-touch initialisation.")
-    if "packed_fp_ops_pct" in cd and cd["packed_fp_ops_pct"] < args.packed_pct:
-        obs.append(f"Only {cd['packed_fp_ops_pct']:.1f}% of FP-unit ops are packed (< {args.packed_pct:g}%): "
-                   "little use of vector instructions (includes FP data movement).")
+    obs = observations(doc, args)
     p("")
     p(" Observations")
     if obs:
         for o in obs:
-            p(f"   ! {o}")
+            p(f"   ! {o['text']}")
     else:
         p("   No threshold exceeded.")
     p("=" * W)
@@ -390,6 +439,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("file")
     ap.add_argument("-o", "--output")
+    ap.add_argument("--html", metavar="OUT.html",
+                    help="also write a self-contained HTML report (charts, tables, observations)")
     ap.add_argument("--mpi-pct", type=float, default=20.0)
     ap.add_argument("--imbalance-pct", type=float, default=10.0)
     ap.add_argument("--io-pct", type=float, default=10.0)
@@ -405,6 +456,11 @@ def main() -> int:
     with open(args.file) as f:
         doc = json.load(f)
     text = report(doc, args)
+    if args.html:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import miniprof_html
+        with open(args.html, "w") as f:
+            f.write(miniprof_html.render(doc, observations(doc, args)))
     if args.output:
         with open(args.output, "w") as f:
             f.write(text)
