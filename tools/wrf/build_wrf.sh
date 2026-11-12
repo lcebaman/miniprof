@@ -177,7 +177,7 @@ fix_new_flang() {
         -e 's/^FORMAT_FIXED\s*=.*/FORMAT_FIXED    =       -ffixed-form/' \
         -e 's/^FORMAT_FREE\s*=.*/FORMAT_FREE     =       -ffree-form/' \
         -e 's/^BYTESWAPIO\s*=.*/BYTESWAPIO      =       -fconvert=big-endian/' \
-        -e "s/^LDFLAGS_LOCAL\s*=.*/LDFLAGS_LOCAL   =       -m64 -O3 \$(AMDARCH) $veclib $lib -fopenmp/" \
+        -e "s/^LDFLAGS_LOCAL\s*=.*/LDFLAGS_LOCAL   =       -O3 \$(AMDARCH) $veclib $lib -fopenmp/" \
         -e 's/^AMDLDFLAGS\s*=.*/AMDLDFLAGS      =/' \
         -e 's/^AMDFCFLAGS\s*=.*/AMDFCFLAGS      =/' \
         configure.wrf
