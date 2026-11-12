@@ -841,6 +841,23 @@ match the injected values within 2%, MPI time matches trace mode within
 per MPI call; end-to-end overhead on a 20 s `diffusion3d` run is within
 run-to-run noise (`make overhead-3d`).
 
+Validation on a real application: `tools/validate_wrf.sh`, run from a
+prepared WRF run directory inside a multi-node allocation, runs WRF
+unprofiled twice and then at the `basic`, `topdown` and `roofline`
+levels, with your own `mpirun` options (`MPIRUN_ARGS`) and binding wrapper
+(`BIND`, which must `exec "$@"`; the library is preloaded into `wrf.exe`
+only). `tools/check_wrf.py` then checks each snapshot against WRF itself:
+wall-time overhead against the unprofiled runs (limit 2% at `basic`, 5%
+above, plus their own spread), `wrfout` files byte-identical, ranks and
+threads against WRF's decomposition, elapsed against WRF's main-loop
+timers, I/O time against `Timing for Writing` and MPI-IO bytes against the
+output file sizes (io_form 11, PnetCDF), halo exchange present, counters
+on every thread, topdown summing to 100%, memory on every node, and that
+the report, HTML, CSV and `miniprof_diff` all work on the result. The
+memory helper must be ready on every node (`make nodemon-setcap` needs a
+filesystem that keeps file capabilities; otherwise use a node-local copy
+via `MINIPROF_NODEMON`, or `perf_event_paranoid <= 0`).
+
 ### Configuration
 
 All of these are read at `MPI_Init` time; set them in your job script or
