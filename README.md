@@ -857,6 +857,11 @@ the report, HTML, CSV and `miniprof_diff` all work on the result. The
 memory helper must be ready on every node (`make nodemon-setcap` needs a
 filesystem that keeps file capabilities; otherwise use a node-local copy
 via `MINIPROF_NODEMON`, or `perf_event_paranoid <= 0`).
+`tools/wrf/build_wrf.sh all [conus12km tarball]` builds what that test
+needs: HDF5, netCDF-C/Fortran and PnetCDF (or uses `NETCDF`/`PNETCDF`),
+then WRF em_real dm+sm for AOCC, Intel oneAPI or GCC (AOCC or Intel for
+OMPT), tuned with `-march=$MARCH` (default `znver4`), and a run directory
+with history through PnetCDF (`io_form_history = 11`).
 
 ### Configuration
 
