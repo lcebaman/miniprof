@@ -621,7 +621,8 @@ What a snapshot contains so far:
     function, with call counts, bytes and per-function imbalance
   - message-size histograms per class (power-of-two bins: calls and time)
   - POSIX I/O (`open`/`read`/`write`/`pread`/`pwrite`/`fread`/`fwrite`/
-    `fsync`, including `_FORTIFY_SOURCE` variants) and MPI-IO, kept
+    `fsync`; text stdio `fgets`/`getline`/`fscanf`/`fprintf`/`fputs`;
+    including `_FORTIFY_SOURCE` variants) and MPI-IO, kept
     separate: calls, bytes, read/write/metadata time. Only files opened
     by the application on a regular path are counted; the MPI library's
     own I/O is excluded
@@ -841,9 +842,25 @@ match the injected values within 2%, MPI time matches trace mode within
 per MPI call; end-to-end overhead on a 20 s `diffusion3d` run is within
 run-to-run noise (`make overhead-3d`).
 
-Validation on a real application: `tools/validate_wrf.sh`, run from a
+Validation on real applications. Both validators interleave unprofiled
+runs with the profiled ones (`off basic off topdown off roofline off`), so
+each profiled run is compared with the unprofiled runs either side of it
+and a node that drifts over the session is not mistaken for overhead.
+
+LAMMPS (`tools/lammps/`): `build_lammps.sh` builds the stable release with
+MPI + OpenMP and the packages the rhodopsin benchmark needs (C++ only, no
+other dependencies); `validate_lammps.sh` runs `bench/in.rhodo.scaled`
+(replicated, with trajectory dumps) and `check_lammps.py` checks each
+snapshot against LAMMPS's own timing breakdown: compute time holds
+Pair + Bond + Neigh, MPI time lies between Comm and the communicating
+sections (Comm, Kspace, Modify, Output, Other, setup), bytes written match
+the dumps and log, bytes read are 1-2x `data.rhodo` (read_data scans the
+topology, then reads it), thermo output and dumps are identical to the
+unprofiled run, plus the shape, hardware and tool checks below.
+
+WRF: `tools/validate_wrf.sh`, run from a
 prepared WRF run directory inside a multi-node allocation, runs WRF
-unprofiled twice and then at the `basic`, `topdown` and `roofline`
+unprofiled and at the `basic`, `topdown` and `roofline`
 levels, with your own `mpirun` options (`MPIRUN_ARGS`) and binding wrapper
 (`BIND`, which must `exec "$@"`; the library is preloaded into `wrf.exe`
 only). `tools/check_wrf.py` then checks each snapshot against WRF itself:

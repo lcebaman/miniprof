@@ -147,6 +147,18 @@ REAL_DECL(int,     fclose,      FILE *);
 REAL_DECL(size_t,  fread,       void *, size_t, size_t, FILE *);
 REAL_DECL(size_t,  fwrite,      const void *, size_t, size_t, FILE *);
 REAL_DECL(size_t,  __fread_chk, void *, size_t, size_t, size_t, FILE *);
+/* formatted and line stdio: text input files and logs */
+REAL_DECL(char *,  fgets,       char *, int, FILE *);
+REAL_DECL(char *,  __fgets_chk, char *, size_t, int, FILE *);
+REAL_DECL(ssize_t, getline,     char **, size_t *, FILE *);
+REAL_DECL(ssize_t, getdelim,    char **, size_t *, int, FILE *);
+REAL_DECL(ssize_t, __getdelim,  char **, size_t *, int, FILE *);
+REAL_DECL(int,     fputs,       const char *, FILE *);
+REAL_DECL(int,     vfprintf,    FILE *, const char *, va_list);
+REAL_DECL(int,     __vfprintf_chk, FILE *, int, const char *, va_list);
+REAL_DECL(int,     vfscanf,     FILE *, const char *, va_list);
+REAL_DECL(int,     __isoc99_vfscanf, FILE *, const char *, va_list);
+REAL_DECL(int,     __isoc23_vfscanf, FILE *, const char *, va_list);
 
 #define RESOLVE(name) \
     do { if (!real_##name) *(void **)(&real_##name) = dlsym(RTLD_NEXT, #name); } while (0)
@@ -164,6 +176,9 @@ static void resolve_all(void)
     RESOLVE(fsync); RESOLVE(fdatasync);
     RESOLVE(fopen); RESOLVE(fopen64); RESOLVE(fclose);
     RESOLVE(fread); RESOLVE(fwrite); RESOLVE(__fread_chk);
+    RESOLVE(fgets); RESOLVE(__fgets_chk); RESOLVE(getline); RESOLVE(getdelim); RESOLVE(__getdelim);
+    RESOLVE(fputs); RESOLVE(vfprintf); RESOLVE(__vfprintf_chk);
+    RESOLVE(vfscanf); RESOLVE(__isoc99_vfscanf); RESOLVE(__isoc23_vfscanf);
 }
 
 __attribute__((constructor))
@@ -378,6 +393,91 @@ size_t fwrite(const void *ptr, size_t size, size_t n, FILE *f)
 
 size_t __fread_chk(void *ptr, size_t ptrlen, size_t size, size_t n, FILE *f)
 { ENSURE(__fread_chk); FRW_BODY(read, f, size, real___fread_chk(ptr, ptrlen, size, n, f)); }
+
+/* Text stdio: fgets/getline reading input decks, fprintf/fputs writing
+ * logs and text dumps. Bytes are those returned (characters written, line
+ * length read); fscanf counts the stream position it advanced. Character
+ * calls (fgetc/fputc) are not wrapped: their per-call cost would dominate. */
+
+#define TXT_BODY(KIND, STREAM, T, REALCALL, NBYTES)                \
+    do {                                                           \
+        if (!counting() || !fd_tracked(fileno(STREAM)))            \
+            return REALCALL;                                       \
+        uint64_t t0_ = now_ns();                                   \
+        T ret_ = REALCALL;                                         \
+        count_##KIND(&g_io.posix, (ssize_t)(NBYTES), now_ns() - t0_); \
+        return ret_;                                               \
+    } while (0)
+
+char *fgets(char *buf, int n, FILE *f)
+{ ENSURE(fgets); TXT_BODY(read, f, char *, real_fgets(buf, n, f), ret_ ? strlen(ret_) : 0); }
+
+char *__fgets_chk(char *buf, size_t size, int n, FILE *f)
+{ ENSURE(__fgets_chk); TXT_BODY(read, f, char *, real___fgets_chk(buf, size, n, f), ret_ ? strlen(ret_) : 0); }
+
+ssize_t getline(char **line, size_t *n, FILE *f)
+{ ENSURE(getline); TXT_BODY(read, f, ssize_t, real_getline(line, n, f), ret_ > 0 ? ret_ : 0); }
+
+ssize_t getdelim(char **line, size_t *n, int delim, FILE *f)
+{ ENSURE(getdelim); TXT_BODY(read, f, ssize_t, real_getdelim(line, n, delim, f), ret_ > 0 ? ret_ : 0); }
+
+ssize_t __getdelim(char **line, size_t *n, int delim, FILE *f)
+{ ENSURE(__getdelim); TXT_BODY(read, f, ssize_t, real___getdelim(line, n, delim, f), ret_ > 0 ? ret_ : 0); }
+
+int fputs(const char *str, FILE *f)
+{ ENSURE(fputs); TXT_BODY(write, f, int, real_fputs(str, f), ret_ >= 0 ? strlen(str) : 0); }
+
+int vfprintf(FILE *f, const char *fmt, va_list ap)
+{ ENSURE(vfprintf); TXT_BODY(write, f, int, real_vfprintf(f, fmt, ap), ret_ > 0 ? ret_ : 0); }
+
+int fprintf(FILE *f, const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt);
+    int rc = vfprintf(f, fmt, ap);
+    va_end(ap);
+    return rc;
+}
+
+int __vfprintf_chk(FILE *f, int flag, const char *fmt, va_list ap)
+{ ENSURE(__vfprintf_chk); TXT_BODY(write, f, int, real___vfprintf_chk(f, flag, fmt, ap), ret_ > 0 ? ret_ : 0); }
+
+int __fprintf_chk(FILE *f, int flag, const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt);
+    int rc = __vfprintf_chk(f, flag, fmt, ap);
+    va_end(ap);
+    return rc;
+}
+
+#define SCAN_BODY(STREAM, REALCALL)                                \
+    do {                                                           \
+        if (!counting() || !fd_tracked(fileno(STREAM)))            \
+            return REALCALL;                                       \
+        off_t p0_ = ftello(STREAM);                                \
+        uint64_t t0_ = now_ns();                                   \
+        int ret_ = REALCALL;                                       \
+        uint64_t dt_ = now_ns() - t0_;                             \
+        off_t p1_ = ftello(STREAM);                                \
+        count_read(&g_io.posix, (p0_ >= 0 && p1_ > p0_) ? (ssize_t)(p1_ - p0_) : 0, dt_); \
+        return ret_;                                               \
+    } while (0)
+
+/* <stdio.h> may redirect fscanf/vfscanf to __isoc99_ or __isoc23_ names
+ * with asm labels; give each wrapper its exported name explicitly. */
+#define SCAN_V(FN, NAME) \
+    int FN(FILE *f, const char *fmt, va_list ap) __asm__(NAME); \
+    int FN(FILE *f, const char *fmt, va_list ap)
+#define SCAN_F(FN, NAME, VFN) \
+    int FN(FILE *f, const char *fmt, ...) __asm__(NAME); \
+    int FN(FILE *f, const char *fmt, ...) \
+    { va_list ap; va_start(ap, fmt); int rc = VFN(f, fmt, ap); va_end(ap); return rc; }
+
+SCAN_V(mp_vfscanf, "vfscanf")                   { ENSURE(vfscanf); SCAN_BODY(f, real_vfscanf(f, fmt, ap)); }
+SCAN_V(mp_isoc99_vfscanf, "__isoc99_vfscanf")   { ENSURE(__isoc99_vfscanf); SCAN_BODY(f, real___isoc99_vfscanf(f, fmt, ap)); }
+SCAN_V(mp_isoc23_vfscanf, "__isoc23_vfscanf")   { ENSURE(__isoc23_vfscanf); SCAN_BODY(f, real___isoc23_vfscanf(f, fmt, ap)); }
+SCAN_F(mp_fscanf, "fscanf", mp_vfscanf)
+SCAN_F(mp_isoc99_fscanf, "__isoc99_fscanf", mp_isoc99_vfscanf)
+SCAN_F(mp_isoc23_fscanf, "__isoc23_fscanf", mp_isoc23_vfscanf)
 
 /* ── MPI-IO ──────────────────────────────────────────────────────────── *
  * Recorded as MPI-IO (not MPI time, not POSIX). Raises the tool depth so

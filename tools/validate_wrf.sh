@@ -10,7 +10,7 @@
 #   BIND="./bind_numactl.sh" OMP_NUM_THREADS=6 \
 #   $MINIPROF/tools/validate_wrf.sh [runs]
 #
-#   runs      which runs, default "off off basic topdown roofline"
+#   runs      which runs, default "off basic off topdown off roofline off"
 #   MINIPROF  the miniprof checkout (libminiprof.so, miniprof-nodemon, tools/)
 #   MPIRUN_ARGS  your mpirun options (rank count, mapping); with Open MPI the
 #             script adds -x for MINIPROF_* and OMP_*
@@ -24,7 +24,7 @@
 # miniprof_wrf_<date>/<run>/; then tools/check_wrf.py compares everything.
 set -u
 MP=${MINIPROF:?set MINIPROF to the miniprof checkout}
-RUNS=${1:-"off off basic topdown roofline"}
+RUNS=${1:-"off basic off topdown off roofline off"}
 EXE=${WRF_EXE:-./wrf.exe}
 CALIB=${CALIB:-$MP/calib}
 OUT=miniprof_wrf_$(date +%Y%m%d_%H%M%S)
