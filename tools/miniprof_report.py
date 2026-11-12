@@ -339,7 +339,9 @@ def report(doc: dict, args) -> str:
             p(f"   ceilings            peak {c['peak_gflops']:.0f} GFLOP/s ({c['peak_key']}), "
               f"DRAM {c['dram_read_gb_s']:.0f} GB/s read-only / {c['dram_triad_gb_s']:.0f} triad")
             if roof.get("estimate"):
-                p("   ! ESTIMATE: DRAM bytes from L1D fills (a lower bound): intensity is an upper bound")
+                src = ("core-counter DRAM reads (fills + L2-prefetch misses; no writes)"
+                       if "L2-prefetch" in (roof.get("dram_bytes") or "") else "L1D fills")
+                p(f"   ! ESTIMATE: DRAM bytes from {src}, a lower bound: intensity is an upper bound")
             if rn:
                 mix = ("read-only" if rn.get("read_share_pct") is None
                        else f"at {rn['read_share_pct']:.0f}% reads")
