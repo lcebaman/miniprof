@@ -57,9 +57,10 @@ sys.exit(0 if ok else 1)
 PY
 
 echo; echo "==================== per-region points: counters_validate, $P ranks ===================="
-# daxpy: 2 FLOPs per 24 B (x, y read; y written), dot: 2 FLOPs per 16 B;
-# arrays of 256 MiB each so both stream from DRAM.
-MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_reg.json \
+# MINIPROF_SNAPSHOT=roofline: regions get FLOPs per DRAM byte READ (fills +
+# L2-prefetch misses). daxpy and dot both read 16 B per 2 FLOPs: 0.125.
+# Arrays of 256 MiB each so both stream from DRAM.
+MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=roofline MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_reg.json \
     mpirun -n "$P" --bind-to core ./examples/counters_validate 33554432 10 >/dev/null || exit 1
 python3 - miniprof_snapshot_roof_reg.json <<'PY' || FAIL=1
 import json, sys
@@ -69,15 +70,18 @@ def check(c, msg):
     global ok
     print(("  ok    " if c else "  FAIL  ") + msg); ok &= bool(c)
 regs = {g["name"]: g for g in r.get("regions") or []}
-print(f"  region bytes scale {r.get('region_bytes_scale')}, estimate {r.get('estimate')}")
+print(f"  estimate {r.get('estimate')}; {r.get('regions_reason', '')}")
 for n, g in regs.items():
-    print(f"  {n:<12} {g['gflops_per_s_node']:9.1f} GFLOP/s/node  AI {g['arithmetic_intensity']:.4f}  {g['bound']}")
-for n, lo, hi in (("daxpy", 2 / 24 * 0.7, 2 / 16 * 1.3), ("dot_scalar", 2 / 16 * 0.7, 2 / 16 * 1.3)):
+    print(f"  {n:<12} {g['gflops_per_s_node']:9.1f} GFLOP/s/node  {g['dram_read_gb_s_node']:7.1f} GB/s read  "
+          f"AI(read) {g['arithmetic_intensity_read']:.4f}  {g['bound']}  {g['pct_of_attainable']:.0f}% of attainable")
+for n in ("daxpy", "dot_scalar"):
     g = regs.get(n)
     check(g is not None, f"region {n} on the roofline")
     if g:
-        check(lo <= g["arithmetic_intensity"] <= hi, f"{n}: AI {g['arithmetic_intensity']:.4f} in {lo:.3f}..{hi:.3f}")
+        a = g["arithmetic_intensity_read"]
+        check(0.125 * 0.85 <= a <= 0.125 * 1.15, f"{n}: FLOP per byte read {a:.4f} within 15% of 0.125")
         check(g["bound"] == "memory", f"{n}: memory-bound")
+        check(g["pct_of_attainable"] <= 115, f"{n}: {g['pct_of_attainable']:.0f}% of attainable (<= 115)")
 sys.exit(0 if ok else 1)
 PY
 

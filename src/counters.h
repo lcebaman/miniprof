@@ -55,6 +55,8 @@ typedef enum {
     CK_UCODE_OPS,          /* retired microcoded ops                        */
     CK_BR_MISP,            /* retired mispredicted branches                 */
     CK_RESYNCS,            /* pipeline restarts (resyncs, non-cond. redirects) */
+    CK_DRAM_L2PF,          /* L2-prefetcher requests that miss L2 and L3
+                              (lines the L2 prefetcher brought from DRAM)   */
     CK_COUNT
 } cnt_kind_t;
 
