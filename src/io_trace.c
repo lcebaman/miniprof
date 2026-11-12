@@ -417,6 +417,66 @@ static inline long io_type_size(MPI_Datatype dt)
         return rc_;                                                \
     } while (0)
 
+/* Collective calls that move no data but can take real time (PnetCDF's
+ * ncmpi_enddef / ncmpi_put_vara_*_all go through set_size and set_view):
+ * MPI-IO metadata time, not compute. */
+#define MPIIO_META_T(CALL)                                         \
+    do {                                                           \
+        if (!counting()) return CALL;                              \
+        g_miniprof_tool_depth++;                                   \
+        uint64_t t0_ = now_ns();                                   \
+        int rc_ = CALL;                                            \
+        uint64_t elapsed_ = now_ns() - t0_;                        \
+        g_miniprof_tool_depth--;                                   \
+        ADD(g_io.mpiio.meta_ns, elapsed_);                         \
+        return rc_;                                                \
+    } while (0)
+
+int MPI_File_set_view(MPI_File fh, MPI_Offset disp, MPI_Datatype etype, MPI_Datatype filetype,
+                      const char *datarep, MPI_Info info)
+{ MPIIO_META_T(PMPI_File_set_view(fh, disp, etype, filetype, datarep, info)); }
+
+int MPI_File_set_size(MPI_File fh, MPI_Offset size)
+{ MPIIO_META_T(PMPI_File_set_size(fh, size)); }
+
+int MPI_File_preallocate(MPI_File fh, MPI_Offset size)
+{ MPIIO_META_T(PMPI_File_preallocate(fh, size)); }
+
+int MPI_File_set_info(MPI_File fh, MPI_Info info)
+{ MPIIO_META_T(PMPI_File_set_info(fh, info)); }
+
+/* Non-blocking MPI-IO: bytes counted when issued, with the time of the
+ * issue call; the wait for completion is MPI wait time (MPI_Wait*). */
+int MPI_File_iwrite(MPI_File fh, const void *buf, int count, MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(write, PMPI_File_iwrite(fh, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+int MPI_File_iwrite_at(MPI_File fh, MPI_Offset off, const void *buf, int count,
+                       MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(write, PMPI_File_iwrite_at(fh, off, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+int MPI_File_iread(MPI_File fh, void *buf, int count, MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(read, PMPI_File_iread(fh, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+int MPI_File_iread_at(MPI_File fh, MPI_Offset off, void *buf, int count,
+                      MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(read, PMPI_File_iread_at(fh, off, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+#if MPI_VERSION > 3 || (MPI_VERSION == 3 && MPI_SUBVERSION >= 1)
+int MPI_File_iwrite_all(MPI_File fh, const void *buf, int count, MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(write, PMPI_File_iwrite_all(fh, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+int MPI_File_iwrite_at_all(MPI_File fh, MPI_Offset off, const void *buf, int count,
+                           MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(write, PMPI_File_iwrite_at_all(fh, off, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+int MPI_File_iread_all(MPI_File fh, void *buf, int count, MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(read, PMPI_File_iread_all(fh, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+
+int MPI_File_iread_at_all(MPI_File fh, MPI_Offset off, void *buf, int count,
+                          MPI_Datatype dt, MPI_Request *rq)
+{ MPIIO_WRAP(read, PMPI_File_iread_at_all(fh, off, buf, count, dt, rq), (long)count * io_type_size(dt)); }
+#endif
+
 int MPI_File_open(MPI_Comm comm, const char *filename, int amode,
                   MPI_Info info, MPI_File *fh)
 { MPIIO_META(open_calls, PMPI_File_open(comm, filename, amode, info, fh)); }

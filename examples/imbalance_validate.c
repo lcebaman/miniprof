@@ -69,6 +69,8 @@ static void write_all(int fd, const char *buf, size_t n, int rank)
 
 static void io_phase(int rank)
 {
+    int nprocs;
+    MPI_Comm_size(MPI_COMM_WORLD, &nprocs);
     char path[64], mpath[] = "imbalance_validate_mpiio.dat";
     snprintf(path, sizeof(path), "imbalance_validate.%d.dat", rank);
 
@@ -126,6 +128,23 @@ static void io_phase(int rank)
     if (MPI_File_read_at(mf, off, chk, MPIIO_BYTES, MPI_BYTE, MPI_STATUS_IGNORE) != MPI_SUCCESS)
         die(rank, "MPI_File_read_at failed");
     if (memcmp(chk, buf, MPIIO_BYTES) != 0) die(rank, "MPI-IO data mismatch");
+    MPI_File_close(&mf);
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (rank == 0) unlink(mpath);
+
+    /* the PnetCDF pattern: set_size, a per-rank file view + collective
+     * write_all, then a non-blocking write completed with MPI_Wait */
+    if (MPI_File_open(MPI_COMM_WORLD, mpath, MPI_MODE_CREATE | MPI_MODE_RDWR,
+                      MPI_INFO_NULL, &mf) != MPI_SUCCESS) die(rank, "MPI_File_open (2) failed");
+    MPI_File_set_size(mf, (MPI_Offset)2 * nprocs * MPIIO_BYTES);
+    MPI_File_set_view(mf, (MPI_Offset)rank * MPIIO_BYTES, MPI_BYTE, MPI_BYTE, "native", MPI_INFO_NULL);
+    if (MPI_File_write_all(mf, buf, MPIIO_BYTES, MPI_BYTE, MPI_STATUS_IGNORE) != MPI_SUCCESS)
+        die(rank, "MPI_File_write_all failed");
+    MPI_File_set_view(mf, 0, MPI_BYTE, MPI_BYTE, "native", MPI_INFO_NULL);
+    MPI_Request rq;
+    if (MPI_File_iwrite_at(mf, (MPI_Offset)(nprocs + rank) * MPIIO_BYTES, buf, MPIIO_BYTES, MPI_BYTE, &rq)
+        != MPI_SUCCESS) die(rank, "MPI_File_iwrite_at failed");
+    MPI_Wait(&rq, MPI_STATUS_IGNORE);
     MPI_File_close(&mf);
     MPI_Barrier(MPI_COMM_WORLD);
     if (rank == 0) unlink(mpath);
