@@ -141,7 +141,7 @@ EXAMPLE_MPI_EXT_VALIDATE := $(EXAMPLE_DIR)/mpi_ext_validate
 EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
 
 # ── rules ─────────────────────────────────────────────────────────────────────
-.PHONY: test-report-html all lib examples example example-trace example-f example-f-trace \
+.PHONY: install test-install test-report-html all lib examples example example-trace example-f example-f-trace \
         example-3d example-3d-trace example-hwc-validate \
         example-hwc-validate-omp example-hwc-validate-smear \
         example-mpi-ext-validate mpa-check \
@@ -818,12 +818,69 @@ test-report-html:
 	@echo "--- snapshot diff (miniprof_diff.py)"
 	@python3 tests/check_diff.py $$(ls miniprof_snapshot_*.json 2>/dev/null)
 
+# ── install: a prefix with the launcher, tools and a module file ─────────────
+#   make install PREFIX=/opt/miniprof/1.1-openmpi5 [MODULE_VERSION=1.1-openmpi5]
+# Layout: bin/ (miniprof launcher, miniprof-report, -diff, -calibrate),
+# lib/ (libminiprof.so, miniprof-nodemon), share/miniprof/ (tools, calib/),
+# share/modulefiles/miniprof/<MODULE_VERSION>.lua (Lmod) and
+# share/modulefiles-tcl/miniprof/<MODULE_VERSION> (Tcl Environment Modules).
+# Then, as root: setcap cap_perfmon+ep $(PREFIX)/lib/miniprof-nodemon
+# (if perf_event_paranoid > 0) and calibrate once per node type into
+# $(PREFIX)/share/miniprof/calib (see README, "Installing for users").
+PREFIX ?= /usr/local
+MINIPROF_VERSION := $(shell sed -n 's/^\#define MINIPROF_VERSION "\(.*\)"/\1/p' include/miniprof.h)
+MODULE_VERSION ?= $(MINIPROF_VERSION)
+INSTALL_MPI = $(shell mpirun --version 2>&1 | head -1)
+install: lib nodemon calibrate
+	@d=$(DESTDIR)$(PREFIX); \
+	install -d $$d/bin $$d/lib $$d/share/miniprof/tools $$d/share/miniprof/calib \
+		$$d/share/doc/miniprof $$d/share/modulefiles/miniprof $$d/share/modulefiles-tcl/miniprof && \
+	install -m 755 packaging/miniprof $$d/bin/miniprof && \
+	install -m 755 $(CALIBRATE) $$d/bin/miniprof-calibrate && \
+	install -m 755 $(LIB) $$d/lib/libminiprof.so && \
+	install -m 755 $(NODEMON) $$d/lib/miniprof-nodemon && \
+	install -m 644 tools/*.py $$d/share/miniprof/tools/ && \
+	install -m 755 tools/nodemon_ready.sh $$d/share/miniprof/tools/ && \
+	install -m 644 README.md $$d/share/doc/miniprof/ && \
+	echo "$(MINIPROF_VERSION)" > $$d/share/miniprof/VERSION && \
+	for t in report:miniprof_report.py diff:miniprof_diff.py csv:miniprof_csv.py; do \
+		n=miniprof-$${t%%:*}; sed -e "s|@NAME@|$$n|" -e "s|@SCRIPT@|$${t#*:}|" \
+			packaging/miniprof-tool.in > $$d/bin/$$n && chmod 755 $$d/bin/$$n; done && \
+	for f in lua tcl; do \
+		dst=$$d/share/modulefiles/miniprof/$(MODULE_VERSION).lua; \
+		[ $$f = tcl ] && dst=$$d/share/modulefiles-tcl/miniprof/$(MODULE_VERSION); \
+		sed -e "s|@PREFIX@|$(PREFIX)|g" -e "s|@VERSION@|$(MINIPROF_VERSION)|g" \
+			-e "s|@MPI@|$(INSTALL_MPI)|g" packaging/modulefiles/miniprof.$$f.in > $$dst; done && \
+	echo "installed miniprof $(MINIPROF_VERSION) in $(PREFIX)" && \
+	echo "  module files: $(PREFIX)/share/modulefiles/miniprof/$(MODULE_VERSION).lua (Lmod)," && \
+	echo "                $(PREFIX)/share/modulefiles-tcl/miniprof/$(MODULE_VERSION) (Tcl Environment Modules)" && \
+	echo "  module use $(PREFIX)/share/modulefiles && module load miniprof/$(MODULE_VERSION)" && \
+	echo "  next, as root if perf_event_paranoid > 0: setcap cap_perfmon+ep $(PREFIX)/lib/miniprof-nodemon" && \
+	echo "  and once per node type: miniprof-calibrate -o $(PREFIX)/share/miniprof/calib"
+
+# ── test-install: install into a scratch prefix, profile an example through
+# the launcher, check the result folder (Lmod module checked when present)
+test-install: lib nodemon calibrate $(EXAMPLE)
+	@tmp=$$(mktemp -d) && trap 'rm -rf $$tmp' EXIT && \
+	$(MAKE) -s install PREFIX=$$tmp/p MODULE_VERSION=test >/dev/null && \
+	cd $$tmp && MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof -o res \
+		$(CURDIR)/$(EXAMPLE) >/dev/null 2>launcher.err && \
+	for f in snapshot.json report.txt report.html run.txt csv; do \
+		[ -e res/$$f ] || { echo "FAIL: launcher left no res/$$f"; cat launcher.err; exit 1; }; done && \
+	grep -q "ranks" launcher.err || { echo "FAIL: no summary line"; cat launcher.err; exit 1; } && \
+	$$tmp/p/bin/miniprof-report res/snapshot.json --oneline >/dev/null && \
+	$$tmp/p/bin/miniprof --check $(CURDIR)/$(EXAMPLE) >/dev/null && \
+	grep -q 'local prefix = "'$$tmp/p'"' $$tmp/p/share/modulefiles/miniprof/test.lua && \
+	grep -q "set prefix $$tmp/p" $$tmp/p/share/modulefiles-tcl/miniprof/test && \
+	echo "test-install: OK (launcher, reports, tools, module files)"
+
 check: lib nodemon calibrate examples mpa-check
 	@echo "=========================================="
 	@echo " miniprof test suite"
 	@echo "=========================================="
 	@FAIL=0; \
 	$(MAKE) test-units             || FAIL=1; \
+	$(MAKE) test-install           || FAIL=1; \
 	$(MAKE) run-hwc-validate       || FAIL=1; \
 	$(MAKE) run-hwc-validate-omp   || FAIL=1; \
 	$(MAKE) run-hwc-validate-smear || FAIL=1; \

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# @NAME@: runs share/miniprof/tools/@SCRIPT@ from this installation
+here=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+exec python3 "$here/../share/miniprof/tools/@SCRIPT@" "$@"

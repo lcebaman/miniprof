@@ -537,6 +537,22 @@ def report(doc: dict, args) -> str:
     return "\n".join(out) + "\n"
 
 
+def oneline(doc) -> str:
+    """app, ranks x threads, elapsed; compute/MPI/I/O shares, top MPI call."""
+    run = doc.get("run") or {}
+    par = (doc.get("metrics") or {}).get("parallel") or {}
+    sp = par.get("time_split_pct") or {}
+    app = os.path.basename((run.get("command") or "?").split()[0])
+    th = run.get("omp_num_threads")
+    shape = f'{run.get("nranks")} ranks' + (f" x {th} threads" if th and str(th) != "1" else "") \
+        + f' on {run.get("nnodes")} node(s)'
+    el = (run.get("elapsed_s") or {}).get("max") or 0
+    funcs = (par.get("mpi") or {}).get("by_function") or []
+    top = f' ({funcs[0]["name"]} {funcs[0]["pct_of_elapsed"]:.0f}%)' if funcs and (sp.get("mpi") or 0) >= 1 else ""
+    return (f"{app}, {shape}, {el:.1f} s: compute {sp.get('compute', 0):.0f}%, "
+            f"MPI {sp.get('mpi', 0):.0f}%{top}, I/O {sp.get('io', 0):.0f}%")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("file")
@@ -547,6 +563,8 @@ def main() -> int:
     ap.add_argument("--thresholds", metavar="FILE",
                     help="observation thresholds ([thresholds] section, key = value); also "
                          "$MINIPROF_THRESHOLDS. Command-line options override the file")
+    ap.add_argument("--oneline", action="store_true",
+                    help="print a one-line summary (elapsed, time split, top MPI call) and exit")
     ap.add_argument("--write-thresholds", metavar="FILE",
                     help="write the default thresholds, with what each one means, to FILE and exit")
     for k, (dflt, hlp) in THRESHOLDS.items():
@@ -565,6 +583,9 @@ def main() -> int:
         return 2
     with open(args.file) as f:
         doc = json.load(f)
+    if args.oneline:
+        print(oneline(doc))
+        return 0
     text = report(doc, args)
     if args.csv:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

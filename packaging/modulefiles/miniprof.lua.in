@@ -1,0 +1,37 @@
+-- miniprof @VERSION@ (Lmod), installed by `make install`
+help([[
+miniprof @VERSION@: low-overhead MPI + OpenMP profiler (snapshot mode).
+
+Run your application with miniprof in front of the executable; nothing
+needs recompiling:
+
+  mpirun -np 96 --map-by ppr:48:socket:pe=2 miniprof pw.x -in scf.in
+  srun -n 96 miniprof pw.x -in scf.in
+
+When the run ends you get miniprof_<app>_<date>/ with report.html,
+report.txt, snapshot.json and CSV tables, and a one-line summary.
+
+  miniprof --level topdown|roofline|full ...   more hardware detail
+  miniprof --check pw.x                        can it profile pw.x here?
+  miniprof-report snapshot.json                text report
+  miniprof-diff A/snapshot.json B/snapshot.json --html diff.html
+
+Built against: @MPI@
+The application must use the same MPI library (miniprof --check tells).
+Documentation: @PREFIX@/share/doc/miniprof/README.md
+]])
+
+whatis("Name: miniprof")
+whatis("Version: @VERSION@")
+whatis("Description: MPI + OpenMP snapshot profiler (no recompilation)")
+whatis("MPI: @MPI@")
+
+local prefix = "@PREFIX@"
+setenv("MINIPROF_HOME", prefix)
+prepend_path("PATH", pathJoin(prefix, "bin"))
+prepend_path("MANPATH", pathJoin(prefix, "share/man"))
+
+-- site defaults: change here, or override in the environment after loading
+setenv("MINIPROF_LEVEL", "basic")                                         -- default level
+setenv("MINIPROF_CALIBRATION", pathJoin(prefix, "share/miniprof/calib"))  -- roofline ceilings
+setenv("MINIPROF_NODEMON", pathJoin(prefix, "lib/miniprof-nodemon"))     -- memory helper

@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# miniprof — profile an MPI application with miniprof's snapshot mode.
+#
+#   mpirun -np 96 --map-by ppr:48:socket:pe=2 miniprof pw.x -in scf.in
+#   srun -n 96 miniprof pw.x -in scf.in
+#
+# Put it in front of the executable, after mpirun/srun and any binding
+# wrapper. Every rank runs the application with libminiprof.so preloaded (no
+# recompilation); when the run ends, rank 0 writes a folder with the
+# snapshot, a text and an HTML report and CSV tables, and prints a summary.
+#
+# Options (before the application):
+#   -l, --level L    basic (default), topdown, roofline or full
+#   -o, --output D   result folder (default miniprof_<app>_<date>_<time>)
+#       --no-report  keep only snapshot.json (no text/HTML/CSV)
+#   -q, --quiet      no summary line
+#       --check      check the application and this node, then exit
+#   -h, --help
+# Environment: the MINIPROF_* variables still apply (MINIPROF_CALIBRATION,
+# MINIPROF_THRESHOLDS, ...); MINIPROF_LEVEL sets the default level.
+set -u
+
+HERE=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+MINIPROF_HOME=${MINIPROF_HOME:-$(cd "$HERE/.." && pwd)}
+LIB=$MINIPROF_HOME/lib/libminiprof.so
+TOOLS=$MINIPROF_HOME/share/miniprof/tools
+
+level=${MINIPROF_LEVEL:-basic}
+out=""; report=1; quiet=0; check=0
+usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+while [ $# -gt 0 ]; do
+    case $1 in
+        -l|--level)  level=$2; shift 2 ;;
+        --level=*)   level=${1#*=}; shift ;;
+        -o|--output) out=$2; shift 2 ;;
+        --output=*)  out=${1#*=}; shift ;;
+        --no-report) report=0; shift ;;
+        -q|--quiet)  quiet=1; shift ;;
+        --check)     check=1; shift ;;
+        -h|--help)   usage; exit 0 ;;
+        --)          shift; break ;;
+        -*)          echo "miniprof: unknown option $1 (miniprof --help)" >&2; exit 2 ;;
+        *)           break ;;
+    esac
+done
+[ $# -gt 0 ] || { usage >&2; exit 2; }
+case $level in basic|topdown|roofline|full) ;; *)
+    echo "miniprof: level must be basic, topdown, roofline or full" >&2; exit 2 ;;
+esac
+
+# rank within the job, from whichever launcher started us
+rank=${OMPI_COMM_WORLD_RANK:-${PMIX_RANK:-${PMI_RANK:-${SLURM_PROCID:-0}}}}
+
+app=$1
+app_path=$(command -v -- "$app" 2>/dev/null || true)
+say() { [ "$rank" = 0 ] && echo "miniprof: $*" >&2; return 0; }
+
+# Can miniprof attach to this application? It must be dynamically linked
+# against the same MPI library (soname) libminiprof was built with.
+why_not=""
+if [ ! -f "$LIB" ]; then
+    why_not="no $LIB (MINIPROF_HOME=$MINIPROF_HOME)"
+elif [ -z "$app_path" ]; then
+    why_not="$app not found"
+elif ! ldd "$app_path" >/dev/null 2>&1 || ldd "$app_path" 2>&1 | grep -q "not a dynamic executable"; then
+    # scripts (python, wrappers) are fine: the preload reaches the processes they start
+    head -c2 "$app_path" 2>/dev/null | grep -q '#!' || why_not="$app is statically linked: LD_PRELOAD cannot attach"
+else
+    lib_mpi=$(ldd "$LIB" | awk '/libmpi(ch)?\.so/ {print $1; exit}')
+    app_mpi=$(ldd "$app_path" | awk '/libmpi(ch)?\.so/ {print $1; exit}')
+    if [ -n "$app_mpi" ] && [ -n "$lib_mpi" ] && [ "$app_mpi" != "$lib_mpi" ]; then
+        why_not="$app uses $app_mpi but this miniprof was built for $lib_mpi (load the matching miniprof module)"
+    elif [ -z "$app_mpi" ]; then
+        say "note: $app does not link an MPI library directly (fine if it loads one later)"
+    fi
+fi
+
+if [ $check = 1 ]; then
+    [ "$rank" = 0 ] || exit 0
+    echo "miniprof $(cat "$MINIPROF_HOME/share/miniprof/VERSION" 2>/dev/null) in $MINIPROF_HOME"
+    echo "application: ${app_path:-$app not found}"
+    [ -n "$why_not" ] && { echo "cannot profile: $why_not"; exit 1; }
+    echo "MPI: $(ldd "$app_path" 2>/dev/null | awk '/libmpi(ch)?\.so/ {print $3; exit}')"
+    echo "OpenMP: $(ldd "$app_path" 2>/dev/null | awk '/lib(i?omp|gomp)[0-9]*\.so/ {print $1}' | tr '\n' ' ')"
+    ldd "$app_path" 2>/dev/null | grep -q libgomp && echo "  (GCC libgomp has no OMPT: the OpenMP section will be unavailable)"
+    echo "perf_event_paranoid: $(cat /proc/sys/kernel/perf_event_paranoid)"
+    "$TOOLS/nodemon_ready.sh" "${MINIPROF_NODEMON:-$MINIPROF_HOME/lib/miniprof-nodemon}" 2>&1 | sed 's/^/memory helper: /'
+    ls "${MINIPROF_CALIBRATION:-/nonexistent}"/calibration_*.json >/dev/null 2>&1 \
+        && echo "calibration: ${MINIPROF_CALIBRATION} ($(ls "$MINIPROF_CALIBRATION"/calibration_*.json | wc -l) file(s))" \
+        || echo "calibration: none in ${MINIPROF_CALIBRATION:-(MINIPROF_CALIBRATION unset)}: the roofline needs one: miniprof-calibrate -o ${MINIPROF_CALIBRATION:-DIR} on one node of each type"
+    exit 0
+fi
+
+if [ -n "$why_not" ]; then
+    say "not profiling: $why_not; running $app as is"
+    exec "$@"
+fi
+
+# Only rank 0 writes the snapshot, so only it needs the folder name.
+if [ -z "$out" ]; then
+    out=miniprof_$(basename "$app")_$(date +%Y%m%d_%H%M%S)
+fi
+export MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=$level
+export LD_PRELOAD=$LIB${LD_PRELOAD:+:$LD_PRELOAD}
+
+if [ "$rank" != 0 ]; then
+    exec "$@"
+fi
+
+mkdir -p "$out" || { echo "miniprof: cannot create $out" >&2; exec "$@"; }
+out=$(cd "$out" && pwd)
+export MINIPROF_SNAPSHOT_OUTPUT=$out/snapshot.json
+
+# rank 0 runs the application as a child so it can write the reports after;
+# signals from the launcher are passed on
+"$@" &
+child=$!
+trap 'kill -TERM $child 2>/dev/null' TERM INT HUP
+wait $child; rc=$?
+while kill -0 $child 2>/dev/null; do wait $child; rc=$?; done
+trap - TERM INT HUP
+unset LD_PRELOAD MINIPROF_MODE
+
+if [ -f "$out/snapshot.json" ]; then
+    {
+        echo "command: $*"
+        echo "level: $level"
+        echo "exit: $rc"
+        echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "host: $(hostname)"
+    } > "$out/run.txt"
+    if [ $report = 1 ] && command -v python3 >/dev/null; then
+        python3 "$TOOLS/miniprof_report.py" "$out/snapshot.json" -o "$out/report.txt" \
+            --html "$out/report.html" --csv "$out/csv" >/dev/null 2>"$out/report.err" \
+            && rm -f "$out/report.err"
+    fi
+    if [ $quiet = 0 ] && command -v python3 >/dev/null; then
+        python3 "$TOOLS/miniprof_report.py" "$out/snapshot.json" --oneline 2>/dev/null | sed 's/^/miniprof: /' >&2
+        if [ -f "$out/report.html" ]; then echo "miniprof: report $out/report.html" >&2
+        else echo "miniprof: snapshot $out/snapshot.json" >&2; fi
+    fi
+else
+    echo "miniprof: no snapshot written (the application exited with $rc before MPI_Finalize?)" >&2
+    rmdir "$out" 2>/dev/null
+fi
+exit $rc
