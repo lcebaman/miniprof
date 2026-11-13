@@ -12,6 +12,8 @@ When the run ends you get miniprof_<app>_<date>/ with report.html,
 report.txt, snapshot.json and CSV tables, and a one-line summary.
 
   miniprof --level topdown|roofline|full ...   more hardware detail
+  miniprof --hotspots ...                      add top functions to the report
+  miniprof --sample ...                        time per routine and source line
   miniprof --check pw.x                        can it profile pw.x here?
   miniprof-report snapshot.json                text report
   miniprof-diff A/snapshot.json B/snapshot.json --html diff.html

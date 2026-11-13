@@ -350,6 +350,22 @@ def report(doc: dict, args) -> str:
             p(" Message sizes")
             out.extend(rows)
 
+    # hotspots (opt-in)
+    hs = (doc.get("metrics") or {}).get("hotspots") or {}
+    if hs.get("available"):
+        gp = hs.get("groups_pct") or {}
+        p("")
+        p(f" Hotspots: CPU time sampled every {hs['interval_ms']} ms ({hs['samples']:,} samples, "
+          f"{human_time(hs['cpu_s'])}); time in the function itself")
+        p("   " + "  ".join(f"{k} {v:.1f}%" for k, v in sorted(gp.items(), key=lambda kv: -kv[1])))
+        p("    CPU%  CPU/rank  imbal  group  function  [library]")
+        for f in (hs.get("functions") or [])[:15]:
+            p(f"   {f['pct']:5.1f}  {human_time(f['cpu_s_per_rank']):>8}  {f['imbalance_pct']:4.0f}%  "
+              f"{f['group']:<5}  {f['name'][:70]}  [{f['dso']}]")
+    elif hs:
+        p("")
+        p(f" Hotspots: unavailable ({hs.get('reason')})")
+
     # I/O
     p("")
     p(" I/O                    read                 write             time (avg/rank)")
@@ -579,8 +595,13 @@ def oneline(doc) -> str:
     el = (run.get("elapsed_s") or {}).get("max") or 0
     funcs = (par.get("mpi") or {}).get("by_function") or []
     top = f' ({funcs[0]["name"]} {funcs[0]["pct_of_elapsed"]:.0f}%)' if funcs and (sp.get("mpi") or 0) >= 1 else ""
-    return (f"{app}, {shape}, {el:.1f} s: compute {sp.get('compute', 0):.0f}%, "
+    line = (f"{app}, {shape}, {el:.1f} s: compute {sp.get('compute', 0):.0f}%, "
             f"MPI {sp.get('mpi', 0):.0f}%{top}, I/O {sp.get('io', 0):.0f}%")
+    hs = (doc.get("metrics") or {}).get("hotspots") or {}
+    if hs.get("available") and hs.get("functions"):
+        line += "\nhotspots: " + ", ".join(f'{f["name"].split("(")[0]} {f["pct"]:.0f}%'
+                                           for f in hs["functions"][:4])
+    return line
 
 
 def main() -> int:

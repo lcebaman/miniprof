@@ -567,6 +567,37 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
                     f'{comp["imbalance_cost_pct"]:.1f}% of the elapsed time.</p>'
         section("parallel", "Time and balance", body)
 
+        # ---- hotspots (opt-in: MINIPROF_HOTSPOTS=1 / miniprof --hotspots)
+        hs = m.get("hotspots")
+        if hs and hs.get("available"):
+            gp = hs.get("groups_pct") or {}
+            other = sum(v for k, v in gp.items() if k not in ("USER", "MPI", "OMP"))
+            body = (f'<p class="note">CPU time sampled every {hs["interval_ms"]} ms on every thread '
+                    f'({hs["samples"]:,} samples, {ht(hs["cpu_s"])} of CPU); each sample counts '
+                    'in the function it interrupted (exclusive time). Waiting in MPI shows as MPI '
+                    'library code, waiting in OpenMP as OMP.</p>')
+            body += legend([(1, f'Application {gp.get("USER", 0):.1f}%'), (2, f'MPI {gp.get("MPI", 0):.1f}%'),
+                            (3, f'OpenMP runtime {gp.get("OMP", 0):.1f}%'), (4, f'Other libraries {other:.1f}%')])
+            body += hstack([("All threads", {"u": gp.get("USER", 0), "m": gp.get("MPI", 0),
+                                             "o": gp.get("OMP", 0), "x": other}, "")],
+                           [(1, "u", "Application"), (2, "m", "MPI"), (3, "o", "OpenMP runtime"),
+                            (4, "x", "Other libraries")], vmax=100, label_w=110, tail_w=10)
+            fs = hs.get("functions") or []
+
+            def short(n):     # bar labels: drop arguments, keep the tail of long names
+                n = n.split("(")[0]
+                return n if len(n) <= 34 else "…" + n[-33:]
+            body += "<h3>Top functions, % of sampled CPU time</h3>"
+            body += ranked_bars([(short(f["name"]), f["pct"],
+                                  f'{f["name"]} ({f["group"]}, {f["dso"]}): {f["pct"]:.1f}% of CPU time, '
+                                  f'imbalance {f["imbalance_pct"]:.0f}%') for f in fs[:12]], label_w=230)
+            body += table(["function", "group", "library", "CPU %", "CPU s/rank", "imbalance"], text=(0, 1, 2),
+                          rows=[(f["name"], f["group"], f["dso"], f'{f["pct"]:.1f}%',
+                                 ht(f["cpu_s_per_rank"]), f'{f["imbalance_pct"]:.0f}%') for f in fs[:30]])
+            section("hotspots", "Hotspots", body)
+        elif hs:
+            section("hotspots", "Hotspots", unavailable(hs, "Hotspots"))
+
         # ---- MPI
         funcs = mpi.get("by_function") or []
         if funcs:

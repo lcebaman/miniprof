@@ -27,6 +27,7 @@
 #include "counters.h"
 #include "nodemon.h"
 #include "ompt.h"
+#include "hotspots.h"
 #include "symbolizer.h"
 #include "../include/miniprof.h"
 
@@ -49,8 +50,13 @@ static char   g_outfile[512]    = MINIPROF_DEFAULT_SNAPSHOT_OUTPUT;
 static int    g_verbose         = 0;
 static double g_init_s          = 0.0;   /* cost of snapshot_init() itself  */
 /* rank 0's finalize, phase by phase (seconds), for the overhead block */
-enum { FIN_NODEMON, FIN_REDUCE, FIN_REGIONS, FIN_OPENMP, FIN_GATHER, FIN_NPHASES };
-static const char *const g_fin_names[FIN_NPHASES] = { "nodemon", "reductions", "regions", "openmp", "gather" };
+enum { FIN_NODEMON, FIN_REDUCE, FIN_REGIONS, FIN_OPENMP, FIN_HOTSPOTS, FIN_GATHER, FIN_NPHASES };
+static const char *const g_fin_names[FIN_NPHASES] = { "nodemon", "reductions", "regions", "openmp",
+                                                       "hotspots", "gather" };
+/* hotspots (MINIPROF_HOTSPOTS=1): every rank's top functions, on rank 0 */
+static hs_entry_t *g_hs_all = NULL;      /* nranks x HS_TOP                */
+static int        *g_hs_n   = NULL;      /* entries each rank sent         */
+static long       *g_hs_tot = NULL;      /* each rank's total samples      */
 static double g_fin_s[FIN_NPHASES];
 /* this rank's init, phase by phase; the overhead block reports the max */
 enum { INI_SYSINFO, INI_COUNTERS, INI_NODEMON, INI_OPENMP, INI_NPHASES };
@@ -246,6 +252,7 @@ void snapshot_init(int verbose)
     INI_MARK(INI_NODEMON);
     /* P2: OpenMP statistics from here on (no-op without an OMPT runtime) */
     ompt_snapshot_begin();
+    hotspots_start();                         /* no-op unless MINIPROF_HOTSPOTS=1 */
     INI_MARK(INI_OPENMP);
 #undef INI_MARK
 
@@ -1656,6 +1663,97 @@ static void write_openmp(jw_t *w, const rank_rec_t *r, int n)
     jw_end_obj(w);
 }
 
+/* Function hotspots (MINIPROF_HOTSPOTS=1): leaf-function CPU-time samples
+ * of every thread, merged across ranks. Each rank sent its HS_TOP
+ * functions; a function outside a rank's top list counts 0 there, so
+ * per-rank minimums are lower bounds for minor functions. */
+#define HS_OUT 30
+typedef struct { const hs_entry_t *e; long total, min, max; int ranks; } hs_merged_t;
+static int hs_cmp(const void *a, const void *b)
+{
+    long x = ((const hs_merged_t *)a)->total, y = ((const hs_merged_t *)b)->total;
+    return (y > x) - (y < x);
+}
+static void write_hotspots(jw_t *w, int nranks)
+{
+    if (!g_hs_all) return;
+    jw_begin_obj(w, "hotspots");
+    long all = 0;
+    for (int r = 0; r < nranks; r++) all += g_hs_tot[r];
+    jw_bool(w, "available", all > 0);
+    if (all <= 0) {
+        jw_str(w, "reason", "no samples (run too short for the sampling interval?)");
+        jw_end_obj(w);
+        return;
+    }
+    int iv = hotspots_interval_ms();
+    jw_int(w, "interval_ms", iv);
+    jw_int(w, "samples", all);
+    jw_dbl(w, "cpu_s", all * iv * 1e-3);
+    jw_str(w, "note", "CPU-time samples (ITIMER_PROF) of every thread; time is in the leaf "
+                      "function (exclusive). MPI waiting shows as MPI-library functions "
+                      "(group MPI); OpenMP waiting as OMP. Per-rank minimums count a function "
+                      "outside a rank's top list as 0.");
+    /* merge by name */
+    int cap = nranks * HS_TOP, nm = 0;
+    hs_merged_t *m = calloc((size_t)cap, sizeof(*m));
+    long *pr = calloc((size_t)nranks, sizeof(long));
+    if (!m || !pr) { free(m); free(pr); jw_end_obj(w); return; }
+    for (int r = 0; r < nranks; r++)
+        for (int k = 0; k < g_hs_n[r]; k++) {
+            const hs_entry_t *e = &g_hs_all[(size_t)r * HS_TOP + k];
+            int j = 0;
+            while (j < nm && strcmp(m[j].e->name, e->name) != 0) j++;
+            if (j == nm) { m[nm].e = e; nm++; }
+            m[j].total += e->samples;
+        }
+    qsort(m, (size_t)nm, sizeof(*m), hs_cmp);
+    /* groups */
+    jw_begin_obj(w, "groups_pct");
+    {
+        const char *seen[32]; int ns = 0;
+        for (int j = 0; j < nm && ns < 32; j++) {
+            int dup = 0;
+            for (int q = 0; q < ns; q++) dup |= strcmp(seen[q], m[j].e->group) == 0;
+            if (dup) continue;
+            seen[ns++] = m[j].e->group;
+            long g = 0;
+            for (int q = 0; q < nm; q++) if (strcmp(m[q].e->group, m[j].e->group) == 0) g += m[q].total;
+            jw_dbl(w, m[j].e->group[0] ? m[j].e->group : "ETC", 100.0 * g / all);
+        }
+    }
+    jw_end_obj(w);
+    jw_begin_arr(w, "functions");
+    for (int j = 0; j < nm && j < HS_OUT; j++) {
+        long mn = -1, mx = 0, sum = 0;
+        for (int r = 0; r < nranks; r++) {
+            long v = 0;
+            for (int k = 0; k < g_hs_n[r]; k++)
+                if (strcmp(g_hs_all[(size_t)r * HS_TOP + k].name, m[j].e->name) == 0)
+                    { v = g_hs_all[(size_t)r * HS_TOP + k].samples; break; }
+            if (mn < 0 || v < mn) mn = v;
+            if (v > mx) mx = v;
+            sum += v;
+        }
+        double avg = (double)sum / nranks;
+        jw_begin_obj(w, NULL);
+        jw_str(w, "name", m[j].e->name);
+        jw_str(w, "group", m[j].e->group[0] ? m[j].e->group : "ETC");
+        jw_str(w, "dso", m[j].e->dso);
+        jw_dbl(w, "pct", 100.0 * m[j].total / all);
+        jw_int(w, "samples", m[j].total);
+        jw_dbl(w, "cpu_s_per_rank", avg * iv * 1e-3);
+        jw_begin_obj(w, "samples_per_rank");
+        jw_int(w, "min", mn); jw_dbl(w, "avg", avg); jw_int(w, "max", mx);
+        jw_end_obj(w);
+        jw_dbl(w, "imbalance_pct", mx > 0 ? 100.0 * (mx - avg) / mx : 0.0);
+        jw_end_obj(w);
+    }
+    jw_end_arr(w);
+    free(m); free(pr);
+    jw_end_obj(w);
+}
+
 static int write_json(const rank_rec_t *ranks, int nranks,
                       const node_rec_t *nodes, int nnodes,
                       const char *mpi_lib, double finalize_s,
@@ -1765,6 +1863,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_str(&w, NULL, "counters");
     jw_str(&w, NULL, "openmp");
     if (g_level == SNAPSHOT_TOPDOWN) jw_str(&w, NULL, "topdown");
+    if (g_hs_all) jw_str(&w, NULL, "hotspots");
     {
         int mem_any = 0;
         for (int i = 0; i < nnodes; i++) mem_any |= nodes[i].mem.available;
@@ -1779,6 +1878,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     write_topdown(&w, ranks, nranks);
     write_memory(&w, nodes, nnodes);
     write_roofline(&w, ranks, nranks, nodes, nnodes);
+    write_hotspots(&w, nranks);
     jw_end_obj(&w);
 
     jw_end_obj(&w);
@@ -2052,6 +2152,7 @@ void snapshot_finalize(double elapsed_s)
 {
     double t0 = now_s(), tp = t0;
 #define FIN_MARK(PH) do { double t_ = now_s(); g_fin_s[PH] = t_ - tp; tp = t_; } while (0)
+    hotspots_stop();                          /* end of the sampled window */
     if (g_node_leader) nodemon_stop(&g_nm);   /* first: end of the measured window */
     FIN_MARK(FIN_NODEMON);
     if (g_verbose && g_node_leader)
@@ -2106,6 +2207,22 @@ void snapshot_finalize(double elapsed_s)
     FIN_MARK(FIN_REGIONS);
     reduce_omp_regions(rank, size);
     FIN_MARK(FIN_OPENMP);
+    if (hotspots_requested()) {
+        hs_entry_t mine_hs[HS_TOP];
+        memset(mine_hs, 0, sizeof(mine_hs));
+        long tot = 0;
+        int nh = hotspots_collect(mine_hs, HS_TOP, &tot);
+        if (rank == 0) {
+            g_hs_all = calloc((size_t)size * HS_TOP, sizeof(hs_entry_t));
+            g_hs_n   = calloc((size_t)size, sizeof(int));
+            g_hs_tot = calloc((size_t)size, sizeof(long));
+        }
+        PMPI_Gather(&nh, 1, MPI_INT, g_hs_n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        PMPI_Gather(&tot, 1, MPI_LONG, g_hs_tot, 1, MPI_LONG, 0, MPI_COMM_WORLD);
+        PMPI_Gather(mine_hs, (int)sizeof(mine_hs), MPI_BYTE,
+                    g_hs_all, (int)sizeof(mine_hs), MPI_BYTE, 0, MPI_COMM_WORLD);
+    }
+    FIN_MARK(FIN_HOTSPOTS);
 
     mine.finalize_s = now_s() - t0;
 
@@ -2161,5 +2278,7 @@ void snapshot_finalize(double elapsed_s)
     }
     free(all_ranks);
     free(all_nodes);
+    free(g_hs_all); free(g_hs_n); free(g_hs_tot);
+    g_hs_all = NULL; g_hs_n = NULL; g_hs_tot = NULL;
 #undef FIN_MARK
 }
