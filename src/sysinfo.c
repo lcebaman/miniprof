@@ -215,20 +215,32 @@ void sysinfo_collect_rank(sysinfo_rank_t *r)
      * SMT on, launchers usually bind a rank to a whole core (2 hardware
      * threads), so utilisation against hardware threads would read ~50%
      * for a fully busy single-threaded rank. */
+    /* One sysfs read per core, not two per CPU: an unbound rank on a
+     * 384-CPU node would otherwise read 768 files, and every rank on the
+     * node does it at once (0.17 s at 192 ranks). Each CPU's
+     * thread_siblings_list names its whole core; siblings are skipped. */
     {
-        int pk[CPU_SETSIZE], co[CPU_SETSIZE], n = 0, ok = 1;
+        cpu_set_t seen;
+        CPU_ZERO(&seen);
+        int n = 0, ok = 1;
         for (int cpu = 0; cpu < CPU_SETSIZE && ok; cpu++) {
-            if (!CPU_ISSET(cpu, &set)) continue;
-            char path[96];
+            if (!CPU_ISSET(cpu, &set) || CPU_ISSET(cpu, &seen)) continue;
+            char path[96], buf[256];
             snprintf(path, sizeof(path),
-                     "/sys/devices/system/cpu/cpu%d/topology/physical_package_id", cpu);
-            int p = read_int_file(path, -1);
-            snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/topology/core_id", cpu);
-            int c = read_int_file(path, -1);
-            if (p < 0 || c < 0) { ok = 0; break; }
-            int dup = 0;
-            for (int i = 0; i < n && !dup; i++) dup = (pk[i] == p && co[i] == c);
-            if (!dup) { pk[n] = p; co[n] = c; n++; }
+                     "/sys/devices/system/cpu/cpu%d/topology/thread_siblings_list", cpu);
+            FILE *f = fopen(path, "r");
+            if (!f || !fgets(buf, sizeof(buf), f)) { if (f) fclose(f); ok = 0; break; }
+            fclose(f);
+            CPU_SET(cpu, &seen);
+            for (char *s = buf; *s && *s != '\n'; ) {        /* "0,192" or "0-1" */
+                char *e;
+                long a = strtol(s, &e, 10), b = a;
+                if (e == s) break;
+                if (*e == '-') b = strtol(e + 1, &e, 10);
+                for (long c = a; c <= b && c < CPU_SETSIZE; c++) CPU_SET((int)c, &seen);
+                s = (*e == ',') ? e + 1 : e;
+            }
+            n++;
         }
         r->cores_allowed = ok ? n : -1;
     }
