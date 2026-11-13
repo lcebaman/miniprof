@@ -293,6 +293,8 @@ const cnt_group_t *cnt_lookup(const char *uarch, const char *group)
 
 /* ── per-thread state ────────────────────────────────────────────────── */
 
+enum { CB_COMPUTE = 0, CB_MPI = 1, CB_IDLE = 2, CB_N = 3 };   /* count buckets */
+
 #define CNT_MAX_THREADS 1024
 
 typedef struct {
@@ -304,9 +306,10 @@ typedef struct {
 typedef struct {
     int      fd[CNT_MAX_EVENTS];
     struct perf_event_mmap_page *pg[CNT_MAX_EVENTS];
-    int      in_mpi;
+    int      bucket;                   /* where counts go now: CB_*        */
+    int      omp_worker;               /* has run an OpenMP implicit task  */
     uint64_t last[CNT_MAX_EVENTS];
-    uint64_t acc[2][CNT_MAX_EVENTS];   /* 0 = compute, 1 = mpi */
+    uint64_t acc[CB_N][CNT_MAX_EVENTS];
     int      depth;
     region_frame_t stack[CNT_REGION_DEPTH];
     uint64_t n_rdpmc, n_syscall;       /* which read path boundaries took */
@@ -708,22 +711,47 @@ void cnt_stop(void)
 
 /* ── MPI boundaries ──────────────────────────────────────────────────── */
 
+static inline void switch_bucket(thread_slot_t *s, int to)
+{
+    uint64_t v[CNT_MAX_EVENTS];
+    if (read_now(s, v) != 0) return;
+    for (int i = 0; i < NEV(s); i++) {
+        s->acc[s->bucket][i] += v[i] - s->last[i];
+        s->last[i] = v[i];
+    }
+    s->bucket = to;
+}
+
 static inline void boundary(int entering_mpi)
 {
     thread_slot_t *s = t_slot ? t_slot : thread_open();
     if (!s) return;
-    uint64_t v[CNT_MAX_EVENTS];
-    if (read_now(s, v) != 0) return;
-    int bucket = s->in_mpi;
-    for (int i = 0; i < NEV(s); i++) {
-        s->acc[bucket][i] += v[i] - s->last[i];
-        s->last[i] = v[i];
-    }
-    s->in_mpi = entering_mpi;
+    /* leaving MPI: an OpenMP worker can only be inside a region here */
+    switch_bucket(s, entering_mpi ? CB_MPI : CB_COMPUTE);
 }
 
 void cnt_mpi_enter(void) { if (g_active && g_split) boundary(1); }
 void cnt_mpi_exit(void)  { if (g_active && g_split) boundary(0); }
+
+/* OpenMP worker threads: after a parallel region they wait at its closing
+ * barrier and then in the runtime's thread pool, spinning for a while
+ * (KMP_BLOCKTIME, 200 ms by default in LLVM's runtime) before sleeping.
+ * Counted as compute, that spin inflates instructions and lowers IPC
+ * whenever the master thread is in MPI or serial code. A worker counts as
+ * compute from its implicit task's begin to the start of the region's
+ * closing barrier wait, and as CB_IDLE from there to its next task. (LLVM
+ * reports the worker's barrier-wait end and implicit-task end only at the
+ * next fork, so those cannot mark the switch.) The MPI-calling thread is
+ * left alone: its time outside regions is serial work. */
+void cnt_omp_worker(int working)
+{
+    if (!g_active || !g_split) return;
+    thread_slot_t *s = t_slot ? t_slot : thread_open();
+    if (!s || s == g_main_slot) return;
+    s->omp_worker = 1;
+    if (working && s->bucket == CB_IDLE) switch_bucket(s, CB_COMPUTE);
+    else if (!working && s->bucket == CB_COMPUTE) switch_bucket(s, CB_IDLE);
+}
 
 int cnt_split_enabled(void) { return g_split; }
 
@@ -880,16 +908,19 @@ void cnt_collect(cnt_result_t *out)
         out->reads_syscall += s->n_syscall;
         for (int i = 0; i < NEV(s); i++) {
             uint64_t tail = g.v[i] - s->last[i];
-            uint64_t comp = s->acc[0][i] + (s->in_mpi ? 0 : tail);
-            uint64_t mpi  = s->acc[1][i] + (s->in_mpi ? tail : 0);
+            uint64_t comp = s->acc[CB_COMPUTE][i] + (s->bucket == CB_COMPUTE ? tail : 0);
+            uint64_t mpi  = s->acc[CB_MPI][i]     + (s->bucket == CB_MPI ? tail : 0);
+            uint64_t idle = s->acc[CB_IDLE][i]    + (s->bucket == CB_IDLE ? tail : 0);
             out->set_compute[s->set][i] += comp;
             out->set_mpi[s->set][i]     += mpi;
-            out->set_total[s->set][i]   += comp + mpi;
-            if (s == g_main_slot && s->set == 0) out->main_thread[i] = comp + mpi;
+            out->set_idle[s->set][i]    += idle;
+            out->set_total[s->set][i]   += comp + mpi + idle;
+            if (s == g_main_slot && s->set == 0) out->main_thread[i] = comp + mpi + idle;
         }
     }
     memcpy(out->total,   out->set_total[0],   sizeof(out->total));
     memcpy(out->compute, out->set_compute[0], sizeof(out->compute));
     memcpy(out->mpi,     out->set_mpi[0],     sizeof(out->mpi));
+    memcpy(out->idle,    out->set_idle[0],    sizeof(out->idle));
     g_active = 0;   /* no more boundary reads */
 }

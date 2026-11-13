@@ -222,7 +222,7 @@ def analyse(A: Run, B: Run) -> dict:
     out["counters"] = [(k, A.cd.get(k), B.cd.get(k)) for k in
                        ("ipc", "ipc_compute", "ghz_effective", "gflops_per_s", "flops_per_cycle",
                         "dram_read_bytes", "dram_read_gb_per_s", "dram_fill_bytes", "dram_fill_gb_per_s",
-                        "l2_misses_per_kilo_instr")
+                        "l2_misses_per_kilo_instr", "omp_idle_pct_of_cycles", "omp_idle_core_s_per_rank")
                        if A.cd.get(k) is not None or B.cd.get(k) is not None]
     out["verdict"] = verdict(A, B, out)
     return out

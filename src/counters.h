@@ -128,6 +128,7 @@ typedef struct {
     uint64_t total  [CNT_MAX_EVENTS];   /* set 0: sum over threads, this rank */
     uint64_t compute[CNT_MAX_EVENTS];
     uint64_t mpi    [CNT_MAX_EVENTS];
+    uint64_t idle   [CNT_MAX_EVENTS];   /* OpenMP workers between regions  */
     uint64_t main_thread[CNT_MAX_EVENTS];  /* MPI_Init thread only         */
     /* every set (nsets == 1 except for top-down) */
     int      nsets;
@@ -137,7 +138,14 @@ typedef struct {
     uint64_t set_total  [CNT_MAX_SETS][CNT_MAX_EVENTS];
     uint64_t set_compute[CNT_MAX_SETS][CNT_MAX_EVENTS];
     uint64_t set_mpi    [CNT_MAX_SETS][CNT_MAX_EVENTS];
+    uint64_t set_idle   [CNT_MAX_SETS][CNT_MAX_EVENTS];
 } cnt_result_t;
+
+/* OpenMP worker on the calling thread starts (1) or stops (0) working:
+ * implicit-task begin / closing-barrier wait begin of an outermost region.
+ * Workers count as compute while working and as idle (barrier and pool
+ * spin) otherwise. */
+void cnt_omp_worker(int working);
 
 /* Final read of every thread on this rank; fills *out. */
 void cnt_collect(cnt_result_t *out);
