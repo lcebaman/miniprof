@@ -820,12 +820,11 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
     if ov:
         txt = f'{100 * (ov.get("fraction_of_elapsed") or 0):.2f}% of elapsed'
         if ov.get("init_s_max") is not None and ov.get("finalize_s") is not None:
-            txt += f' (init {ov["init_s_max"]:.2f} s, finalize {ov["finalize_s"]:.2f} s'
-            ph = ov.get("finalize_phases_s") or {}
-            big = sorted(((v, k) for k, v in ph.items() if v and v >= 0.1), reverse=True)
-            if big:
-                txt += ": " + ", ".join(f"{k} {v:.2f} s" for v, k in big[:3])
-            txt += ")"
+            def top(ph):   # the phases worth naming
+                big = sorted(((v, k) for k, v in (ph or {}).items() if v and v >= 0.02), reverse=True)
+                return (": " + ", ".join(f"{k} {v:.2f} s" for v, k in big[:3])) if big else ""
+            txt += (f' (init {ov["init_s_max"]:.2f} s{top(ov.get("init_phases_s_max"))}; '
+                    f'finalize {ov["finalize_s"]:.2f} s{top(ov.get("finalize_phases_s"))})')
         rows.append(("miniprof overhead", txt))
     nrows = [(n.get("hostname"), n["cpu"].get("brand"), n["cpu"].get("uarch_name") or n["cpu"].get("uarch"),
               n.get("ranks"), n.get("logical_cpus"), n.get("numa_nodes"), n.get("kernel")) for n in nodes[:64]]

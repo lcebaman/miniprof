@@ -46,6 +46,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdint.h>
+#include <elf.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
 
 /* ── globals ─────────────────────────────────────────────────────────────── */
 static char g_exe_path[512] = {0};
@@ -498,6 +502,105 @@ int symbolizer_quick_name(void *pc, char *out, int outlen)
     return 1;
 }
 
+/* ── in-process ELF symbol table lookup ──────────────────────────────────────
+ * Function names straight from a DSO's .symtab (or .dynsym): no subprocess,
+ * only the section headers and symbol/string tables are paged in. Gives
+ * names, not file:line; addr2line is still used for those, and only when
+ * the DSO has DWARF line information (.debug_line). */
+typedef struct {
+    char        path[MINIPROF_SYMBOL_LEN];
+    const unsigned char *map;
+    size_t      size;
+    int         is_dyn;          /* ET_DYN (PIE/shared): symbol values are offsets */
+    int         has_lines;       /* .debug_line present */
+    const Elf64_Sym *sym;
+    size_t      nsym;
+    const char *str;
+    size_t      strsize;
+} elf_dso_t;
+
+#define ELF_CACHE 8
+static elf_dso_t g_elf[ELF_CACHE];
+static int g_nelf = 0;
+
+static const elf_dso_t *elf_open(const char *path)
+{
+    for (int i = 0; i < g_nelf; i++)
+        if (strcmp(g_elf[i].path, path) == 0) return g_elf[i].map ? &g_elf[i] : NULL;
+    if (g_nelf >= ELF_CACHE) return NULL;
+    elf_dso_t *e = &g_elf[g_nelf++];
+    memset(e, 0, sizeof(*e));
+    snprintf(e->path, sizeof(e->path), "%s", path);
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return NULL;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < (off_t)sizeof(Elf64_Ehdr)) { close(fd); return NULL; }
+    void *m = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+    if (m == MAP_FAILED) return NULL;
+    const Elf64_Ehdr *h = m;
+    size_t sz = (size_t)st.st_size;
+    if (memcmp(h->e_ident, ELFMAG, SELFMAG) != 0 || h->e_ident[EI_CLASS] != ELFCLASS64 ||
+        h->e_shoff == 0 || h->e_shoff + (size_t)h->e_shnum * sizeof(Elf64_Shdr) > sz ||
+        h->e_shstrndx >= h->e_shnum) {
+        munmap(m, sz); return NULL;
+    }
+    const Elf64_Shdr *sh = (const Elf64_Shdr *)((const char *)m + h->e_shoff);
+    const char *shstr = (const char *)m + sh[h->e_shstrndx].sh_offset;
+    const Elf64_Shdr *symtab = NULL, *dynsym = NULL;
+    for (int i = 0; i < h->e_shnum; i++) {
+        if (sh[i].sh_type == SHT_SYMTAB) symtab = &sh[i];
+        else if (sh[i].sh_type == SHT_DYNSYM) dynsym = &sh[i];
+        if (sh[i].sh_name < sh[h->e_shstrndx].sh_size &&
+            strcmp(shstr + sh[i].sh_name, ".debug_line") == 0) e->has_lines = 1;
+    }
+    const Elf64_Shdr *t = symtab ? symtab : dynsym;
+    if (!t || t->sh_link >= h->e_shnum || t->sh_offset + t->sh_size > sz) { munmap(m, sz); return NULL; }
+    const Elf64_Shdr *ts = &sh[t->sh_link];
+    if (ts->sh_offset + ts->sh_size > sz) { munmap(m, sz); return NULL; }
+    e->map = m; e->size = sz; e->is_dyn = h->e_type == ET_DYN;
+    e->sym = (const Elf64_Sym *)((const char *)m + t->sh_offset);
+    e->nsym = t->sh_size / sizeof(Elf64_Sym);
+    e->str = (const char *)m + ts->sh_offset;
+    e->strsize = ts->sh_size;
+    return e;
+}
+
+static int elf_has_lines(const char *path)
+{
+    const elf_dso_t *e = elf_open(path);
+    return e ? e->has_lines : 1;     /* unknown: let addr2line try */
+}
+
+/* name of the function containing pc in the DSO at path, demangled */
+static int elf_lookup(const char *path, void *pc, void *fbase, char *out, size_t n)
+{
+    const elf_dso_t *e = elf_open(path);
+    if (!e) return 0;
+    uint64_t a = (uint64_t)(uintptr_t)pc - (e->is_dyn ? (uint64_t)(uintptr_t)fbase : 0);
+    const char *best = NULL;
+    for (size_t i = 0; i < e->nsym; i++) {
+        const Elf64_Sym *y = &e->sym[i];
+        int ty = ELF64_ST_TYPE(y->st_info);
+        if ((ty != STT_FUNC && ty != STT_GNU_IFUNC) || y->st_shndx == SHN_UNDEF) continue;
+        if (a >= y->st_value && a < y->st_value + (y->st_size ? y->st_size : 1) &&
+            y->st_name < e->strsize) { best = e->str + y->st_name; break; }
+    }
+    if (!best || !*best) return 0;
+    if (best[0] == '_' && best[1] == 'Z') {
+        /* C++: demangle with the application's own runtime when it has one */
+        static char *(*dem)(const char *, char *, size_t *, int *) = NULL;
+        static int looked = 0;
+        if (!looked) { looked = 1; *(void **)&dem = dlsym(RTLD_DEFAULT, "__cxa_demangle"); }
+        int st = -1;
+        char *d = dem ? dem(best, NULL, NULL, &st) : NULL;
+        if (d && st == 0) { snprintf(out, n, "%s", d); free(d); return 1; }
+        free(d);
+    }
+    snprintf(out, n, "%s", best);
+    return 1;
+}
+
 /* ── main resolve entry point ────────────────────────────────────────────── */
 void symbolizer_resolve(miniprof_sym_t *syms, int n, int use_addr2line)
 {
@@ -514,11 +617,32 @@ void symbolizer_resolve(miniprof_sym_t *syms, int n, int use_addr2line)
         }
     }
 
-    /* pass 2: addr2line (grouped by DSO) */
+    /* pass 1b: function names from the DSO's own symbol table, in-process.
+     * The main executable may appear under the name it was started by. */
+    for (int i = 0; i < n; i++) {
+        if (!dsopaths[i][0]) continue;
+        if (dsopaths[i][0] != '/' && g_exe_path[0] == '/')
+            snprintf(dsopaths[i], MINIPROF_SYMBOL_LEN, "%.*s", MINIPROF_SYMBOL_LEN - 1, g_exe_path);
+        char nm[MINIPROF_SYMBOL_LEN];
+        if (elf_lookup(dsopaths[i], syms[i].pc, fbases[i], nm, sizeof(nm)))
+            snprintf(syms[i].name, MINIPROF_SYMBOL_LEN, "%s", nm);
+    }
+
+    /* pass 2: addr2line (grouped by DSO) for file:line, only where the DSO
+     * has line information (or a name is still missing): starting it costs
+     * tens of milliseconds, seconds on a cold network filesystem.
+     * MINIPROF_ADDR2LINE_ALWAYS=1 runs it regardless. */
+    const char *a2l_always = getenv("MINIPROF_ADDR2LINE_ALWAYS");
     if (use_addr2line) {
         int *done = calloc(n, sizeof(int));
         for (int i = 0; i < n; i++) {
             if (done[i] || !dsopaths[i][0]) continue;
+            if (!(a2l_always && atoi(a2l_always)) && !elf_has_lines(dsopaths[i]) &&
+                strcmp(syms[i].name, "??") != 0 && syms[i].name[0] != '0') {
+                for (int j = i; j < n; j++)
+                    if (strcmp(dsopaths[j], dsopaths[i]) == 0) done[j] = 1;
+                continue;
+            }
 
             int idxs[256];
             int cnt = 0;

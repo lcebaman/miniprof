@@ -36,6 +36,8 @@ static int   g_in = -1, g_out = -1;          /* helper's stdin / stdout */
 static char  g_reason[384] = "";
 static int   g_interval = 100;
 static int   g_verbose = 0;
+static int   g_pending = 0;                  /* "ok" line not read yet */
+static char  g_path[256] = "";
 static char  g_buf[16384];
 static size_t g_len = 0;
 
@@ -172,25 +174,40 @@ void nodemon_start(const char *uarch, int verbose)
         reap();
         return;
     }
+    /* Do not wait for the helper's "ok": opening its counters takes tens of
+     * milliseconds, and every rank would wait for this one at the
+     * application's first collective. The answer is read at stop; the
+     * helper's window starts when its counters are open, a few ms in. */
+    g_pending = 1;
+    snprintf(g_path, sizeof(g_path), "%.250s", path);
+}
+
+/* the helper's first line: "ok ..." once its counters are open */
+static int collect_ok(void)
+{
+    if (!g_pending) return 0;
+    g_pending = 0;
     char line[512];
     if (read_line(line, sizeof(line), 5000) != 0) {
-        snprintf(g_reason, sizeof(g_reason), "helper %.160s did not answer", path);
+        snprintf(g_reason, sizeof(g_reason), "helper %.160s did not answer", g_path);
         reap();
-        return;
+        return -1;
     }
     if (strncmp(line, "ok ", 3) != 0) {
         snprintf(g_reason, sizeof(g_reason), "%.380s",
                  strncmp(line, "error ", 6) == 0 ? line + 6 : line);
         reap();
-        return;
+        return -1;
     }
     if (g_verbose) fprintf(stderr, "[miniprof] nodemon: %s\n", line);
+    return 0;
 }
 
 void nodemon_stop(nm_result_t *out)
 {
     memset(out, 0, sizeof(*out));
     out->interval_ms = g_interval;
+    if (g_pid > 0 && collect_ok() != 0) g_pid = -1;
     if (g_pid <= 0) {
         snprintf(out->reason, sizeof(out->reason), "%s", g_reason[0] ? g_reason : "not started");
         return;

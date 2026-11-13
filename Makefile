@@ -659,7 +659,7 @@ run-calibrate-test: $(CALIBRATE) $(NODEMON) examples/membw_validate
 	@MINIPROF_MODE=snapshot MINIPROF_COUNTERS_TEST=1 MINIPROF_NODEMON_TEST=1 \
 	MINIPROF_MEMORY_INTERVAL_MS=10 MINIPROF_CALIBRATION=miniprof_calibration_quick.json \
 	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_roof_swtest.json \
-	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 100 >/dev/null || exit 1; \
 	python3 tools/validate_roofline.py miniprof_snapshot_roof_swtest.json --plumbing; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: roofline plumbing needs software perf events"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi
@@ -681,14 +681,14 @@ run-memory-validate: $(NODEMON) examples/membw_validate
 	@echo "--- memory block plumbing (helper test mode, MINIPROF_NODEMON_TEST=1)"
 	@MINIPROF_MODE=snapshot MINIPROF_NODEMON_TEST=1 MINIPROF_MEMORY_INTERVAL_MS=10 \
 	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem_swtest.json \
-	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 100 >/dev/null || exit 1; \
 	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest.json --plumbing; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here (perf_event_paranoid)"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi; \
 	echo "--- memory block plumbing, partial coverage (MINIPROF_NODEMON_TEST=partial)"; \
 	MINIPROF_MODE=snapshot MINIPROF_NODEMON_TEST=partial MINIPROF_MEMORY_INTERVAL_MS=10 \
 	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_mem_swtest_part.json \
-	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 10 >/dev/null || exit 1; \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/membw_validate 1048576 100 >/dev/null || exit 1; \
 	python3 tools/validate_memory.py miniprof_snapshot_mem_swtest_part.json --plumbing --expect-coverage; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable here"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi; \
