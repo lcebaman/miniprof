@@ -60,6 +60,49 @@ make mpa-check
 The default target, `make`, builds the library and all bundled examples.
 See [Examples](#examples) for example-specific targets.
 
+### Installing for users (module + launcher)
+
+```bash
+make install PREFIX=/opt/miniprof/1.1-openmpi5 MODULE_VERSION=1.1-openmpi5
+```
+
+installs `bin/miniprof` (the launcher), `miniprof-report`, `miniprof-diff`,
+`miniprof-csv`, `miniprof-calibrate`, `lib/libminiprof.so` and
+`lib/miniprof-nodemon`, the Python tools under `share/miniprof/tools`, and
+module files: `share/modulefiles/miniprof/<MODULE_VERSION>.lua` (Lmod) and
+`share/modulefiles-tcl/miniprof/<MODULE_VERSION>` (Tcl). Build one
+installation per MPI stack users run with (the library is bound to one MPI
+ABI); the module's help says which. The module sets `PATH`,
+`MINIPROF_HOME` and the site defaults `MINIPROF_LEVEL=basic`,
+`MINIPROF_CALIBRATION=<prefix>/share/miniprof/calib` and
+`MINIPROF_NODEMON=<prefix>/lib/miniprof-nodemon`; edit them in the
+module file, or override them after loading.
+
+Once per installation, as root: if `perf_event_paranoid > 0`,
+`setcap cap_perfmon+ep <prefix>/lib/miniprof-nodemon` (the filesystem must
+keep file capabilities; otherwise install the helper on node-local disk and
+point `MINIPROF_NODEMON` at it). Once per node type:
+`miniprof-calibrate -o <prefix>/share/miniprof/calib` for the roofline.
+
+Users then need no recompilation:
+
+```bash
+module load miniprof
+mpirun -np 96 --map-by ppr:48:socket:pe=2 miniprof pw.x -in scf.in
+#   miniprof: pw.x, 96 ranks x 2 threads on 2 node(s), 412.3 s: compute 71%, MPI 27% (MPI_Alltoall 14%), I/O 2%
+#   miniprof: report /path/miniprof_pw.x_20261113_1105/report.html
+```
+
+`miniprof` goes in front of the executable, after `mpirun`/`srun` and any
+binding wrapper. It preloads the library into the application only, and on
+rank 0 writes `miniprof_<app>_<date>_<time>/` with `snapshot.json`,
+`report.txt`, `report.html`, `csv/` and `run.txt`. Options: `--level
+basic|topdown|roofline|full`, `-o DIR`, `--no-report`, `-q`, and
+`miniprof --check APP` to see whether the application can be profiled here
+(dynamically linked against the same MPI, OpenMP runtime with OMPT, memory
+helper, calibration). An application it cannot attach to runs unprofiled,
+with a message.
+
 ### Transparent sampling via `LD_PRELOAD`
 
 Because miniprof is a shared library, sample mode needs **zero changes**

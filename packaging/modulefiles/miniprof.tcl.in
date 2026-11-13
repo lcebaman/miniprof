@@ -1,0 +1,26 @@
+#%Module1.0
+## miniprof @VERSION@ (Tcl Environment Modules), installed by `make install`
+proc ModulesHelp { } {
+    puts stderr "miniprof @VERSION@: low-overhead MPI + OpenMP profiler (snapshot mode)."
+    puts stderr ""
+    puts stderr "  mpirun -np 96 --map-by ppr:48:socket:pe=2 miniprof pw.x -in scf.in"
+    puts stderr "  srun -n 96 miniprof pw.x -in scf.in"
+    puts stderr ""
+    puts stderr "Results in miniprof_<app>_<date>/ (report.html, report.txt, snapshot.json)."
+    puts stderr "  miniprof --level topdown|roofline|full ...   more hardware detail"
+    puts stderr "  miniprof --check pw.x                        can it profile pw.x here?"
+    puts stderr "  miniprof-diff A/snapshot.json B/snapshot.json --html diff.html"
+    puts stderr ""
+    puts stderr "Built against: @MPI@"
+}
+module-whatis "miniprof @VERSION@: MPI + OpenMP snapshot profiler (no recompilation)"
+
+set prefix @PREFIX@
+setenv       MINIPROF_HOME        $prefix
+prepend-path PATH                 $prefix/bin
+prepend-path MANPATH              $prefix/share/man
+
+# site defaults: change here, or override in the environment after loading
+setenv       MINIPROF_LEVEL       basic
+setenv       MINIPROF_CALIBRATION $prefix/share/miniprof/calib
+setenv       MINIPROF_NODEMON     $prefix/lib/miniprof-nodemon
