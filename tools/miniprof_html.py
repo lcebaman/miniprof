@@ -811,7 +811,15 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
             ("Started (UTC)", run.get("start_utc")), ("Snapshot level", run.get("level"))]
     ov = doc.get("overhead") or {}
     if ov:
-        rows.append(("miniprof overhead", f'{100 * (ov.get("fraction_of_elapsed") or 0):.2f}% of elapsed'))
+        txt = f'{100 * (ov.get("fraction_of_elapsed") or 0):.2f}% of elapsed'
+        if ov.get("init_s_max") is not None and ov.get("finalize_s") is not None:
+            txt += f' (init {ov["init_s_max"]:.2f} s, finalize {ov["finalize_s"]:.2f} s'
+            ph = ov.get("finalize_phases_s") or {}
+            big = sorted(((v, k) for k, v in ph.items() if v and v >= 0.1), reverse=True)
+            if big:
+                txt += ": " + ", ".join(f"{k} {v:.2f} s" for v, k in big[:3])
+            txt += ")"
+        rows.append(("miniprof overhead", txt))
     nrows = [(n.get("hostname"), n["cpu"].get("brand"), n["cpu"].get("uarch_name") or n["cpu"].get("uarch"),
               n.get("ranks"), n.get("logical_cpus"), n.get("numa_nodes"), n.get("kernel")) for n in nodes[:64]]
     body = table(["", ""], rows, text=(1,)) + "<h3>Nodes</h3>" + table(

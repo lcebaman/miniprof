@@ -48,6 +48,10 @@ static snapshot_level_t g_level = SNAPSHOT_BASIC;
 static char   g_outfile[512]    = MINIPROF_DEFAULT_SNAPSHOT_OUTPUT;
 static int    g_verbose         = 0;
 static double g_init_s          = 0.0;   /* cost of snapshot_init() itself  */
+/* rank 0's finalize, phase by phase (seconds), for the overhead block */
+enum { FIN_NODEMON, FIN_REDUCE, FIN_REGIONS, FIN_OPENMP, FIN_GATHER, FIN_NPHASES };
+static const char *const g_fin_names[FIN_NPHASES] = { "nodemon", "reductions", "regions", "openmp", "gather" };
+static double g_fin_s[FIN_NPHASES];
 static char   g_start_utc[32]   = "";
 static char   g_cmdline[512]    = "";    /* rank 0 only                     */
 static int    g_thread_level    = -1;
@@ -1703,6 +1707,12 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_dbl(&w, "finalize_s", finalize_s);
     jw_dbl(&w, "fraction_of_elapsed",
            el_max > 0 ? (init_max + finalize_s) / el_max : 0.0);
+    /* where rank 0's finalize time went: nodemon (stopping the memory
+     * helper), reductions, regions, openmp (includes naming the parallel
+     * regions with the symbolizer) and gather */
+    jw_begin_obj(&w, "finalize_phases_s");
+    for (int i = 0; i < FIN_NPHASES; i++) jw_dbl(&w, g_fin_names[i], g_fin_s[i]);
+    jw_end_obj(&w);
     jw_end_obj(&w);
 
     jw_begin_arr(&w, "nodes");
@@ -2007,8 +2017,10 @@ static void reduce_omp_regions(int rank, int size)
 
 void snapshot_finalize(double elapsed_s)
 {
-    double t0 = now_s();
+    double t0 = now_s(), tp = t0;
+#define FIN_MARK(PH) do { double t_ = now_s(); g_fin_s[PH] = t_ - tp; tp = t_; } while (0)
     if (g_node_leader) nodemon_stop(&g_nm);   /* first: end of the measured window */
+    FIN_MARK(FIN_NODEMON);
     if (g_verbose && g_node_leader)
         fprintf(stderr, "[miniprof] nodemon: %s (%d sockets, %d samples)\n",
                 g_nm.available ? "ok" : g_nm.reason, g_nm.nsockets, g_nm.samples);
@@ -2055,8 +2067,11 @@ void snapshot_finalize(double elapsed_s)
     PMPI_Reduce(snap.hist_ns, hist_sum.hist_ns, MPIC_COUNT * MPI_HIST_BINS,
                 MPI_UINT64_T, MPI_SUM, 0, MPI_COMM_WORLD);
 
+    FIN_MARK(FIN_REDUCE);
     reduce_regions(rank, size);
+    FIN_MARK(FIN_REGIONS);
     reduce_omp_regions(rank, size);
+    FIN_MARK(FIN_OPENMP);
 
     mine.finalize_s = now_s() - t0;
 
@@ -2101,6 +2116,7 @@ void snapshot_finalize(double elapsed_s)
             char *nl = strchr(lib, '\n');
             if (nl) *nl = '\0';
         }
+        FIN_MARK(FIN_GATHER);
         double finalize_s = now_s() - t0;
         if (write_json(all_ranks, size, all_nodes, nnodes, lib, finalize_s,
                        &hist_sum) == 0
@@ -2111,4 +2127,5 @@ void snapshot_finalize(double elapsed_s)
     }
     free(all_ranks);
     free(all_nodes);
+#undef FIN_MARK
 }
