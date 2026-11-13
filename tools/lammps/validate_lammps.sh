@@ -32,6 +32,8 @@ OUT=$PWD/miniprof_lammps_$(date +%Y%m%d_%H%M%S)
 [ -x "$LMP" ] || { echo "no lmp at $LMP"; exit 1; }
 [ -f "$MP/libminiprof.so" ] || { echo "no $MP/libminiprof.so: make lib"; exit 1; }
 [ -n "${MPIRUN_ARGS:-}" ] || { echo "set MPIRUN_ARGS (rank count and mapping)"; exit 1; }
+command -v mpirun >/dev/null || { echo "mpirun not on PATH: load your MPI module (inside the allocation)"; exit 1; }
+"$LMP" -h >/dev/null 2>&1 || { echo "$LMP does not start here (missing libraries?):"; "$LMP" -h 2>&1 | head -3; exit 1; }
 if [ -z "${BENCH:-}" ]; then
     for b in "$(dirname "$LMP")/../lammps/bench" "$(dirname "$LMP")/../bench" "$(dirname "$LMP")/../../bench"; do
         [ -f "$b/data.rhodo" ] && BENCH=$(cd "$b" && pwd) && break
@@ -115,6 +117,10 @@ for run in $RUNS; do
     t1=$(date +%s.%N)
     echo "$t0 $t1" | awk '{printf "%.3f\n", $2 - $1}' > "$d/wall_s.txt"
     echo "exit $rc, wall $(cat "$d/wall_s.txt") s"
+    if [ $rc != 0 ] && [ $i = 1 ]; then
+        echo "!! the first run failed; its output ($d/stdout.txt):"; head -20 "$d/stdout.txt"
+        echo "!! stopping: fix the launch (modules, MPIRUN_ARGS, allocation) and rerun"; exit 1
+    fi
     grep -E "^Loop time|^Performance|MPI tasks x" "$d/log.lammps" 2>/dev/null
     for f in "$d"/dump.rhodo.*.txt; do
         [ -f "$f" ] || continue
