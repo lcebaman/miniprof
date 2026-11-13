@@ -36,6 +36,7 @@
  */
 
 #define _GNU_SOURCE
+#include "spawn.h"
 #include "symbolizer.h"
 #include "../include/miniprof.h"
 #include <mpi.h>
@@ -179,7 +180,7 @@ static void resolve_lines_llvm(miniprof_sym_t *syms, void **fbases,
         idx[m++] = i;
     }
     if (!m) return;
-    FILE *fp = popen(cmd, "r");
+    FILE *fp = mp_popen(cmd);
     if (!fp) return;
     char func[MINIPROF_SYMBOL_LEN], fl[MINIPROF_SYMBOL_LEN];
     for (int k = 0; k < m; k++) {
@@ -200,7 +201,7 @@ static void resolve_lines_llvm(miniprof_sym_t *syms, void **fbases,
         snprintf(syms[idx[k]].file, MINIPROF_SYMBOL_LEN, "%s", b ? b + 1 : fl);
         syms[idx[k]].line = line;
     }
-    pclose(fp);
+    mp_pclose(fp);
 }
 
 static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
@@ -231,7 +232,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
                     pos, cmd);
     }
 
-    FILE *fp = popen(cmd, "r");
+    FILE *fp = mp_popen(cmd);
     if (!fp) return;
 
     char func[MINIPROF_SYMBOL_LEN];
@@ -259,7 +260,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
             syms[i].line = atoi(colon+1);
         }
     }
-    pclose(fp);
+    mp_pclose(fp);
 
     if (g_verbose) {
         int rank = 0;
@@ -293,7 +294,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
             }
         }
 
-        fp = popen(cmd, "r");
+        fp = mp_popen(cmd);
         if (fp) {
             int pass2_resolved = 0;
             for (int k = 0; k < retry_n; k++) {
@@ -316,7 +317,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
                     syms[i].line = atoi(colon+1);
                 }
             }
-            pclose(fp);
+            mp_pclose(fp);
 
             if (g_verbose) {
                 int rank = 0;
@@ -414,7 +415,7 @@ static void resolve_nm_fallback(miniprof_sym_t *syms, int n,
     /* read nm output */
     char cmd[600];
     snprintf(cmd, sizeof(cmd), "nm -n '%s' 2>/dev/null", exe_path);
-    FILE *fp = popen(cmd, "r");
+    FILE *fp = mp_popen(cmd);
     if (!fp) return;
 
     nm_sym_t *nm_syms = calloc(NM_MAX_SYMS, sizeof(nm_sym_t));
@@ -431,7 +432,7 @@ static void resolve_nm_fallback(miniprof_sym_t *syms, int n,
         snprintf(nm_syms[nm_n].name, sizeof(nm_syms[nm_n].name), "%s", name);
         nm_n++;
     }
-    pclose(fp);
+    mp_pclose(fp);
 
     if (nm_n == 0) {
         if (g_verbose)

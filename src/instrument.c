@@ -28,6 +28,7 @@
  */
 
 #define _GNU_SOURCE
+#include "spawn.h"
 #include "trace_store.h"
 #include "sampler_hwc.h"
 #include "../include/miniprof.h"
@@ -110,7 +111,7 @@ static void resolve_trace_addresses(void)
 
     char cmd[600];
     snprintf(cmd, sizeof(cmd), "nm '%s' 2>/dev/null", g_exe_path);
-    FILE *fp = popen(cmd, "r");
+    FILE *fp = mp_popen(cmd);
     if (!fp) return;
 
     char line[512];
@@ -131,7 +132,7 @@ static void resolve_trace_addresses(void)
             }
         }
     }
-    pclose(fp);
+    mp_pclose(fp);
 }
 
 /* ── public: called once from miniprof_init() in trace mode ─────────────── */

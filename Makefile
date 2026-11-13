@@ -105,6 +105,7 @@ LIB_SRCS := src/profile_store.c    \
             src/sampler.c          \
             src/sampler_hwc.c      \
             src/symbolizer.c       \
+            src/spawn.c            \
             src/aggregator.c       \
             src/mpa_writer.c       \
             src/trace_store.c      \
