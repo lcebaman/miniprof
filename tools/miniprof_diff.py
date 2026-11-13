@@ -165,9 +165,11 @@ def analyse(A: Run, B: Run) -> dict:
                                 ("busy_cores_per_rank", "busy cores per rank", -1)):
             r = fb[key] / fa[key]
             contrib = sign * math.log(r)          # contribution to ln(T_B/T_A)
-            sh = 100 * contrib / lt if abs(lt) > 1e-9 else None
+            # shares of a near-zero log ratio are meaningless (11000%): give
+            # them only when compute changed by more than 2%
+            sh = 100 * contrib / lt if abs(lt) > math.log(1.02) else None
             rows.append((name, fa[key], fb[key], r, contrib, 0.0 if sh is not None and abs(sh) < 0.5 else sh))
-        out["factors"] = {"rows": rows, "time_ratio": B.comp / A.comp,
+        out["factors"] = {"rows": rows, "time_ratio": B.comp / A.comp, "unchanged": abs(lt) <= math.log(1.02),
                           "check": math.exp(sum(r[4] for r in rows))}
     # top-down
     if A.td and B.td:
@@ -246,7 +248,12 @@ def verdict(A, B, d) -> list:
             v.append(f"Per average rank the run {'lost' if tot > 0 else 'saved'} {abs(tot):.2f} s; "
                      f"{k} accounts for {abs(dd):.2f} s of it ({share:.0f}% of the change).")
     f = d.get("factors")
-    if f and f["rows"]:
+    if f and f["rows"] and f.get("unchanged"):
+        moved = [r for r in f["rows"] if abs(r[4]) > math.log(1.05)]
+        v.append(f"Compute time unchanged (x{f['time_ratio']:.2f})"
+                 + (": " + ", ".join(f"{r[0]} x{r[3]:.2f}" for r in moved) + " moved but cancel out."
+                    if moved else "."))
+    elif f and f["rows"]:
         lead = max(f["rows"], key=lambda r: abs(r[4]))
         name, fa, fb, rr, contrib, share = lead
         direction = "shortened" if contrib < 0 else "lengthened"
@@ -288,9 +295,9 @@ def verdict(A, B, d) -> list:
             v.append(f"Top-down (compute): largest shift is {k.replace('_', ' ')}, {a:.0f}% -> {b:.0f}% of slots{extra}.")
     for tag, x in zip("AB", d["roofline"]):
         if x and x["bound"] == "memory" and not x["estimate"] and x["att"] < 50:
-            v.append(f"{tag} is memory-bound yet at {x['att']:.0f}% of its DRAM roof over the whole run: "
-                     "this suggests memory latency rather than bandwidth limits it (or that much of the "
-                     "run is spent outside compute).")
+            v.append(f"{tag} is below both roofs: memory side of the ridge but at {x['att']:.0f}% of its DRAM "
+                     "roof over the whole run, so bandwidth is not the limit (latency or the core itself, "
+                     "or much of the run spent outside compute).")
     mem = d.get("memory")
     if mem and mem[0] and mem[1] and mem[0].get("energy_j") and mem[1].get("energy_j"):
         er = mem[1]["energy_j"] / mem[0]["energy_j"]
@@ -335,7 +342,8 @@ def text(d, A, B) -> str:
             p(f"   {name:<28} {fa:12.4g} {fb:14.4g} {rr:9.3f} {fmt(share, '{:12.0f}%'):>13}")
         p(f"   {'compute time ratio':<28} {'':12} {'':14} {f['time_ratio']:9.3f}   "
           f"(product of the factors: {f['check']:.3f})")
-        p("   shares are of ln(T_B/T_A): negative = that factor worked against the change")
+        p("   shares are of ln(T_B/T_A): negative = that factor worked against the change"
+          if not f.get("unchanged") else "   compute time within 2%: no shares (they would divide by ~0)")
     if d.get("counters"):
         p("")
         p(" Counters (whole run)                    A            B         B/A")
@@ -384,7 +392,8 @@ def text(d, A, B) -> str:
             if not x:
                 p(f"   {tag}  not available")
                 continue
-            p(f"   {tag}  {x['gflops']:.1f} GFLOP/s at {x['ai']:.3g} FLOP/B, {x['bound']}-bound, "
+            regime = "below both roofs" if x["att"] < 50 else f"{x['bound']}-bound"
+            p(f"   {tag}  {x['gflops']:.1f} GFLOP/s at {x['ai']:.3g} FLOP/B, {regime} ({x['bound']} side), "
               f"{x['att']:.0f}% of attainable (peak {x['peak']:.0f} {x['peak_key']}, DRAM {x['roof_bw']:.0f} GB/s)"
               + ("  [estimate]" if x["estimate"] else ""))
     if d.get("openmp"):
