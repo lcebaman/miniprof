@@ -8,6 +8,7 @@ proc ModulesHelp { } {
     puts stderr ""
     puts stderr "Results in miniprof_<app>_<date>/ (report.html, report.txt, snapshot.json)."
     puts stderr "  miniprof --level topdown|roofline|full ...   more hardware detail"
+    puts stderr "  miniprof --sample ...                        time per routine and source line"
     puts stderr "  miniprof --check pw.x                        can it profile pw.x here?"
     puts stderr "  miniprof-diff A/snapshot.json B/snapshot.json --html diff.html"
     puts stderr ""
