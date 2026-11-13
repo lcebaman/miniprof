@@ -130,6 +130,28 @@ def _sections(doc):
     }
 
 
+def serial_compute_pct(omp, split):
+    """Share of the run that is serial compute: time outside OpenMP parallel
+    regions, less MPI and I/O (which happen outside regions unless the
+    application calls them from inside one; then this is a lower bound)."""
+    if not omp or not omp.get("available") or omp.get("serial_pct_of_elapsed") is None:
+        return None
+    out = (split.get("mpi") or 0) + (split.get("io") or 0)
+    if out > omp["serial_pct_of_elapsed"]:
+        return None   # MPI/I/O also inside regions: the two cannot be separated
+    return omp["serial_pct_of_elapsed"] - out
+
+
+def roof_regime(rn, below_pct=50.0):
+    """'memory-bound', 'compute-bound', or 'below both roofs' when the run
+    reaches less than below_pct % of what its side of the ridge allows."""
+    if not rn:
+        return None
+    if (rn.get("pct_of_attainable") or 0) < below_pct:
+        return "below both roofs"
+    return f"{rn['bound']}-bound"
+
+
 def observations(doc: dict, args) -> list:
     """Threshold rules shared by the text and HTML reports: a list of
     {"section", "text"} in the order the rules run."""
@@ -138,6 +160,7 @@ def observations(doc: dict, args) -> list:
     v = _sections(doc)
     split, comp, funcs, cpuu = v["split"], v["comp"], v["funcs"], v["cpuu"]
     omp, rn, tdc, mem, cd = v["omp"], v["rn"], v["tdc"], v["mem"], v["cd"]
+    serial_c = serial_compute_pct(omp, split)
     obs = []
     add = lambda sec, text: obs.append({"section": sec, "text": text})
     if split.get("mpi", 0) > args.mpi_pct:
@@ -154,9 +177,12 @@ def observations(doc: dict, args) -> list:
         add("parallel", f"CPU utilisation is {cpuu['avg']:.1f}% (< {args.cpu_util_pct:g}%): "
                    "ranks may be bound to more cores than they use, or be idle/blocked.")
     if omp and omp.get("available"):
-        if omp["serial_pct_of_elapsed"] > args.serial_pct:
-            add("openmp", f"{omp['serial_pct_of_elapsed']:.1f}% of the run is outside OpenMP parallel "
-                       f"regions (> {args.serial_pct:g}%): only one thread per rank works there.")
+        if (serial_c if serial_c is not None else omp["serial_pct_of_elapsed"]) > args.serial_pct:
+            add("openmp", (f"{serial_c:.1f}% of the run is serial compute outside OpenMP parallel regions "
+                           f"(> {args.serial_pct:g}%; {omp['serial_pct_of_elapsed']:.1f}% outside regions, less MPI "
+                           "and I/O)" if serial_c is not None else
+                           f"{omp['serial_pct_of_elapsed']:.1f}% of the run is outside OpenMP parallel regions "
+                           f"(> {args.serial_pct:g}%)") + ": only one thread per rank works there.")
         if omp["imbalance_pct"] > args.omp_imbalance_pct:
             worst = max(omp.get("regions") or [{}], key=lambda r: r.get("barrier_wait_s", 0))
             add("openmp", f"OpenMP threads spend {omp['imbalance_pct']:.1f}% of their time waiting at "
@@ -167,8 +193,10 @@ def observations(doc: dict, args) -> list:
             add("openmp", f"OpenMP lock/critical contention: {omp['lock_wait_pct']:.1f}% of thread time.")
     if rn:
         if rn["bound"] == "memory" and rn["pct_of_dram_bw"] < args.roof_dram_pct and not v["roof_est"]:
-            add("roofline", f"Memory-bound but only {rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth: "
-                       "latency-bound access (pointer chasing, poor prefetching) or too few cores/channels in use.")
+            add("roofline", f"Below both roofs: on the memory side of the ridge but at only "
+                       f"{rn['pct_of_dram_bw']:.0f}% of the node's DRAM bandwidth, so bandwidth is not the "
+                       "limit: memory latency (pointer chasing, poor prefetching) or the core itself "
+                       "(branches, dependencies; see top-down), or few cores/channels in use.")
         if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < args.roof_peak_pct:
             add("roofline", f"Compute-bound by intensity but at {rn['pct_of_peak_gflops']:.0f}% of peak FLOPs: "
                        "vectorisation, dependency chains or front-end limits (see top-down).")
@@ -399,7 +427,7 @@ def report(doc: dict, args) -> str:
                 mix = ("read-only" if rn.get("read_share_pct") is None
                        else f"at {rn['read_share_pct']:.0f}% reads")
                 p(f"   this run (node 0)   {rn['gflops_per_s']:.1f} GFLOP/s at {rn['arithmetic_intensity']:.3g} FLOP/B: "
-                  f"{rn['bound'].upper()}-bound (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s {mix}, "
+                  f"{roof_regime(rn).upper()}, {rn['bound']} side of the ridge (DRAM ceiling {rn['dram_ceiling_gb_s']:.0f} GB/s {mix}, "
                   f"ridge {rn['ridge_flop_per_byte']:.2f} FLOP/B)")
                 p(f"   efficiency          {rn['pct_of_attainable']:5.1f}% of attainable  "
                   f"({rn['pct_of_peak_gflops']:.1f}% of peak FLOPs, {rn['pct_of_dram_bw']:.1f}% of DRAM bandwidth)")
@@ -466,7 +494,9 @@ def report(doc: dict, args) -> str:
             p(f" OpenMP                 {omp['runtime']}, {omp['threads'] / nr:g} threads/rank"
               + (f", {omp['ranks_without_ompt']} rank(s) without OMPT" if omp.get("ranks_without_ompt") else ""))
             p(f"   Serial time         {omp['serial_pct_of_elapsed']:5.1f}%   "
-              f"(outside parallel regions, avg {human_time(omp['serial_s']['avg'])}/rank)")
+              f"(outside parallel regions, avg {human_time(omp['serial_s']['avg'])}/rank"
+              + (f"; serial compute {sc:.1f}% after MPI and I/O" if (sc := serial_compute_pct(omp, split)) is not None else "")
+              + ")")
             p(f"   Barrier imbalance   {omp['imbalance_pct']:5.1f}%   of thread time in parallel "
               f"regions ({human_time(tt['barrier_wait'] / nr)}/rank)")
             if tt["lock_wait"] > 0:

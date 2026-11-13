@@ -475,6 +475,7 @@ if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+h>innerHeight-8)y=e.clientY-h-14;t.sty
 
 
 def render(doc: dict, obs: list, thresholds: str = "") -> str:
+    from miniprof_report import serial_compute_pct, roof_regime
     run = doc.get("run") or {}
     nodes = doc.get("nodes") or []
     m = doc.get("metrics") or {}
@@ -517,7 +518,7 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
     roof = m.get("roofline") or {}
     if roof.get("available") and roof.get("nodes"):
         rn = roof["nodes"][0]
-        tiles.append(tile("Roofline", f'{rn["bound"]}-bound', f'{rn["pct_of_attainable"]:.0f}% of attainable'
+        tiles.append(tile("Roofline", roof_regime(rn), f'{rn["pct_of_attainable"]:.0f}% of attainable, {rn["bound"]} side'
                           + (" · estimate" if roof.get("estimate") else "")))
 
     # ---- observations
@@ -611,7 +612,9 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
             nr = run.get("nranks") or 1
             tt = omp["thread_time_s"]
             body = f'<p class="note">{esc(omp["runtime"])}, {omp["threads"] / nr:g} threads per rank.</p>'
-            body += '<div class="tiles">' + tile("Serial", f'{omp["serial_pct_of_elapsed"]:.1f}%', "outside parallel regions") \
+            sc = serial_compute_pct(omp, m.get("parallel", {}).get("time_split_pct") or {})
+            body += '<div class="tiles">' + tile("Serial", f'{omp["serial_pct_of_elapsed"]:.1f}%', "outside parallel regions"
+                                                 + (f"; {sc:.1f}% serial compute after MPI and I/O" if sc is not None else "")) \
                 + tile("Barrier wait", f'{omp["imbalance_pct"]:.1f}%', "of thread time in regions") \
                 + tile("Lock wait", f'{omp["lock_wait_pct"]:.1f}%', f'{ht(tt["lock_wait"] / nr)} per rank') + "</div>"
             regs = sorted(omp.get("regions") or [], key=lambda r: -r["wall_s_per_rank"])[:15]
