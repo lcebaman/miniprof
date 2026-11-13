@@ -91,6 +91,8 @@ class Run:
         avg = lambda k: sum(r.get(k) or 0 for r in ranks) / len(ranks) if ranks else None
         self.comp, self.mpi, self.io = avg("compute_s"), avg("mpi_s"), avg("io_s")
         self.funcs = {f["name"]: f for f in g(par, "mpi", "by_function", default=[])}
+        hs = m.get("hotspots") or {}
+        self.hot = {f["name"]: f for f in hs.get("functions") or []} if hs.get("available") else {}
         cnt = m.get("counters") or {}
         self.cnt = cnt if cnt.get("available") else {}
         self.cd = self.cnt.get("derived") or {}
@@ -187,6 +189,15 @@ def analyse(A: Run, B: Run) -> dict:
         fr.append((n, a, b, (b or 0) - (a or 0),
                    g(A.funcs.get(n), "calls"), g(B.funcs.get(n), "calls")))
     out["mpi_functions"] = sorted(fr, key=lambda x: -abs(x[3]))
+    # hotspots (both runs with --hotspots): CPU seconds per rank in each function
+    hr = []
+    if A.hot and B.hot:
+        for n in set(A.hot) | set(B.hot):
+            a = (A.hot.get(n) or {}).get("cpu_s_per_rank")
+            b = (B.hot.get(n) or {}).get("cpu_s_per_rank")
+            grp = (A.hot.get(n) or B.hot.get(n) or {}).get("group", "")
+            hr.append((n, a, b, (b or 0) - (a or 0), grp))
+    out["hotspots"] = sorted(hr, key=lambda x: -abs(x[3]))
     # regions by change in time per rank
     rr = []
     for n in set(A.regions) | set(B.regions):
@@ -362,6 +373,12 @@ def text(d, A, B) -> str:
         for n, a, b, dd, rr, gfa, gfb, ipa, ipb in regs:
             p(f"   {n[:22]:<22} {fmt(a, '{:9.3f}'):>10} {fmt(b, '{:10.3f}'):>10} {dd:+10.3f} "
               f"{fmt(rr, '{:7.2f}'):>7}   {fmt(gfa, '{:.2f}')} -> {fmt(gfb, '{:.2f}')}")
+    hot = d.get("hotspots", [])[:12]
+    if hot:
+        p("")
+        p(" Hotspots (CPU per rank)          A          B     change   group  (largest changes)")
+        for n, a, b, dd, grp in hot:
+            p(f"   {n.split('(')[0][-30:]:<30} {fmt(a, '{:7.3f}'):>8} {fmt(b, '{:8.3f}'):>8} {dd:+9.3f}   {grp}")
     fn = d["mpi_functions"][:10]
     if fn:
         p("")
@@ -478,6 +495,14 @@ def html(d, A, B) -> str:
                           H.num(gfb, "{:.2f}"), H.num(ipa, "{:.2f}"), H.num(ipb, "{:.2f}"))
                          for n, a, b, dd, rr, gfa, gfb, ipa, ipb in regs])
         section("regions", "Regions (time per rank)", body)
+
+    hot = d.get("hotspots", [])[:12]
+    if hot:
+        body = H.legend([(1, "A"), (2, "B")])
+        body += H.paired_bars([(n.split("(")[0][-34:], a, b) for n, a, b, *_ in hot], names, fmt="{:.3f}")
+        body += H.table(["function", "group", "A", "B", "change"], text=(0, 1),
+                        rows=[(n, grp, H.ht(a), H.ht(b), f"{dd:+.3f} s") for n, a, b, dd, grp in hot])
+        section("hotspots", "Hotspots: largest changes in CPU time per rank", body)
 
     fn = d["mpi_functions"][:12]
     if fn:

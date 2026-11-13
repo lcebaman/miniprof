@@ -11,6 +11,8 @@
 #
 # Options (before the application):
 #   -l, --level L    basic (default), topdown, roofline or full
+#   -H, --hotspots   add the top functions (CPU-time sampling, ~100/s per
+#                    thread) to the snapshot and its report; off by default
 #   -s, --sample     sampling profile instead: time per routine and source
 #                    line, by group (USER, MPI, LIBC, ...) and per rank
 #                    (miniprof_report.txt); for codes without OpenMP regions
@@ -38,6 +40,7 @@ while [ $# -gt 0 ]; do
         -o|--output) out=$2; shift 2 ;;
         --output=*)  out=${1#*=}; shift ;;
         -s|--sample) mode=sample; shift ;;
+        -H|--hotspots) export MINIPROF_HOTSPOTS=1; shift ;;
         --no-report) report=0; shift ;;
         -q|--quiet)  quiet=1; shift ;;
         --check)     check=1; shift ;;

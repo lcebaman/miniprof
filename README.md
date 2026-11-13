@@ -100,7 +100,15 @@ rank 0 writes `miniprof_<app>_<date>_<time>/` with `snapshot.json`,
 runs the sampling profiler instead (time per routine and source line, by
 group and per rank, in `miniprof_report.txt`; the summary names the top
 routines): the way to see routines in an MPI-only code, where snapshot
-mode names only OpenMP regions. Options: `--level
+mode names only OpenMP regions. `miniprof --hotspots` (or `MINIPROF_HOTSPOTS=1`)
+adds the top functions to the snapshot itself: CPU-time sampling every
+`MINIPROF_HOTSPOTS_INTERVAL_MS` (default 10) on every thread, leaf
+functions named in-process at finalize, merged across ranks into
+`metrics.hotspots` (share of CPU, CPU seconds per rank, per-rank
+imbalance, group: application, MPI, OpenMP runtime, libraries) and a
+Hotspots section in the text and HTML reports, `hotspots.csv`, and
+`miniprof-diff`. Off by default; on LAMMPS its cost was within run-to-run
+noise. Options: `--level
 basic|topdown|roofline|full`, `-o DIR`, `--no-report`, `-q`, and
 `miniprof --check APP` to see whether the application can be profiled here
 (dynamically linked against the same MPI, OpenMP runtime with OMPT, memory
