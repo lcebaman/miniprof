@@ -269,6 +269,7 @@ Build all three sample and trace variants with `make examples`.
 | `make overhead-3d` | Wall-clock overhead of snapshot mode vs `MINIPROF_MODE=off` (informational) |
 | `make run-imbalance-validate` | Snapshot known-answer test: injected imbalance, trace cross-check, exact I/O counts |
 | `make run-counters-validate` | Snapshot hardware counters: exact region FLOPs, threads, compute/MPI split (SKIP without a PMU) |
+| `make run-omp-idle-validate` | OpenMP workers' spin between regions kept out of compute: known compute and idle CPU-seconds with test counter events (SKIP under GCC libgomp) |
 | `make run-omp-validate` | Snapshot OpenMP (OMPT): per-region imbalance, team size, serial time and lock wait vs injected values (SKIP under GCC libgomp; build with `OMPI_CC=clang` or AOCC) |
 | `make nodemon` / `make nodemon-setcap` | Build the socket-counter helper / grant it CAP_PERFMON (sudo) |
 | `make run-memory-validate` | Snapshot memory block: helper protocol (test mode, any machine), then known DRAM traffic if the helper has CAP_PERFMON (SKIP otherwise) |
@@ -646,6 +647,14 @@ What a snapshot contains so far:
     thread, including threads created after `MPI_Init`, and split into
     outside-MPI and inside-MPI using reads at every MPI call (`rdpmc`
     when allowed, about 20 ns; `read()` otherwise)
+  - OpenMP worker threads (with an OMPT runtime) count as compute only
+    while they work in a parallel region; from the region's closing
+    barrier to their next task they spin in the runtime's thread pool
+    (`KMP_BLOCKTIME`), and those counts go to `omp_idle`, so
+    totals = compute + mpi + omp_idle. Without this, worker spin during
+    the master's MPI or serial time inflates instructions and lowers IPC.
+    `derived.omp_idle_pct_of_cycles` and `omp_idle_core_s_per_rank`
+    report it; above 20% of cycles the report flags it
   - derived: IPC (overall, outside MPI, inside MPI), effective clock,
     GFLOP/s, FLOPs per cycle, L2 misses per 1000 instructions, DRAM fill
     rate (a lower bound: lines the L2 prefetcher brings in are not seen)

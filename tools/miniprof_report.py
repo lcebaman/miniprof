@@ -67,6 +67,7 @@ THRESHOLDS = {
     "td_badspec_pct":    (10.0, "flag top-down bad speculation above this % of slots"),
     "roof_dram_pct":     (50.0, "flag a memory-bound run below this % of the DRAM ceiling"),
     "roof_peak_pct":     (20.0, "flag a compute-bound run below this % of peak FLOPs"),
+    "omp_idle_pct":      (20.0, "flag OpenMP worker spin between regions above this % of cycles"),
 }
 
 
@@ -200,6 +201,12 @@ def observations(doc: dict, args) -> list:
         if rn["bound"] == "compute" and rn["pct_of_peak_gflops"] < args.roof_peak_pct:
             add("roofline", f"Compute-bound by intensity but at {rn['pct_of_peak_gflops']:.0f}% of peak FLOPs: "
                        "vectorisation, dependency chains or front-end limits (see top-down).")
+    if cd.get("omp_idle_pct_of_cycles", 0) > args.omp_idle_pct:
+        add("counters", f"OpenMP worker threads spend {cd['omp_idle_pct_of_cycles']:.1f}% of all cycles "
+                   f"spinning between regions (> {args.omp_idle_pct:g}%; "
+                   f"{cd.get('omp_idle_core_s_per_rank', 0):.1f} core-s per rank): CPU time and power the "
+                   "run does not use. OMP_WAIT_POLICY=passive or a lower KMP_BLOCKTIME gives it back, "
+                   "at some cost in region start-up latency.")
     if tdc:
         if tdc.get("backend_memory", 0) > args.td_memory_pct:
             add("topdown", f"{tdc['backend_memory']:.1f}% of slots stall on memory (backend_memory > "
@@ -340,6 +347,10 @@ def report(doc: dict, args) -> str:
                   f"inside MPI {cd['ipc_mpi']:.2f})")
             if cd.get("ghz_effective"):
                 p(f"   Effective clock     {cd['ghz_effective']:.2f} GHz")
+            if cd.get("omp_idle_pct_of_cycles"):
+                p(f"   OpenMP workers idle {cd['omp_idle_pct_of_cycles']:.1f}% of cycles, "
+                  f"{cd.get('omp_idle_core_s_per_rank', 0):.2f} core-s per rank (barrier and thread-pool "
+                  "spin between regions; not in the compute figures)")
             if "gflops_per_s" in cd:
                 line = f"   FLOP rate           {cd['gflops_per_s']:.2f} GFLOP/s total"
                 if "gflops_per_s_per_rank_in_compute" in cd:

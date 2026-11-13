@@ -223,6 +223,7 @@ static void on_implicit_task(int endpoint, mp_ompt_data_t *parallel_data,
                 ? __atomic_load_n(&g_inst[slot], __ATOMIC_ACQUIRE) : 0;
         }
         if (t.tdepth == 0) {
+            cnt_omp_worker(1);                            /* worker counts: working */
             omp_thread_t *thr = this_thread();
             if (thr) {
                 thr->slot = slot; thr->t0 = t.task_t0[0]; thr->inst = t.task_inst[0];
@@ -280,6 +281,8 @@ static void on_sync_region_wait(int kind, int endpoint, mp_ompt_data_t *parallel
      * implementation barrier inside a worksharing barrier); counting each
      * end would count the same wait twice. Only the outermost counts. */
     if (endpoint == MP_OMPT_SCOPE_BEGIN) {
+        if (kind == MP_OMPT_SYNC_BARRIER_IMPLICIT_PARALLEL && t.tdepth == 1)
+            cnt_omp_worker(0);                            /* region done: barrier, then pool */
         if (t.wait_depth++ == 0) {
             t.wait_t0 = now_ns(); t.wait_is_barrier = barrier;
             if (barrier && t.tdepth == 1 && t.thr) {

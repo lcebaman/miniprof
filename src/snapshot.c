@@ -113,7 +113,7 @@ typedef struct {
     int      cnt_multiplexed, cnt_rdpmc;
     uint64_t cnt_reads_rdpmc, cnt_reads_syscall;
     uint64_t cnt_total[CNT_MAX_EVENTS], cnt_compute[CNT_MAX_EVENTS],
-             cnt_mpi[CNT_MAX_EVENTS];
+             cnt_mpi[CNT_MAX_EVENTS], cnt_idle[CNT_MAX_EVENTS];
     /* P4: every event set (top-down rotates three over threads) */
     int      cnt_nsets;
     int      cnt_set_threads[CNT_MAX_SETS];
@@ -754,21 +754,26 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
                             "L2 prefetcher brought in and all writebacks, so it is a lower "
                             "bound on DRAM traffic, not a bandwidth measurement");
     jw_str(w, "ghz_effective", "cycles / user CPU time (user-space counts)");
+    jw_str(w, "omp_idle", "OpenMP worker threads between parallel regions (spinning in the runtime's "
+                          "thread pool): kept out of compute; totals = compute + mpi + omp_idle");
     jw_str(w, "fp_ops_width", "FP-unit ops by vector width, including FP loads, stores and "
                               "register moves: shows how much vector hardware is used, not "
                               "the share of arithmetic that is vectorised");
     jw_end_obj(w);
 
-    uint64_t tot[CNT_MAX_EVENTS] = {0}, comp[CNT_MAX_EVENTS] = {0}, mpi[CNT_MAX_EVENTS] = {0};
+    uint64_t tot[CNT_MAX_EVENTS] = {0}, comp[CNT_MAX_EVENTS] = {0}, mpi[CNT_MAX_EVENTS] = {0},
+             idle[CNT_MAX_EVENTS] = {0};
     for (int i = 0; i < n; i++) {
         if (!r[i].cnt_available) continue;
         for (int e = 0; e < n_active; e++) {
             tot[e] += r[i].cnt_total[e]; comp[e] += r[i].cnt_compute[e]; mpi[e] += r[i].cnt_mpi[e];
+            idle[e] += r[i].cnt_idle[e];
         }
     }
-    const char *bucket_names[3] = { "totals", "compute", "mpi" };
-    uint64_t *buckets[3] = { tot, comp, mpi };
-    for (int b = 0; b < 3; b++) {
+    /* totals = compute + mpi + omp_idle (OpenMP workers between regions) */
+    const char *bucket_names[4] = { "totals", "compute", "mpi", "omp_idle" };
+    uint64_t *buckets[4] = { tot, comp, mpi, idle };
+    for (int b = 0; b < 4; b++) {
         jw_begin_obj(w, bucket_names[b]);
         for (int e = 0; e < n_active; e++)
             jw_int(w, cnt_kind_name(g_cnt_group->ev[e].kind), (int64_t)buckets[b][e]);
@@ -819,7 +824,14 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
         double cyc = 0, ut = 0;
         for (int i = 0; i < n; i++)
             if (r[i].cnt_available) { cyc += (double)r[i].cnt_total[iC]; ut += r[i].cpu_user_s; }
-        jw_dbl(w, "ghz_effective", ut > 0 ? cyc / ut * 1e-9 : 0.0);
+        double ghz = ut > 0 ? cyc / ut * 1e-9 : 0.0;
+        jw_dbl(w, "ghz_effective", ghz);
+        /* OpenMP worker threads waiting in the pool between regions:
+         * core-seconds of spin that the compute figures leave out */
+        int nr = 0;
+        for (int i = 0; i < n; i++) if (r[i].cnt_available) nr++;
+        jw_dbl(w, "omp_idle_pct_of_cycles", 100.0 * ratio((double)idle[iC], (double)tot[iC]));
+        jw_dbl(w, "omp_idle_core_s_per_rank", ghz > 0 && nr ? idle[iC] / (ghz * 1e9) / nr : 0.0);
     }
     if (iF >= 0) {
         jw_dbl(w, "gflops_per_s", el_max > 0 ? tot[iF] / el_max * 1e-9 : 0.0);
@@ -1795,6 +1807,7 @@ static void collect_parallel(rank_rec_t *r, double elapsed_s, mpi_snap_t *snap)
     memcpy(r->cnt_total,   cr.total,   sizeof(cr.total));
     memcpy(r->cnt_compute, cr.compute, sizeof(cr.compute));
     memcpy(r->cnt_mpi,     cr.mpi,     sizeof(cr.mpi));
+    memcpy(r->cnt_idle,    cr.idle,    sizeof(cr.idle));
     r->cnt_nsets = cr.nsets;
     memcpy(r->cnt_set_threads, cr.set_threads, sizeof(cr.set_threads));
     memcpy(r->cnt_set_compute, cr.set_compute, sizeof(cr.set_compute));

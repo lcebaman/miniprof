@@ -149,7 +149,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
         run-ext-trace run-3d-snapshot test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
-        run-omp-validate test-ompt-abi run-topdown-validate \
+        run-omp-validate run-omp-idle-validate test-ompt-abi run-topdown-validate \
         nodemon nodemon-setcap run-memory-validate calibrate run-calibrate-test \
         mpa check clean
 
@@ -618,6 +618,21 @@ run-omp-validate: examples/omp_validate
 	if [ $$rc -eq 77 ]; then echo "SKIP: OpenMP runtime without OMPT (build with OMPI_CC=clang/AOCC)"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi
 
+# ── run-omp-idle-validate: OpenMP workers' pool spin kept out of compute ─────
+# Test counter events (task-clock as cycles) and KMP_BLOCKTIME=infinite:
+# known compute and idle CPU-seconds. SKIP without OMPT (GCC libgomp).
+examples/omp_idle_validate: $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) omp_idle_validate
+run-omp-idle-validate: examples/omp_idle_validate
+	@echo "--- omp_idle_validate: 1 rank x 2 threads"
+	@OMP_NUM_THREADS=2 KMP_BLOCKTIME=infinite MINIPROF_MODE=snapshot MINIPROF_COUNTERS_TEST=1 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_omp_idle.json \
+	mpirun $(MPIRUN_FLAGS) -n 1 -x OMP_NUM_THREADS -x KMP_BLOCKTIME --bind-to none \
+		./examples/omp_idle_validate 20 20 20 || exit 1; \
+	python3 tools/validate_omp_idle.py miniprof_snapshot_omp_idle.json --threads 2; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: needs OMPT (build with OMPI_CC=clang/AOCC) and perf software events"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi
+
 # ── test-ompt-abi: src/ompt_abi.h vs the real <omp-tools.h> ─────────────────
 # Compile-only static asserts. Uses OMPT_ABI_CC (default: clang, else cc);
 # SKIP when no compiler finds omp-tools.h.
@@ -825,6 +840,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-counters-validate || FAIL=1; \
 	$(MAKE) test-ompt-abi || FAIL=1; \
 	$(MAKE) run-omp-validate || FAIL=1; \
+	$(MAKE) run-omp-idle-validate || FAIL=1; \
 	$(MAKE) run-topdown-validate || FAIL=1; \
 	$(MAKE) run-memory-validate || FAIL=1; \
 	$(MAKE) run-calibrate-test || FAIL=1; \

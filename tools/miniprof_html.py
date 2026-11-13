@@ -637,6 +637,10 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
                 rows.append(("IPC", f'{cd["ipc"]:.2f}', f'outside MPI {cd["ipc_compute"]:.2f}, inside MPI {cd["ipc_mpi"]:.2f}'))
             if cd.get("ghz_effective"):
                 rows.append(("Effective clock", f'{cd["ghz_effective"]:.2f} GHz', ""))
+            if cd.get("omp_idle_pct_of_cycles"):
+                rows.append(("OpenMP workers idle", f'{cd["omp_idle_pct_of_cycles"]:.1f}% of cycles',
+                             f'{cd.get("omp_idle_core_s_per_rank", 0):.2f} core-s per rank spinning at barriers '
+                             'and in the thread pool between regions; kept out of compute'))
             if "gflops_per_s" in cd:
                 rows.append(("FLOP rate", gflops(cd["gflops_per_s"]),
                              f'{cd.get("gflops_per_s_per_rank_in_compute", 0):.1f} GFLOP/s per rank while computing'))

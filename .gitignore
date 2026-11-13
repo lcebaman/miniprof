@@ -27,6 +27,7 @@ pmu_probe_*.txt
 examples/counters_validate
 examples/mpi_percall
 examples/omp_validate
+examples/omp_idle_validate
 examples/omp_validate_clang
 examples/omp_validate_gcc
 examples/topdown_validate
