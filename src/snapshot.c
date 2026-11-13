@@ -52,6 +52,10 @@ static double g_init_s          = 0.0;   /* cost of snapshot_init() itself  */
 enum { FIN_NODEMON, FIN_REDUCE, FIN_REGIONS, FIN_OPENMP, FIN_GATHER, FIN_NPHASES };
 static const char *const g_fin_names[FIN_NPHASES] = { "nodemon", "reductions", "regions", "openmp", "gather" };
 static double g_fin_s[FIN_NPHASES];
+/* this rank's init, phase by phase; the overhead block reports the max */
+enum { INI_SYSINFO, INI_COUNTERS, INI_NODEMON, INI_OPENMP, INI_NPHASES };
+static const char *const g_ini_names[INI_NPHASES] = { "sysinfo", "counters", "nodemon", "openmp" };
+static double g_ini_s[INI_NPHASES];
 static char   g_start_utc[32]   = "";
 static char   g_cmdline[512]    = "";    /* rank 0 only                     */
 static int    g_thread_level    = -1;
@@ -96,6 +100,7 @@ typedef struct {
     int    node_index;
     double elapsed_s;
     double init_s;
+    double init_phase_s[INI_NPHASES];
     double finalize_s;      /* this rank's finalize time up to the gather */
     sysinfo_rank_t info;
 
@@ -203,9 +208,12 @@ void snapshot_init(int verbose)
 
     if (PMPI_Query_thread(&g_thread_level) != MPI_SUCCESS) g_thread_level = -1;
 
+    double tp = now_s();
+#define INI_MARK(PH) do { double t_ = now_s(); g_ini_s[PH] = t_ - tp; tp = t_; } while (0)
     sysinfo_collect_node(&g_node);
     sysinfo_collect_rank(&g_rank);
     if (rank == 0) read_cmdline(g_cmdline, sizeof(g_cmdline));
+    INI_MARK(INI_SYSINFO);
 
     /* Counter groups by level: basic = base group, roofline = FLOPs + DRAM
      * reads (fills + L2-prefetch misses) for per-region points, topdown =
@@ -223,6 +231,7 @@ void snapshot_init(int verbose)
         }
     }
 
+    INI_MARK(INI_COUNTERS);
     /* P5: one rank per node runs the socket-counter helper */
     {
         MPI_Comm nc;
@@ -234,8 +243,11 @@ void snapshot_init(int verbose)
         if (g_node_leader) nodemon_start(g_node.uarch, g_verbose);
     }
 
+    INI_MARK(INI_NODEMON);
     /* P2: OpenMP statistics from here on (no-op without an OMPT runtime) */
     ompt_snapshot_begin();
+    INI_MARK(INI_OPENMP);
+#undef INI_MARK
 
     /* P1: start recording MPI and I/O, CPU-time baseline */
     mpi_trace_set_mode(MPI_TRACE_SNAPSHOT);
@@ -1722,6 +1734,14 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     /* where rank 0's finalize time went: nodemon (stopping the memory
      * helper), reductions, regions, openmp (includes naming the parallel
      * regions with the symbolizer) and gather */
+    /* where the slowest init went, phase by phase (max over ranks) */
+    jw_begin_obj(&w, "init_phases_s_max");
+    for (int k = 0; k < INI_NPHASES; k++) {
+        double mx = 0;
+        for (int i = 0; i < nranks; i++) if (ranks[i].init_phase_s[k] > mx) mx = ranks[i].init_phase_s[k];
+        jw_dbl(&w, g_ini_names[k], mx);
+    }
+    jw_end_obj(&w);
     jw_begin_obj(&w, "finalize_phases_s");
     for (int i = 0; i < FIN_NPHASES; i++) jw_dbl(&w, g_fin_names[i], g_fin_s[i]);
     jw_end_obj(&w);
@@ -2071,6 +2091,7 @@ void snapshot_finalize(double elapsed_s)
     mine.node_index = node_index;
     mine.elapsed_s  = elapsed_s;
     mine.init_s     = g_init_s;
+    memcpy(mine.init_phase_s, g_ini_s, sizeof(g_ini_s));
 
     /* message-size histograms: summed over ranks, only rank 0 needs them */
     static mpi_snap_t hist_sum;   /* static: ~2 KB, keep it off the stack */
