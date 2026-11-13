@@ -475,7 +475,7 @@ if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+h>innerHeight-8)y=e.clientY-h-14;t.sty
 
 
 def render(doc: dict, obs: list, thresholds: str = "") -> str:
-    from miniprof_report import serial_compute_pct, roof_regime
+    from miniprof_report import serial_compute_pct, roof_regime, binding
     run = doc.get("run") or {}
     nodes = doc.get("nodes") or []
     m = doc.get("metrics") or {}
@@ -500,7 +500,12 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
         tiles.append(tile("Compute imbalance", f'{par["compute"]["imbalance_pct"]:.1f}%',
                           f'costs {par["compute"]["imbalance_cost_pct"]:.1f}% of elapsed'))
         cu = par["cpu"].get("utilisation_per_core_pct") or par["cpu"]["utilisation_pct"]
-        tiles.append(tile("CPU utilisation", f'{cu["avg"]:.0f}%', "per physical core"))
+        bnd = binding(doc)
+        if bnd["unbound"]:
+            tiles.append(tile("CPU binding", "none",
+                              f'{bnd["allowed"]} CPUs allowed per rank, {bnd["busy"]:.1f} busy'))
+        else:
+            tiles.append(tile("CPU utilisation", f'{cu["avg"]:.0f}%', "per physical core"))
     cnt = m.get("counters") or {}
     cd = cnt.get("derived") or {} if cnt.get("available") else {}
     if "gflops_per_s" in cd:

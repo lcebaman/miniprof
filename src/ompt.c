@@ -455,10 +455,18 @@ void ompt_collect(omp_result_t *out)
         /* Say why: no OpenMP at all, or an OpenMP runtime without OMPT. */
         /* LLVM libomp also exports GOMP_* (GCC compatibility), so test for
          * its own entry point first */
-        if (dlsym(RTLD_DEFAULT, "__kmpc_fork_call"))
+        const char *tool = getenv("OMP_TOOL"), *mo = getenv("MINIPROF_OMPT");
+        int disabled = (tool && strcmp(tool, "disabled") == 0) || (mo && strcmp(mo, "0") == 0);
+        if (dlsym(RTLD_DEFAULT, "__kmpc_fork_call") && !disabled)
+            /* libomp starts (and so calls the tool) at the first OpenMP
+             * construct or call: none ran, though the runtime is linked */
+            snprintf(out->reason, sizeof(out->reason),
+                     "no OpenMP: the application links an OpenMP runtime (LLVM libomp family) "
+                     "but ran no parallel region or OpenMP call, so it never started");
+        else if (dlsym(RTLD_DEFAULT, "__kmpc_fork_call"))
             snprintf(out->reason, sizeof(out->reason),
                      "OpenMP runtime (LLVM libomp family) did not start the OMPT tool "
-                     "(OMP_TOOL=disabled, MINIPROF_OMPT=0, or OMP_TOOL_LIBRARIES overridden)");
+                     "(OMP_TOOL=disabled or MINIPROF_OMPT=0)");
         else if (dlsym(RTLD_DEFAULT, "GOMP_parallel") || dlsym(RTLD_DEFAULT, "GOMP_parallel_start"))
             snprintf(out->reason, sizeof(out->reason),
                      "OpenMP runtime is GCC libgomp, which does not implement OMPT "

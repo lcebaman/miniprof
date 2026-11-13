@@ -131,6 +131,23 @@ def _sections(doc):
     }
 
 
+def binding(doc):
+    """Are ranks bound to the cores they use? An unbound rank may run on
+    every CPU of the node, so 'CPU utilisation' (CPU time over allowed CPUs)
+    reads ~0% while the real issue is that the OS can move it."""
+    run = doc.get("run") or {}
+    cpu = ((doc.get("metrics") or {}).get("parallel") or {}).get("cpu") or {}
+    allowed = (run.get("cpus_per_rank") or {}).get("min")
+    try: threads = int(run.get("omp_num_threads") or 1)
+    except (TypeError, ValueError): threads = 1
+    el = (run.get("elapsed_s") or {}).get("avg") or 0
+    busy = (((cpu.get("user_s") or {}).get("avg") or 0) + ((cpu.get("sys_s") or {}).get("avg") or 0)) / el \
+        if el else None
+    # bound = at most one whole SMT core per thread
+    unbound = bool(allowed) and allowed > 2 * max(threads, 1) and allowed >= 8
+    return {"unbound": unbound, "allowed": allowed, "threads": threads, "busy": busy}
+
+
 def serial_compute_pct(omp, split):
     """Share of the run that is serial compute: time outside OpenMP parallel
     regions, less MPI and I/O (which happen outside regions unless the
@@ -174,7 +191,15 @@ def observations(doc: dict, args) -> list:
                    "waiting for the slowest ones.")
     if split["io"] > args.io_pct:
         add("io", f"I/O takes {split['io']:.1f}% of the run (> {args.io_pct:g}%).")
-    if cpuu["avg"] < args.cpu_util_pct:
+    bnd = binding(doc)
+    if bnd["unbound"]:
+        rr = (v["mem"] or {}).get("remote_read_share_pct") if v["mem"] and v["mem"].get("available") else None
+        add("parallel", f"Ranks are not bound to cores: each may run on {bnd['allowed']} CPUs but keeps about "
+                   f"{bnd['busy']:.1f} busy, so the OS can move ranks between cores and sockets"
+                   + (f" (remote memory reads {rr:.0f}%)" if rr is not None else "")
+                   + ". Bind them: mpirun --bind-to core (with --map-by ...:pe=N for N threads), "
+                   "or srun --cpu-bind=cores.")
+    elif cpuu["avg"] < args.cpu_util_pct:
         add("parallel", f"CPU utilisation is {cpuu['avg']:.1f}% (< {args.cpu_util_pct:g}%): "
                    "ranks may be bound to more cores than they use, or be idle/blocked.")
     if omp and omp.get("available"):
@@ -283,8 +308,13 @@ def report(doc: dict, args) -> str:
         p(f"   slowest ranks       {slow}")
     p(f" MPI time imbalance    {mpi['imbalance_pct']:5.1f}%   "
       f"(min {human_time(mpi['time_s']['min'])}, max {human_time(mpi['time_s']['max'])})")
-    p(f" CPU utilisation       {cpuu['avg']:5.1f}%   (min {cpuu['min']:.1f}%, max {cpuu['max']:.1f}%; "
-      "per physical core)")
+    bnd = binding(doc)
+    if bnd["unbound"]:
+        p(f" CPU binding           none     ({bnd['allowed']} CPUs allowed per rank, "
+          f"{bnd['busy']:.1f} busy on average)")
+    else:
+        p(f" CPU utilisation       {cpuu['avg']:5.1f}%   (min {cpuu['min']:.1f}%, max {cpuu['max']:.1f}%; "
+          "per physical core)")
 
     # MPI detail
     funcs = mpi.get("by_function", [])
