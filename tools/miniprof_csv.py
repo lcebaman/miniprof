@@ -112,6 +112,11 @@ def write_csv(doc: dict, outdir: str) -> list:
     table("ranks.csv", [dict(flat(r), hostname=host.get(r.get("node"))) for r in ranks],
           first=("rank", "node", "hostname", "elapsed_s", "compute_s", "mpi_s", "io_s"))
 
+    hs = (doc.get("metrics") or {}).get("hotspots") or {}
+    if hs.get("available"):
+        table("hotspots.csv", [flat(f) for f in hs.get("functions") or []],
+              first=("name", "group", "dso", "pct", "samples", "cpu_s_per_rank", "imbalance_pct"))
+
     if par:
         table("mpi_functions.csv", [flat(f) for f in par["mpi"].get("by_function") or []],
               first=("name", "class", "calls", "bytes", "pct_of_elapsed", "imbalance_pct"))

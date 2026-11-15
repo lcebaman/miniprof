@@ -79,7 +79,13 @@ static void classify_group(const char *dso, const char *name, char *out)
                HAS(name, "instrument_") || HAS(name, "mpa_write")) {
         snprintf(out, MINIPROF_GROUP_LEN, "%s", MINIPROF_GROUP_PROFILER);
     } else if (HAS(dso, "libmpi") || HAS(dso, "mca_") || HAS(name, "MPI_") ||
-        HAS(name, "PMPI_") || HAS(name, "ompi_") || HAS(name, "mca_")) {
+        HAS(name, "PMPI_") || HAS(name, "ompi_") || HAS(name, "mca_") ||
+        /* the MPI stack underneath: Open MPI's runtime, PMIx, UCX, libfabric,
+         * PSM, verbs, HCOLL */
+        HAS(dso, "libopen-pal") || HAS(dso, "libopen-rte") || HAS(dso, "libprrte") ||
+        HAS(dso, "libpmix") || HAS(dso, "libuc") || HAS(dso, "libfabric") ||
+        HAS(dso, "libpsm") || HAS(dso, "libibverbs") || HAS(dso, "libmlx") ||
+        HAS(dso, "libhcoll") || HAS(name, "opal_")) {
         snprintf(out, MINIPROF_GROUP_LEN, "%s", MINIPROF_GROUP_MPI);
     } else if (HAS(dso, "libgomp") || HAS(dso, "libomp") ||
                HAS(name, "GOMP_") || HAS(name, "__kmp")) {
@@ -517,7 +523,15 @@ typedef struct {
     size_t      nsym;
     const char *str;
     size_t      strsize;
+    const Elf64_Sym **fn;        /* function symbols sorted by address */
+    size_t      nfn;
 } elf_dso_t;
+
+static int sym_addr_cmp(const void *a, const void *b)
+{
+    uint64_t x = (*(const Elf64_Sym *const *)a)->st_value, y = (*(const Elf64_Sym *const *)b)->st_value;
+    return (x > y) - (x < y);
+}
 
 #define ELF_CACHE 8
 static elf_dso_t g_elf[ELF_CACHE];
@@ -563,6 +577,19 @@ static const elf_dso_t *elf_open(const char *path)
     e->nsym = t->sh_size / sizeof(Elf64_Sym);
     e->str = (const char *)m + ts->sh_offset;
     e->strsize = ts->sh_size;
+    /* index the function symbols by address once: lookups are a binary
+     * search (hotspots resolve thousands of addresses) */
+    e->fn = malloc(e->nsym * sizeof(*e->fn));
+    if (e->fn) {
+        for (size_t i = 0; i < e->nsym; i++) {
+            const Elf64_Sym *y = &e->sym[i];
+            int ty = ELF64_ST_TYPE(y->st_info);
+            if ((ty == STT_FUNC || ty == STT_GNU_IFUNC) && y->st_shndx != SHN_UNDEF &&
+                y->st_name < e->strsize && e->str[y->st_name])
+                e->fn[e->nfn++] = y;
+        }
+        qsort(e->fn, e->nfn, sizeof(*e->fn), sym_addr_cmp);
+    }
     return e;
 }
 
@@ -579,12 +606,15 @@ static int elf_lookup(const char *path, void *pc, void *fbase, char *out, size_t
     if (!e) return 0;
     uint64_t a = (uint64_t)(uintptr_t)pc - (e->is_dyn ? (uint64_t)(uintptr_t)fbase : 0);
     const char *best = NULL;
-    for (size_t i = 0; i < e->nsym; i++) {
-        const Elf64_Sym *y = &e->sym[i];
-        int ty = ELF64_ST_TYPE(y->st_info);
-        if ((ty != STT_FUNC && ty != STT_GNU_IFUNC) || y->st_shndx == SHN_UNDEF) continue;
-        if (a >= y->st_value && a < y->st_value + (y->st_size ? y->st_size : 1) &&
-            y->st_name < e->strsize) { best = e->str + y->st_name; break; }
+    if (e->fn && e->nfn) {
+        /* last symbol starting at or below a; a few neighbours share an
+         * address (aliases), so check back a little for one that spans a */
+        size_t lo = 0, hi = e->nfn;
+        while (lo < hi) { size_t mid = (lo + hi) / 2; if (e->fn[mid]->st_value <= a) lo = mid + 1; else hi = mid; }
+        for (size_t k = lo; k > 0 && k + 8 > lo; k--) {
+            const Elf64_Sym *y = e->fn[k - 1];
+            if (a < y->st_value + (y->st_size ? y->st_size : 1)) { best = e->str + y->st_name; break; }
+        }
     }
     if (!best || !*best) return 0;
     if (best[0] == '_' && best[1] == 'Z') {
@@ -674,7 +704,7 @@ void symbolizer_resolve(miniprof_sym_t *syms, int n, int use_addr2line)
     }
 
     /* pass 3: nm fallback for anything still "??" in the main executable */
-    resolve_nm_fallback(syms, n, g_exe_path);
+    if (use_addr2line) resolve_nm_fallback(syms, n, g_exe_path);   /* not for hotspots: a subprocess */
 
     /* classify into groups */
     for (int i = 0; i < n; i++)
