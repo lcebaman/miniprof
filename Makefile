@@ -870,6 +870,10 @@ test-install: lib nodemon calibrate $(EXAMPLE)
 	grep -q "ranks" launcher.err || { echo "FAIL: no summary line"; cat launcher.err; exit 1; } && \
 	$$tmp/p/bin/miniprof-report res/snapshot.json --oneline >/dev/null && \
 	$$tmp/p/bin/miniprof --check $(CURDIR)/$(EXAMPLE) >/dev/null && \
+	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof --sample -o smp \
+		$(CURDIR)/$(EXAMPLE) >/dev/null 2>sample.err && \
+	{ [ -s smp/miniprof_report.txt ] && grep -q "top routines" sample.err || \
+		{ echo "FAIL: miniprof --sample"; cat sample.err; exit 1; }; } && \
 	grep -q 'local prefix = "'$$tmp/p'"' $$tmp/p/share/modulefiles/miniprof/test.lua && \
 	grep -q "set prefix $$tmp/p" $$tmp/p/share/modulefiles-tcl/miniprof/test && \
 	echo "test-install: OK (launcher, reports, tools, module files)"

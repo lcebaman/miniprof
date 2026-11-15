@@ -11,6 +11,9 @@
 #
 # Options (before the application):
 #   -l, --level L    basic (default), topdown, roofline or full
+#   -s, --sample     sampling profile instead: time per routine and source
+#                    line, by group (USER, MPI, LIBC, ...) and per rank
+#                    (miniprof_report.txt); for codes without OpenMP regions
 #   -o, --output D   result folder (default miniprof_<app>_<date>_<time>)
 #       --no-report  keep only snapshot.json (no text/HTML/CSV)
 #   -q, --quiet      no summary line
@@ -26,7 +29,7 @@ LIB=$MINIPROF_HOME/lib/libminiprof.so
 TOOLS=$MINIPROF_HOME/share/miniprof/tools
 
 level=${MINIPROF_LEVEL:-basic}
-out=""; report=1; quiet=0; check=0
+out=""; report=1; quiet=0; check=0; mode=snapshot
 usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
     case $1 in
@@ -34,6 +37,7 @@ while [ $# -gt 0 ]; do
         --level=*)   level=${1#*=}; shift ;;
         -o|--output) out=$2; shift 2 ;;
         --output=*)  out=${1#*=}; shift ;;
+        -s|--sample) mode=sample; shift ;;
         --no-report) report=0; shift ;;
         -q|--quiet)  quiet=1; shift ;;
         --check)     check=1; shift ;;
@@ -100,7 +104,7 @@ fi
 if [ -z "$out" ]; then
     out=miniprof_$(basename "$app")_$(date +%Y%m%d_%H%M%S)
 fi
-export MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=$level
+export MINIPROF_MODE=$mode MINIPROF_SNAPSHOT=$level
 export LD_PRELOAD=$LIB${LD_PRELOAD:+:$LD_PRELOAD}
 
 if [ "$rank" != 0 ]; then
@@ -110,6 +114,8 @@ fi
 mkdir -p "$out" || { echo "miniprof: cannot create $out" >&2; exec "$@"; }
 out=$(cd "$out" && pwd)
 export MINIPROF_SNAPSHOT_OUTPUT=$out/snapshot.json
+# sampling mode: rank 0 writes the gathered profile and the trace suggestions
+export MINIPROF_OUTPUT=$out/miniprof_report.txt MINIPROF_MPA_OUTPUT=$out/miniprof.mpa
 
 # rank 0 runs the application as a child so it can write the reports after;
 # signals from the launcher are passed on
@@ -121,7 +127,35 @@ while kill -0 $child 2>/dev/null; do wait $child; rc=$?; done
 trap - TERM INT HUP
 unset LD_PRELOAD MINIPROF_MODE
 
-if [ -f "$out/snapshot.json" ]; then
+if [ $mode = sample ]; then
+    {
+        echo "command: $*"; echo "mode: sample"; echo "exit: $rc"
+        echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo "host: $(hostname)"
+    } > "$out/run.txt"
+    if [ -f "$out/miniprof_report.txt" ]; then
+        if [ $quiet = 0 ]; then
+            # top routines from Table 1: function rows carry an Imb.Samp value
+            # top routines from Table 1: function rows carry a numeric imbalance
+            top=$(python3 - "$out/miniprof_report.txt" <<'PY' 2>/dev/null
+import re, sys
+rows, on = [], False
+for line in open(sys.argv[1]):
+    if "Table 1:" in line: on = True; continue
+    if "Table 2:" in line: break
+    m = on and re.match(r"\s*([\d.]+)%\s+\d+\s+[\d.]+\s+[\d.]+%\s+(.+?)\s*$", line)
+    if m and m.group(2) != "??":
+        rows.append((float(m.group(1)), m.group(2).split("(")[0]))
+print(", ".join(f"{n} {p:.0f}%" for p, n in sorted(rows, reverse=True)[:5]))
+PY
+)
+            [ -n "$top" ] && echo "miniprof: top routines: $top" >&2
+            echo "miniprof: profile $out/miniprof_report.txt" >&2
+        fi
+    else
+        echo "miniprof: no profile written (the application exited with $rc before MPI_Finalize?)" >&2
+        rmdir "$out" 2>/dev/null
+    fi
+elif [ -f "$out/snapshot.json" ]; then
     {
         echo "command: $*"
         echo "level: $level"
