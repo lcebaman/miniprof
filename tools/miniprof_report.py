@@ -618,7 +618,7 @@ def oneline(doc) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("file")
+    ap.add_argument("file", nargs="?", help="snapshot JSON (miniprof_snapshot.json, or snapshot.json from the launcher)")
     ap.add_argument("-o", "--output")
     ap.add_argument("--html", metavar="OUT.html",
                     help="also write a self-contained HTML report (charts, tables, observations)")
@@ -644,6 +644,8 @@ def main() -> int:
     except ValueError as e:
         print(f"miniprof_report: {e}", file=sys.stderr)
         return 2
+    if not args.file:
+        ap.error("a snapshot file is required (or --write-thresholds FILE)")
     with open(args.file) as f:
         doc = json.load(f)
     if args.oneline:

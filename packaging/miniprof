@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# miniprof — profile an MPI application with miniprof's snapshot mode.
+# miniprof — profile an MPI application with miniprof (no recompilation).
 #
 #   mpirun -np 96 --map-by ppr:48:socket:pe=2 miniprof pw.x -in scf.in
 #   srun -n 96 miniprof pw.x -in scf.in
@@ -32,7 +32,8 @@ TOOLS=$MINIPROF_HOME/share/miniprof/tools
 
 level=${MINIPROF_LEVEL:-basic}
 out=""; report=1; quiet=0; check=0; mode=snapshot
-usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# the header comment, up to the first line that is not a comment
+usage() { awk 'NR > 1 && !/^#/ {exit} NR > 1 {sub(/^# ?/, ""); print}' "${BASH_SOURCE[0]}"; }
 while [ $# -gt 0 ]; do
     case $1 in
         -l|--level)  level=$2; shift 2 ;;

@@ -19,6 +19,8 @@ snapshot has are written. Python standard library only.
   roofline_nodes.csv    per node: GFLOP/s, DRAM GB/s, intensity, bound, efficiencies
 """
 
+import json
+import sys
 import csv
 import os
 
@@ -175,3 +177,20 @@ def write_csv(doc: dict, outdir: str) -> list:
     if roof.get("available"):
         table("roofline_nodes.csv", [flat(n) for n in roof.get("nodes") or []], first=("index", "hostname"))
     return written
+
+
+def main(argv=None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Write a miniprof snapshot's tables as CSV files.")
+    ap.add_argument("snapshot", help="snapshot JSON")
+    ap.add_argument("outdir", help="directory for the CSV files (created if needed)")
+    a = ap.parse_args(argv)
+    with open(a.snapshot) as f:
+        doc = json.load(f)
+    written = write_csv(doc, a.outdir)
+    print(f"wrote {len(written)} CSV file(s) to {a.outdir}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
