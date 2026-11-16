@@ -109,10 +109,10 @@ def check_overhead(rep, base, prof, inner=None, inner_name="main loop", runs=Non
                   f"limit {lim:.0f}% + noise {noise:.1f}%")
 
 
-def check_identical(rep, base, prof, key, what):
+def check_identical(rep, base, prof, key, what, title=None):
     """key(r) -> {name: digest}; every profiled run must match the first
     unprofiled run, if the unprofiled runs agree with each other."""
-    rep.section("results unchanged")
+    rep.section(title or f"results unchanged: {what}")
     if not base or not key(base[0]):
         rep.warn(f"no {what} from an unprofiled run"); return
     ref = key(base[0])

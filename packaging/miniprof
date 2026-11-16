@@ -73,7 +73,9 @@ elif ! ldd "$app_path" >/dev/null 2>&1 || ldd "$app_path" 2>&1 | grep -q "not a 
     # scripts (python, wrappers) are fine: the preload reaches the processes they start
     head -c2 "$app_path" 2>/dev/null | grep -q '#!' || why_not="$app is statically linked: LD_PRELOAD cannot attach"
 else
-    lib_mpi=$(ldd "$LIB" | awk '/libmpi(ch)?\.so/ {print $1; exit}')
+    # the library's MPI soname is recorded at install time: one ldd less per rank
+    lib_mpi=$(cat "$MINIPROF_HOME/share/miniprof/mpi_soname" 2>/dev/null)
+    [ -n "$lib_mpi" ] || lib_mpi=$(ldd "$LIB" | awk '/libmpi(ch)?\.so/ {print $1; exit}')
     app_mpi=$(ldd "$app_path" | awk '/libmpi(ch)?\.so/ {print $1; exit}')
     if [ -n "$app_mpi" ] && [ -n "$lib_mpi" ] && [ "$app_mpi" != "$lib_mpi" ]; then
         why_not="$app uses $app_mpi but this miniprof was built for $lib_mpi (load the matching miniprof module)"
@@ -108,10 +110,10 @@ if [ -z "$out" ]; then
     out=miniprof_$(basename "$app")_$(date +%Y%m%d_%H%M%S)
 fi
 export MINIPROF_MODE=$mode MINIPROF_SNAPSHOT=$level
-export LD_PRELOAD=$LIB${LD_PRELOAD:+:$LD_PRELOAD}
+PRELOAD=$LIB${LD_PRELOAD:+:$LD_PRELOAD}       # for the application only
 
 if [ "$rank" != 0 ]; then
-    exec "$@"
+    LD_PRELOAD=$PRELOAD exec "$@"
 fi
 
 mkdir -p "$out" || { echo "miniprof: cannot create $out" >&2; exec "$@"; }
@@ -122,13 +124,15 @@ export MINIPROF_OUTPUT=$out/miniprof_report.txt MINIPROF_MPA_OUTPUT=$out/minipro
 
 # rank 0 runs the application as a child so it can write the reports after;
 # signals from the launcher are passed on
-"$@" &
+# (<&0: a background command would otherwise get /dev/null as stdin, and
+# "mpirun ... pw.x < scf.in" delivers the input to rank 0)
+LD_PRELOAD=$PRELOAD "$@" <&0 &
 child=$!
 trap 'kill -TERM $child 2>/dev/null' TERM INT HUP
 wait $child; rc=$?
 while kill -0 $child 2>/dev/null; do wait $child; rc=$?; done
 trap - TERM INT HUP
-unset LD_PRELOAD MINIPROF_MODE
+unset MINIPROF_MODE
 
 if [ $mode = sample ]; then
     {

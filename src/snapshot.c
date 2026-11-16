@@ -1689,6 +1689,9 @@ static void write_hotspots(jw_t *w, int nranks)
     int iv = hotspots_interval_ms();
     jw_int(w, "interval_ms", iv);
     jw_int(w, "samples", all);
+    int sampled = 0;
+    for (int r = 0; r < nranks; r++) sampled += g_hs_tot[r] > 0;
+    jw_int(w, "ranks_sampled", sampled);      /* < nranks: MINIPROF_HOTSPOTS did not reach every rank */
     jw_dbl(w, "cpu_s", all * iv * 1e-3);
     jw_str(w, "note", "CPU-time samples (ITIMER_PROF) of every thread; time is in the leaf "
                       "function (exclusive). MPI waiting shows as MPI-library functions "
@@ -1709,6 +1712,13 @@ static void write_hotspots(jw_t *w, int nranks)
         }
     qsort(m, (size_t)nm, sizeof(*m), hs_cmp);
     /* groups */
+    /* each rank lists its HS_TOP functions; what fell below that is not
+     * in any group */
+    {
+        long listed = 0;
+        for (int j = 0; j < nm; j++) listed += m[j].total;
+        jw_dbl(w, "unlisted_pct", 100.0 * (all - listed) / all);
+    }
     jw_begin_obj(w, "groups_pct");
     {
         const char *seen[32]; int ns = 0;
@@ -2207,7 +2217,12 @@ void snapshot_finalize(double elapsed_s)
     FIN_MARK(FIN_REGIONS);
     reduce_omp_regions(rank, size);
     FIN_MARK(FIN_OPENMP);
-    if (hotspots_requested()) {
+    /* Collective decision: the variable may not have reached every rank
+     * (Open MPI forwards only -x variables), and a gather that only some
+     * ranks join would hang. Ranks that did not sample send nothing. */
+    int hs_mine = hotspots_requested(), hs_any = 0;
+    PMPI_Allreduce(&hs_mine, &hs_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if (hs_any) {
         hs_entry_t mine_hs[HS_TOP];
         memset(mine_hs, 0, sizeof(mine_hs));
         long tot = 0;

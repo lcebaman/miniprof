@@ -1,6 +1,7 @@
 /* spawn.c — see spawn.h */
 #define _GNU_SOURCE
 #include "spawn.h"
+#include <errno.h>
 #include <spawn.h>
 #include <stdlib.h>
 #include <string.h>
@@ -57,6 +58,9 @@ int mp_pclose(FILE *fp)
     fclose(fp);
     if (pid < 0) return -1;
     int st = 0;
-    while (waitpid(pid, &st, 0) < 0) {}
+    /* retry only when interrupted: any other failure (ECHILD when the
+     * application ignores SIGCHLD) must not loop forever */
+    while (waitpid(pid, &st, 0) < 0)
+        if (errno != EINTR) return -1;
     return st;
 }

@@ -13,6 +13,8 @@ ap.add_argument("--threads", type=int, required=True)
 ap.add_argument("--rounds", type=int, default=20)
 ap.add_argument("--w-ms", type=float, default=20)
 ap.add_argument("--s-ms", type=float, default=20)
+ap.add_argument("--tasks", type=int, default=0)
+ap.add_argument("--task-ms", type=float, default=0)
 ap.add_argument("--tol", type=float, default=0.10)
 a = ap.parse_args()
 
@@ -26,7 +28,8 @@ if not c.get("available"):
 
 nr = doc["run"]["nranks"]
 T, R, W, S = a.threads, a.rounds, a.w_ms / 1e3, a.s_ms / 1e3
-want_comp = nr * R * (T * W + S)
+# explicit tasks run at the closing barrier are compute
+want_comp = nr * (R * (T * W + S) + a.tasks * a.task_ms / 1e3)
 want_idle = nr * R * (T - 1) * S
 # swtest: "cycles" is task-clock in ns
 comp = c["compute"]["cycles"] / 1e9
@@ -40,7 +43,7 @@ def check(ok, msg):
 # compute also holds MPI_Init/Finalize-side work and loop overhead: allow
 # +tol above and a little below
 check(want_comp * (1 - a.tol / 2) <= comp <= want_comp * (1 + a.tol) + 0.05,
-      f"compute {comp:.3f} CPU-s vs expected {want_comp:.3f} (R (T W + S) per rank)")
+      f"compute {comp:.3f} CPU-s vs expected {want_comp:.3f} (R (T W + S) + tasks, per rank)")
 check(want_idle * (1 - a.tol) <= idle <= want_idle * (1 + a.tol) + 0.02,
       f"OpenMP worker idle {idle:.3f} CPU-s vs expected {want_idle:.3f} (R (T-1) S per rank)")
 mpi = c["mpi"]["cycles"] / 1e9

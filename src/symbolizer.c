@@ -533,7 +533,7 @@ static int sym_addr_cmp(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-#define ELF_CACHE 8
+#define ELF_CACHE 128      /* hotspots touch every DSO: MPI components, libc, ... */
 static elf_dso_t g_elf[ELF_CACHE];
 static int g_nelf = 0;
 
