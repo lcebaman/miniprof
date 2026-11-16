@@ -324,15 +324,28 @@ def roofline_chart(ceil, points, width=960, height=420, ceil2=None):
     out.append(f'<text class="tick" x="{ml + pw / 2}" y="{height - 4}" text-anchor="middle">'
                'arithmetic intensity (FLOP per DRAM byte)</text>')
     out.append(f'<text class="tick" transform="translate(14,{mt + ph / 2}) rotate(-90)" text-anchor="middle">GFLOP/s</text>')
-    # lower compute ceilings (other widths of the same precision), faint
+    # lower compute ceilings (other widths of the same precision), faint.
+    # A width within 3% of the peak (fp64_256 vs fp64_512 on Zen 4, which
+    # splits 512-bit operations in two) is the same roof: named with the
+    # peak, not drawn. Labels never sit within 13 px of another label (or
+    # of the peak's): above the line, else below it, else only the tooltip.
     prec = ceil["peak_key"].split("_")[0]
+    same = []
+    used = [ly(peak) - 6]                    # the peak label's baseline
     for k, v in sorted((ceil.get("all_gflops") or {}).items(), key=lambda kv: -kv[1]):
-        if not k.startswith(prec) or k == ceil["peak_key"] or v <= 0 or v >= peak:
+        if not k.startswith(prec) or k == ceil["peak_key"] or v <= 0 or v > peak:
+            continue
+        if v >= 0.97 * peak:
+            same.append(k)
             continue
         xs = max(v / bw, x0)
         out.append(f'<line class="roof2" x1="{lx(xs):.1f}" x2="{ml + pw}" y1="{ly(v):.1f}" y2="{ly(v):.1f}" '
-                   f'data-tip="{esc(k)} ceiling: {gflops(v)}"/>'
-                   f'<text class="rl2" x="{ml + pw - 4}" y="{ly(v) - 4:.1f}" text-anchor="end">{esc(k)}</text>')
+                   f'data-tip="{esc(k)} ceiling: {gflops(v)}"/>')
+        for ty in (ly(v) - 4, ly(v) + 12):
+            if all(abs(ty - u) >= 13 for u in used):
+                used.append(ty)
+                out.append(f'<text class="rl2" x="{ml + pw - 4}" y="{ty:.1f}" text-anchor="end">{esc(k)}</text>')
+                break
     # the roof: DRAM slope up to the ridge, then the peak
     xa = x0
     ya = bw * xa
@@ -353,10 +366,11 @@ def roofline_chart(ceil, points, width=960, height=420, ceil2=None):
     out.append(f'<path class="roof" d="M{lx(xa):.1f},{ly(ya):.1f}L{lx(ridge):.1f},{ly(peak):.1f}H{ml + pw}"/>')
     out.append(f'<line class="hitl" x1="{lx(xa):.1f}" y1="{ly(ya):.1f}" x2="{lx(ridge):.1f}" y2="{ly(peak):.1f}" '
                f'data-tip="DRAM ceiling for this run\'s read mix: {bw:.0f} GB/s"/>')
+    pk_name = " / ".join([ceil["peak_key"]] + same)
     out.append(f'<line class="hitl" x1="{lx(ridge):.1f}" y1="{ly(peak):.1f}" x2="{ml + pw}" y2="{ly(peak):.1f}" '
-               f'data-tip="{esc(ceil["peak_key"])} peak: {gflops(peak)}"/>')
+               f'data-tip="{esc(pk_name)} peak: {gflops(peak)}"/>')
     out.append(f'<text class="rl" x="{ml + pw - 4}" y="{ly(peak) - 6:.1f}" text-anchor="end">'
-               f'{esc(ceil["peak_key"])} peak {gflops(peak)}</text>')
+               f'{esc(pk_name)} peak {gflops(peak)}</text>')
     ang = math.degrees(math.atan2(ly(peak) - ly(ya), lx(ridge) - lx(xa)))
     # the roof label sits along the slope away from the points
     xs_pts = [lx(p[1]) for p in points if p[1] and p[1] > 0]
