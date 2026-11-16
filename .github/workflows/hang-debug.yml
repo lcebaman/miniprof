@@ -6,7 +6,7 @@ on:
 jobs:
   loop:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: { shard: [1, 2, 3, 4] }
@@ -18,13 +18,15 @@ jobs:
           echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope || true
           cat /proc/sys/kernel/perf_event_paranoid; nproc
       - run: make lib nodemon calibrate examples examples/topdown_validate MPIRUN_FLAGS=--oversubscribe NRANKS=2
-      - name: repeat run-topdown-validate, dump stacks on a hang
+      - name: repeat make check, dump stacks on a hang
         run: |
           hangs=0
-          for i in $(seq 1 40); do
-            tools/ci/hang_watch.sh 90 make -s run-topdown-validate MPIRUN_FLAGS=--oversubscribe > out.txt 2>&1
+          for i in $(seq 1 12); do
+            tools/ci/hang_watch.sh 240 make check MPIRUN_FLAGS=--oversubscribe NRANKS=2 NX=64 NY=64 NZ=32 NSTEPS_3D=50 > out.txt 2>&1
             rc=$?
-            if [ $rc = 124 ]; then hangs=$((hangs+1)); echo "##### iteration $i hung"; cat out.txt; fi
+            echo "iteration $i rc $rc $(grep -c . out.txt) lines"
+            if [ $rc = 124 ]; then hangs=$((hangs+1)); echo "##### iteration $i hung"; tail -60 out.txt; ps -ef | grep -v "ps -ef" | tail -40; fi
+            pgrep -fl "miniprof|examples/|prte" || true
           done
-          echo "hangs: $hangs / 40"
+          echo "hangs: $hangs / 12"
           [ $hangs = 0 ]
