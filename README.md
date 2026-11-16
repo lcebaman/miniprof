@@ -906,44 +906,12 @@ match the injected values within 2%, MPI time matches trace mode within
 per MPI call; end-to-end overhead on a 20 s `diffusion3d` run is within
 run-to-run noise (`make overhead-3d`).
 
-Validation on real applications. Both validators interleave unprofiled
-runs with the profiled ones (`off basic off topdown off roofline off`), so
-each profiled run is compared with the unprofiled runs either side of it
-and a node that drifts over the session is not mistaken for overhead.
-
-LAMMPS (`tools/lammps/`): `build_lammps.sh` builds the stable release with
-MPI + OpenMP and the packages the rhodopsin benchmark needs (C++ only, no
-other dependencies); `validate_lammps.sh` runs `bench/in.rhodo.scaled`
-(replicated, with trajectory dumps) and `check_lammps.py` checks each
-snapshot against LAMMPS's own timing breakdown: compute time holds
-Pair + Bond + Neigh, MPI time lies between Comm and the communicating
-sections (Comm, Kspace, Modify, Output, Other, setup), bytes written match
-the dumps and log, bytes read are 1-2x `data.rhodo` (read_data scans the
-topology, then reads it), thermo output and dumps are identical to the
-unprofiled run, plus the shape, hardware and tool checks below.
-
-WRF: `tools/validate_wrf.sh`, run from a
-prepared WRF run directory inside a multi-node allocation, runs WRF
-unprofiled and at the `basic`, `topdown` and `roofline`
-levels, with your own `mpirun` options (`MPIRUN_ARGS`) and binding wrapper
-(`BIND`, which must `exec "$@"`; the library is preloaded into `wrf.exe`
-only). `tools/check_wrf.py` then checks each snapshot against WRF itself:
-wall-time overhead against the unprofiled runs (limit 2% at `basic`, 5%
-above, plus their own spread), `wrfout` files byte-identical, ranks and
-threads against WRF's decomposition, elapsed against WRF's main-loop
-timers, I/O time against `Timing for Writing` and MPI-IO bytes against the
-output file sizes (io_form 11, PnetCDF), halo exchange present, counters
-on every thread, topdown summing to 100%, memory on every node, and that
-the report, HTML, CSV and `miniprof_diff` all work on the result. The
-memory helper must be ready on every node (`make nodemon-setcap` needs a
-filesystem that keeps file capabilities; otherwise use a node-local copy
-via `MINIPROF_NODEMON`, or `perf_event_paranoid <= 0`).
-`tools/wrf/build_wrf.sh all [conus12km tarball]` builds what that test
-needs: HDF5, netCDF-C/Fortran and PnetCDF (or uses `NETCDF`/`PNETCDF`),
-then WRF em_real dm+sm for Intel oneAPI or GCC (tested with GCC 13; AOCC 5+
-ships LLVM flang, which does not yet compile WRF 4.8 unmodified: the script
-adapts the options but the build stops in WRF's own sources), tuned with `-march=$MARCH` (default `znver4`), and a run directory
-with history through PnetCDF (`io_form_history = 11`).
+Snapshot mode has also been checked on a real application, LAMMPS
+(rhodopsin benchmark, 2 M atoms, MPI + OpenMP, 1 and 2 nodes of EPYC 9654):
+profiled runs within run-to-run noise of unprofiled ones at every level,
+identical thermo output and trajectory files, compute and MPI time
+consistent with LAMMPS's own timing breakdown, and I/O bytes exact. The
+harness for that lives outside this repository.
 
 ### Configuration
 
