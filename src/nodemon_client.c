@@ -62,7 +62,9 @@ static int read_line(char *line, size_t n, int timeout_ms)
         int left = timeout_ms - (int)((t.tv_sec - t0.tv_sec) * 1000 + (t.tv_nsec - t0.tv_nsec) / 1000000);
         if (left <= 0 || g_len >= sizeof(g_buf) - 1) return -1;
         struct pollfd p = { g_out, POLLIN, 0 };
-        if (poll(&p, 1, left) <= 0) return -1;
+        int pr = poll(&p, 1, left);
+        if (pr < 0 && errno == EINTR) continue;        /* a signal, not a timeout */
+        if (pr <= 0) return -1;
         ssize_t r = read(g_out, g_buf + g_len, sizeof(g_buf) - 1 - g_len);
         if (r <= 0) return -1;
         g_len += (size_t)r;

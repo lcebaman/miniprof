@@ -91,6 +91,8 @@ typedef struct {
     uint64_t task_wait[DEPTH];
     uint64_t wait_t0, lock_t0;
     int      wait_depth;               /* nested sync_region_wait begin/end */
+    int      idle_wait;                /* counters switched to idle at a barrier */
+    const void *impl_task;             /* task_data of the outermost implicit task */
     int      wait_is_barrier;
 } tls_t;
 static _Thread_local tls_t t;
@@ -223,6 +225,7 @@ static void on_implicit_task(int endpoint, mp_ompt_data_t *parallel_data,
                 ? __atomic_load_n(&g_inst[slot], __ATOMIC_ACQUIRE) : 0;
         }
         if (t.tdepth == 0) {
+            t.idle_wait = 0; t.impl_task = task_data;
             cnt_omp_worker(1);                            /* worker counts: working */
             omp_thread_t *thr = this_thread();
             if (thr) {
@@ -256,6 +259,17 @@ static void on_implicit_task(int endpoint, mp_ompt_data_t *parallel_data,
     }
 }
 
+/* Explicit tasks run by a worker while it waits at the region's closing
+ * barrier are work, not idle: count them as compute, and go back to idle
+ * when the worker returns to its implicit task. Nothing to do (and no
+ * counter read) unless this thread is in such a wait. */
+static void on_task_schedule(mp_ompt_data_t *prior, int prior_status, mp_ompt_data_t *next)
+{
+    (void)prior; (void)prior_status;
+    if (!t.idle_wait) return;
+    cnt_omp_worker(next != t.impl_task);
+}
+
 static int is_barrier(int kind)
 {
     return kind == MP_OMPT_SYNC_BARRIER || kind == MP_OMPT_SYNC_BARRIER_IMPLICIT ||
@@ -281,8 +295,15 @@ static void on_sync_region_wait(int kind, int endpoint, mp_ompt_data_t *parallel
      * implementation barrier inside a worksharing barrier); counting each
      * end would count the same wait twice. Only the outermost counts. */
     if (endpoint == MP_OMPT_SCOPE_BEGIN) {
-        if (kind == MP_OMPT_SYNC_BARRIER_IMPLICIT_PARALLEL && t.tdepth == 1)
+        /* 5.1 runtimes name the region's closing barrier; older ones
+         * (LLVM < 18, some libiomp5) report every implicit barrier as
+         * BARRIER_IMPLICIT, whose end arrives in time for worksharing
+         * barriers, so there the wait itself is idle and its end resumes. */
+        if ((kind == MP_OMPT_SYNC_BARRIER_IMPLICIT_PARALLEL || kind == MP_OMPT_SYNC_BARRIER_IMPLICIT) &&
+            t.tdepth == 1 && t.wait_depth == 0) {
             cnt_omp_worker(0);                            /* region done: barrier, then pool */
+            t.idle_wait = 1;
+        }
         if (t.wait_depth++ == 0) {
             t.wait_t0 = now_ns(); t.wait_is_barrier = barrier;
             if (barrier && t.tdepth == 1 && t.thr) {
@@ -294,6 +315,10 @@ static void on_sync_region_wait(int kind, int endpoint, mp_ompt_data_t *parallel
     }
     if (endpoint != MP_OMPT_SCOPE_END || t.wait_depth <= 0) return;
     if (--t.wait_depth != 0) return;
+    if (t.idle_wait && kind == MP_OMPT_SYNC_BARRIER_IMPLICIT && t.tdepth == 1) {
+        t.idle_wait = 0;
+        cnt_omp_worker(1);                                /* old runtimes: barrier over, still in the task */
+    }
     barrier = t.wait_is_barrier;
     uint64_t now = now_ns();
     uint64_t w = now - t.wait_t0;
@@ -352,6 +377,7 @@ static int tool_initialize(mp_ompt_function_lookup_t lookup, int device,
     reg(MP_OMPT_CB_PARALLEL_BEGIN,   (void *)on_parallel_begin);
     reg(MP_OMPT_CB_PARALLEL_END,     (void *)on_parallel_end);
     reg(MP_OMPT_CB_IMPLICIT_TASK,    (void *)on_implicit_task);
+    reg(MP_OMPT_CB_TASK_SCHEDULE,    (void *)on_task_schedule);
     reg(MP_OMPT_CB_SYNC_REGION_WAIT, (void *)on_sync_region_wait);
     reg(MP_OMPT_CB_MUTEX_ACQUIRE,    (void *)on_mutex_acquire);
     reg(MP_OMPT_CB_MUTEX_ACQUIRED,   (void *)on_mutex_acquired);

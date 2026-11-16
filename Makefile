@@ -629,8 +629,8 @@ run-omp-idle-validate: examples/omp_idle_validate
 	@OMP_NUM_THREADS=2 KMP_BLOCKTIME=infinite MINIPROF_MODE=snapshot MINIPROF_COUNTERS_TEST=1 \
 	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_omp_idle.json \
 	mpirun $(MPIRUN_FLAGS) -n 1 -x OMP_NUM_THREADS -x KMP_BLOCKTIME --bind-to none \
-		./examples/omp_idle_validate 20 20 20 || exit 1; \
-	python3 tools/validate_omp_idle.py miniprof_snapshot_omp_idle.json --threads 2; rc=$$?; \
+		./examples/omp_idle_validate 20 20 20 8 50 || exit 1; \
+	python3 tools/validate_omp_idle.py miniprof_snapshot_omp_idle.json --threads 2 --tasks 8 --task-ms 50; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: needs OMPT (build with OMPI_CC=clang/AOCC) and perf software events"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi
 
@@ -844,6 +844,7 @@ install: lib nodemon calibrate
 	install -m 755 tools/nodemon_ready.sh $$d/share/miniprof/tools/ && \
 	install -m 644 README.md $$d/share/doc/miniprof/ && \
 	echo "$(MINIPROF_VERSION)" > $$d/share/miniprof/VERSION && \
+	ldd $(LIB) | awk '/libmpi(ch)?\.so/ {print $$1; exit}' > $$d/share/miniprof/mpi_soname && \
 	for t in report:miniprof_report.py diff:miniprof_diff.py csv:miniprof_csv.py; do \
 		n=miniprof-$${t%%:*}; sed -e "s|@NAME@|$$n|" -e "s|@SCRIPT@|$${t#*:}|" \
 			packaging/miniprof-tool.in > $$d/bin/$$n && chmod 755 $$d/bin/$$n; done && \
@@ -871,6 +872,10 @@ test-install: lib nodemon calibrate $(EXAMPLE)
 	grep -q "ranks" launcher.err || { echo "FAIL: no summary line"; cat launcher.err; exit 1; } && \
 	$$tmp/p/bin/miniprof-report res/snapshot.json --oneline >/dev/null && \
 	$$tmp/p/bin/miniprof --check $(CURDIR)/$(EXAMPLE) >/dev/null && \
+	echo "stdin reaches rank 0" > in.txt && printf '#!/bin/sh\nhead -1 > got.$$$$\nexec "$$@"\n' > rd.sh && chmod +x rd.sh && \
+	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 1 $$tmp/p/bin/miniprof -q -o sin ./rd.sh \
+		$(CURDIR)/$(EXAMPLE) < in.txt >/dev/null 2>&1; \
+	grep -qs "stdin reaches rank 0" got.* || { echo "FAIL: stdin lost through the launcher"; exit 1; } && \
 	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof --hotspots -o hot \
 		$(CURDIR)/$(EXAMPLE) >/dev/null 2>hot.err && \
 	{ grep -q "hotspots:" hot.err && grep -q 'id="hotspots"' hot/report.html || \

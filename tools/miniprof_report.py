@@ -140,12 +140,22 @@ def binding(doc):
     allowed = (run.get("cpus_per_rank") or {}).get("min")
     try: threads = int(run.get("omp_num_threads") or 1)
     except (TypeError, ValueError): threads = 1
+    # OMP_NUM_THREADS unset: the runtime's default is one thread per allowed
+    # CPU, so go by the threads the OpenMP runtime actually ran
+    omp = (doc.get("metrics") or {}).get("openmp") or {}
+    if omp.get("available") and omp.get("threads") and run.get("nranks"):
+        threads = max(threads, -(-omp["threads"] // run["nranks"]))
     el = (run.get("elapsed_s") or {}).get("avg") or 0
     busy = (((cpu.get("user_s") or {}).get("avg") or 0) + ((cpu.get("sys_s") or {}).get("avg") or 0)) / el \
         if el else None
-    # bound = at most one whole SMT core per thread
-    unbound = bool(allowed) and allowed > 2 * max(threads, 1) and allowed >= 8
-    return {"unbound": unbound, "allowed": allowed, "threads": threads, "busy": busy}
+    # bound = at most one whole SMT core per thread it runs (or keeps busy:
+    # a GCC-built OpenMP code reports no thread count)
+    need = max(threads, int(busy + 0.5) if busy else 1, 1)
+    unbound = bool(allowed) and allowed > 2 * need and allowed >= 8
+    node_cpus = max((n.get("logical_cpus") or 0) for n in (doc.get("nodes") or [{}]))
+    # "none" = the whole node; otherwise bound, but to more than it uses (a socket, a NUMA domain)
+    kind = "none" if node_cpus and allowed and allowed >= node_cpus else "wide"
+    return {"unbound": unbound, "allowed": allowed, "threads": threads, "busy": busy, "kind": kind}
 
 
 def serial_compute_pct(omp, split):
@@ -194,7 +204,9 @@ def observations(doc: dict, args) -> list:
     bnd = binding(doc)
     if bnd["unbound"]:
         rr = (v["mem"] or {}).get("remote_read_share_pct") if v["mem"] and v["mem"].get("available") else None
-        add("parallel", f"Ranks are not bound to cores: each may run on {bnd['allowed']} CPUs but keeps about "
+        add("parallel", ("Ranks are not bound to cores" if bnd["kind"] == "none" else
+                         "Ranks are bound more widely than they need")
+                   + f": each may run on {bnd['allowed']} CPUs but keeps about "
                    f"{bnd['busy']:.1f} busy, so the OS can move ranks between cores and sockets"
                    + (f" (remote memory reads {rr:.0f}%)" if rr is not None else "")
                    + ". Bind them: mpirun --bind-to core (with --map-by ...:pe=N for N threads), "
@@ -310,7 +322,7 @@ def report(doc: dict, args) -> str:
       f"(min {human_time(mpi['time_s']['min'])}, max {human_time(mpi['time_s']['max'])})")
     bnd = binding(doc)
     if bnd["unbound"]:
-        p(f" CPU binding           none     ({bnd['allowed']} CPUs allowed per rank, "
+        p(f" CPU binding           {bnd['kind']:<8} ({bnd['allowed']} CPUs allowed per rank, "
           f"{bnd['busy']:.1f} busy on average)")
     else:
         p(f" CPU utilisation       {cpuu['avg']:5.1f}%   (min {cpuu['min']:.1f}%, max {cpuu['max']:.1f}%; "

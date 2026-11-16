@@ -12,7 +12,11 @@
  * Needs an OpenMP runtime with OMPT (clang, AOCC, ICX); under GCC's libgomp
  * the validator reports SKIP.
  *
- * Usage: omp_idle_validate [ROUNDS W_MS S_MS]   (default 20 20 20)
+ * Then TASKS explicit tasks of TASK_MS each, created under `single nowait`
+ * so the threads run them while waiting at the region's closing barrier:
+ * that is work, compute += TASKS * TASK_MS, not idle.
+ *
+ * Usage: omp_idle_validate [ROUNDS W_MS S_MS [TASKS TASK_MS]]   (default 20 20 20 0 0)
  */
 #include <mpi.h>
 #include <omp.h>
@@ -45,6 +49,16 @@ int main(int argc, char **argv)
         #pragma omp parallel
         spin(w);
         spin(s);
+    }
+    int tasks = argc > 4 ? atoi(argv[4]) : 0;
+    double tw = (argc > 5 ? atof(argv[5]) : 0) * 1e-3;
+    if (tasks > 0) {
+        #pragma omp parallel
+        #pragma omp single nowait
+        for (int i = 0; i < tasks; i++) {
+            #pragma omp task
+            spin(tw);
+        }
     }
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);

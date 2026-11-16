@@ -502,7 +502,7 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
         cu = par["cpu"].get("utilisation_per_core_pct") or par["cpu"]["utilisation_pct"]
         bnd = binding(doc)
         if bnd["unbound"]:
-            tiles.append(tile("CPU binding", "none",
+            tiles.append(tile("CPU binding", bnd["kind"],
                               f'{bnd["allowed"]} CPUs allowed per rank, {bnd["busy"]:.1f} busy'))
         else:
             tiles.append(tile("CPU utilisation", f'{cu["avg"]:.0f}%', "per physical core"))
@@ -572,10 +572,16 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
         if hs and hs.get("available"):
             gp = hs.get("groups_pct") or {}
             other = sum(v for k, v in gp.items() if k not in ("USER", "MPI", "OMP"))
+            unl = hs.get("unlisted_pct") or 0
+            part = hs.get("ranks_sampled")
             body = (f'<p class="note">CPU time sampled every {hs["interval_ms"]} ms on every thread '
                     f'({hs["samples"]:,} samples, {ht(hs["cpu_s"])} of CPU); each sample counts '
                     'in the function it interrupted (exclusive time). Waiting in MPI shows as MPI '
-                    'library code, waiting in OpenMP as OMP.</p>')
+                    'library code, waiting in OpenMP as OMP.'
+                    + (f' {unl:.1f}% is in minor functions below each rank\'s top list.' if unl >= 1 else '')
+                    + (f' Only {part} of {doc["run"]["nranks"]} ranks sampled: MINIPROF_HOTSPOTS did not reach '
+                       'the others.' if part is not None and part < doc["run"]["nranks"] else '')
+                    + '</p>')
             body += legend([(1, f'Application {gp.get("USER", 0):.1f}%'), (2, f'MPI {gp.get("MPI", 0):.1f}%'),
                             (3, f'OpenMP runtime {gp.get("OMP", 0):.1f}%'), (4, f'Other libraries {other:.1f}%')])
             body += hstack([("All threads", {"u": gp.get("USER", 0), "m": gp.get("MPI", 0),

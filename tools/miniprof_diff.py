@@ -192,11 +192,11 @@ def analyse(A: Run, B: Run) -> dict:
     # hotspots (both runs with --hotspots): CPU seconds per rank in each function
     hr = []
     if A.hot and B.hot:
-        for n in set(A.hot) | set(B.hot):
-            a = (A.hot.get(n) or {}).get("cpu_s_per_rank")
-            b = (B.hot.get(n) or {}).get("cpu_s_per_rank")
-            grp = (A.hot.get(n) or B.hot.get(n) or {}).get("group", "")
-            hr.append((n, a, b, (b or 0) - (a or 0), grp))
+        # a function listed in only one run is not zero in the other, just
+        # below its top list: compare those in both
+        for n in set(A.hot) & set(B.hot):
+            a, b = A.hot[n].get("cpu_s_per_rank"), B.hot[n].get("cpu_s_per_rank")
+            hr.append((n, a, b, (b or 0) - (a or 0), A.hot[n].get("group", "")))
     out["hotspots"] = sorted(hr, key=lambda x: -abs(x[3]))
     # regions by change in time per rank
     rr = []
