@@ -843,6 +843,9 @@ install: lib nodemon calibrate
 	install -m 644 tools/*.py $$d/share/miniprof/tools/ && \
 	install -m 755 tools/nodemon_ready.sh $$d/share/miniprof/tools/ && \
 	install -m 644 README.md $$d/share/doc/miniprof/ && \
+	install -d $$d/include $$d/share/doc/miniprof/docs && \
+	install -m 644 include/miniprof.h $$d/include/ && \
+	install -m 644 docs/*.md $$d/share/doc/miniprof/docs/ && \
 	echo "$(MINIPROF_VERSION)" > $$d/share/miniprof/VERSION && \
 	ldd $(LIB) | awk '/libmpi(ch)?\.so/ {print $$1; exit}' > $$d/share/miniprof/mpi_soname && \
 	for t in report:miniprof_report.py diff:miniprof_diff.py csv:miniprof_csv.py; do \
@@ -871,6 +874,7 @@ test-install: lib nodemon calibrate $(EXAMPLE)
 		[ -e res/$$f ] || { echo "FAIL: launcher left no res/$$f"; cat launcher.err; exit 1; }; done && \
 	grep -q "ranks" launcher.err || { echo "FAIL: no summary line"; cat launcher.err; exit 1; } && \
 	$$tmp/p/bin/miniprof-report res/snapshot.json --oneline >/dev/null && \
+	$$tmp/p/bin/miniprof-csv res/snapshot.json csvout >/dev/null && [ -s csvout/summary.csv ] && \
 	$$tmp/p/bin/miniprof --check $(CURDIR)/$(EXAMPLE) >/dev/null && \
 	echo "stdin reaches rank 0" > in.txt && printf '#!/bin/sh\nhead -1 > got.$$$$\nexec "$$@"\n' > rd.sh && chmod +x rd.sh && \
 	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 1 $$tmp/p/bin/miniprof -q -o sin ./rd.sh \
