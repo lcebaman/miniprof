@@ -148,7 +148,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         example-mpi-ext-validate mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
-        run-ext-trace run-3d-snapshot test-units overhead-3d \
+        run-ext-trace run-3d-snapshot run-hotspots-validate test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
         run-omp-validate run-omp-idle-validate test-ompt-abi run-topdown-validate \
         nodemon nodemon-setcap run-memory-validate calibrate run-calibrate-test \
@@ -564,6 +564,19 @@ run-3d-snapshot: $(EXAMPLE_3D)
 	@echo ""
 	python3 tools/miniprof_report.py miniprof_snapshot_3d.json
 
+# ── run-hotspots-validate: hotspots name inlined kernels ─────────────────────
+# diffusion3d (-O2 -g) inlines its stencil kernels into main: symbol-table
+# names alone put ~80% of the time in 'main'; with the debug information the
+# kernels must appear by name and main must not dominate.
+run-hotspots-validate: $(EXAMPLE_3D)
+	@MINIPROF_MODE=snapshot MINIPROF_HOTSPOTS=1 MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_hot.json \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) -x MINIPROF_MODE -x MINIPROF_HOTSPOTS -x MINIPROF_SNAPSHOT_OUTPUT \
+		./$(EXAMPLE_3D) >/dev/null && \
+	python3 -c "import json,sys; h=json.load(open('miniprof_snapshot_hot.json'))['metrics']['hotspots']; \
+	f={x['name']:x['pct'] for x in h['functions']}; ok='compute_diffusion' in f and f.get('main',0) < 30; \
+	print(('PASS' if ok else 'FAIL') + ': hotspots name inlined kernels: compute_diffusion %.1f%%, main %.1f%%' \
+	% (f.get('compute_diffusion',0), f.get('main',0))); sys.exit(0 if ok else 1)"
+
 # ── run-imbalance-validate: snapshot known-answer test (P1 exit criteria) ───
 # examples/imbalance_validate injects a known per-rank compute imbalance and
 # a fixed I/O volume; validate_imbalance.py checks the snapshot against the
@@ -910,6 +923,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-3d-trace || FAIL=1; \
 	$(MAKE) run-ext-trace || FAIL=1; \
 	$(MAKE) run-3d-snapshot || FAIL=1; \
+	$(MAKE) run-hotspots-validate || FAIL=1; \
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	$(MAKE) run-counters-validate || FAIL=1; \

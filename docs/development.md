@@ -39,6 +39,7 @@ on every pull request with `MPIRUN_FLAGS=--oversubscribe NRANKS=2`.
 |---|---|
 | `test-units` | MPI-free unit tests: CPU microarchitecture table, JSON writer |
 | `run-3d-snapshot` | snapshot of `diffusion3d`, JSON structure |
+| `run-hotspots-validate` | hotspots name `diffusion3d`'s inlined kernels (`compute_diffusion` present, `main` not dominant) |
 | `run-imbalance-validate` | known answer: injected compute imbalance and Allreduce wait within 2%, MPI time against trace mode within 2%, POSIX, text stdio and MPI-IO byte and call counts exact (including the PnetCDF call pattern) |
 | `run-counters-validate` | exact region FLOP counts, thread coverage, compute/MPI split (software-event test anywhere; real counters with a PMU) |
 | `run-topdown-validate` | event-set rotation with software events; on a PMU, regions built to be retiring, backend-core, backend-memory and bad-speculation bound |
