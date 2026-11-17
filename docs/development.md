@@ -51,8 +51,8 @@ on every pull request with `MPIRUN_FLAGS=--oversubscribe NRANKS=2`.
 | `run-fortran-sentinels` | Fortran `MPI_IN_PLACE` / `MPI_STATUS_IGNORE` results correct in every mode, call counts not doubled |
 | `run-hwc-validate`, `-omp`, `-smear` | sample mode's per-function counter classification, per-thread counters, and the interval-smearing warning |
 | `run-ext-trace` | trace mode's MPI test/wait and RMA wrappers |
-| `test-report-html` | text, HTML, CSV and diff reports against fixtures (`tests/fixtures/`), including escaping |
-| `test-install` | installs into a scratch prefix and runs the launcher: snapshot, `--hotspots`, `--sample`, `--check`, stdin passed to rank 0, module files |
+| `test-report-html` | text, HTML, CSV, diff and fingerprint reports against fixtures (`tests/fixtures/`), including escaping; the fingerprint's axes stay within 0-100, its components add up to the run, and its classification rules hold on the fixtures and on synthetic edge cases |
+| `test-install` | installs into a scratch prefix and runs the launcher: snapshot, `--hotspots`, `--sample`, `--check`, stdin passed to rank 0, `miniprof-csv` and `miniprof-fingerprint`, module files |
 
 `make check` also runs the example workflows (`run`, `run-trace`,
 `run-f`, `run-3d`, ...). Separately, `make overhead-3d` measures the
@@ -115,7 +115,10 @@ count.
 
 Reports are Python 3, standard library only: `tools/miniprof_report.py`
 (text, observations, thresholds), `miniprof_html.py`, `miniprof_csv.py`,
-`miniprof_diff.py`.
+`miniprof_diff.py`, `miniprof_fingerprint.py` (the fingerprint, used by the
+report and the diff, and the side-by-side tool). The fingerprint's
+classification thresholds are constants at the top of
+`miniprof_fingerprint.py`.
 
 ## Design notes
 

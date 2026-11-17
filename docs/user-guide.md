@@ -91,6 +91,15 @@ miniprof-report snapshot.json --html report.html -o report.txt --csv csv
 miniprof-report snapshot.json --oneline
 ```
 
+Every report includes a [fingerprint](snapshot.md#fingerprint): a one-line
+class ("compute 63% memory-latency bound; MPI 12% bandwidth (large
+messages)") and a fixed set of percentages that place the run against the
+machine. To compare several runs at once:
+
+```bash
+miniprof-fingerprint run1 run2 run3 --html fingerprints.html
+```
+
 [Snapshot reports](snapshot.md) explains every section.
 
 ## Choosing a level

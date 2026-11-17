@@ -12,6 +12,7 @@ AMD EPYC 9654 nodes (Genoa, 192 cores), Open MPI 5 and AOCC.
 5. [Choosing ranks × threads](#5-choosing-ranks--threads)
 6. [Timing phases of your code with regions](#6-timing-phases-of-your-code-with-regions)
 7. [Measuring miniprof's own cost](#7-measuring-miniprofs-own-cost)
+8. [Characterising a set of applications](#8-characterising-a-set-of-applications)
 
 ## 1. A first run
 
@@ -170,7 +171,12 @@ for t in 1 2 4 8 16; do
         -var x 4 -var y 4 -var z 4
 done
 miniprof-diff sweep_48x4/snapshot.json sweep_24x8/snapshot.json --html 48x4_vs_24x8.html
+miniprof-fingerprint sweep_192x1 sweep_96x2 sweep_48x4 sweep_24x8 sweep_12x16 --html sweep.html
 ```
+
+The fingerprint table shows every point of the sweep in one view: the MPI,
+OpenMP serial and barrier-wait rows move against each other as threads
+per rank go up.
 
 What to watch as threads per rank go up:
 
@@ -228,3 +234,51 @@ grep -h "Loop time" off_*.log prof_*.log        # or whatever your code prints
 ```
 
 Differences smaller than the spread between the unprofiled runs are noise.
+
+## 8. Characterising a set of applications
+
+For a procurement or a benchmark suite, the question is often not "why is
+this slow" but "what kind of code is each of these": which ones a faster
+memory system helps, which ones a better network helps, which ones need
+more cores. Profile each code once on the same node type, at the same
+level, then put the [fingerprints](snapshot.md#fingerprint) side by side.
+
+```bash
+# once per node type, so the DRAM and FLOP axes have a reference
+miniprof-calibrate -o $MINIPROF_HOME/share/miniprof/calib
+
+# one run per application, same level for all
+mpirun -np 192 miniprof -l full -o wrf   ./wrf.exe
+mpirun -np 192 miniprof -l full -o lammps lmp -in in.rhodo.scaled
+mpirun -np 192 miniprof -l full -o mom6   ./MOM6
+
+miniprof-fingerprint wrf lammps mom6 --html suite.html --csv suite.csv
+```
+
+The text output has one column per run; the HTML page draws every
+percentage as a bar on the same 0-100 scale, and starts with each run's
+class line. Reading it:
+
+- **The class line** is the short answer: the largest parts of the run,
+  and what limits the compute part.
+- **Where the time goes** separates codes that a faster network or better
+  decomposition would help (MPI, rank imbalance) from those it would not.
+  MPI is described as latency or bandwidth bound from its message sizes:
+  latency-bound codes care about network latency and MPI implementation,
+  bandwidth-bound codes about link speed.
+- **Compute pipeline** (top-down) separates codes waiting for memory
+  (backend memory) from codes limited by the core (backend core,
+  frontend, bad speculation). Retiring is the useful share.
+- **Use of the node** places each code against the machine: DRAM
+  bandwidth near 60% or more of calibrated means more memory channels or
+  faster memory will pay off; a high FLOP rate means more or wider cores
+  will; both low with high backend memory means memory latency (access
+  pattern), where neither helps much.
+- **Descriptors** give the absolute numbers behind the shares (GB/s and
+  GFLOP/s per node, FLOPs per byte, MPI MB/s per rank), useful for sizing.
+
+`--csv` gives one row per measure and one column per run, ready for a
+spreadsheet; `--json` keeps everything, including how each class line was
+built. Repeat on a second node type and compare the two tables, or run
+`miniprof-diff` per application to see which codes change character on
+the new machine.

@@ -49,6 +49,15 @@ Adding a wrapper is mechanical; see `src/mpi_trace.c`.
   `libgomp`, and only one OMPT tool can be active in a process.
 - Hotspots name inlined functions only in binaries built with `-g`;
   otherwise their time appears under the caller.
+- The fingerprint's class line comes from fixed rules (documented in
+  [snapshot reports](snapshot.md#fingerprint)), not a model of the code.
+  It describes the run as a whole: a code with a bandwidth-bound phase and
+  a latency-bound phase gets one label. Use [regions](user-guide.md#regions-timing-parts-of-your-code)
+  for phase detail.
+- The fingerprint's DRAM axis is node-wide, so it includes other jobs on a
+  shared node, and it is only as good as the calibration it is measured
+  against. Compare fingerprints taken at the same level: a `basic` run has
+  no top-down or machine axes.
 
 ## Sample and trace modes
 
