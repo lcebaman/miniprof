@@ -1,7 +1,7 @@
 # User guide
 
 - [Running with the launcher](#running-with-the-launcher)
-- [Launcher options](#launcher-options)
+- [Launcher options](#launcher-options) ([each option in detail](#each-option-in-detail))
 - [What you get](#what-you-get)
 - [Choosing a level](#choosing-a-level)
 - [Launch recipes](#launch-recipes)
@@ -44,7 +44,7 @@ unprofiled, with a one-line message. A run that dies before
 
 ## Launcher options
 
-Options go between `miniprof` and the application:
+Options go between `miniprof` and the application (each is explained [below](#each-option-in-detail)):
 
 | Option | Meaning |
 |---|---|
@@ -66,6 +66,99 @@ miniprof --check $(which pw.x)
 
 `MINIPROF_LEVEL` sets the default level. Every `MINIPROF_*` variable in
 [configuration](configuration.md) still applies.
+
+### Each option in detail
+
+**`-l`, `--level L`** chooses which hardware counters the run collects.
+Everything that is not a CPU counter (time split, MPI, I/O, OpenMP,
+memory bandwidth and power, hotspots) is collected at every level; the
+level only decides the counter group, because a CPU has too few counters
+to collect them all in one run:
+
+- `basic`: IPC, GFLOP/s and DRAM fills; the first look at any code.
+- `topdown`: where the pipeline slots go (frontend, bad speculation,
+  backend memory or core, retiring); use it when compute dominates and IPC
+  is low, to see *why*.
+- `roofline`: FLOPs and DRAM reads including prefetches, so each
+  [region](#regions-timing-parts-of-your-code) gets its own roofline point.
+- `full`: FP operations by vector width, to see how much code is
+  vectorised.
+
+Each level is a separate run; IPC from a `basic` run and top-down from a
+`topdown` run of the same input can be read together. Hardware detail
+beyond IPC needs AMD Zen 4, 5 or 6 ([hardware support](hardware.md)); the
+roofline and the fingerprint's DRAM and FLOP measures also need a
+calibration ([installing](installing.md)). See also
+[choosing a level](#choosing-a-level).
+
+**`-H`, `--hotspots`** adds the functions that use the CPU time to the
+snapshot. Every thread is interrupted every 10 ms of its CPU time and the
+interrupted function is counted; at the end each rank names its functions
+and the report lists the top 30 across ranks, with CPU seconds per rank
+and imbalance. It appears as a *Hotspots* section in `report.txt` and
+`report.html`, `csv/hotspots.csv`, and a `hotspots:` line in the
+summary. It is off by default because it adds a timer signal per thread
+and some work at `MPI_Finalize` (naming functions, and reading debug
+information to name inlined ones). Use it when the snapshot says compute
+dominates but not *where*, typically in MPI-only codes without OpenMP
+regions. Build with `-g` (optimisation unchanged) so inlined functions get
+their own names; otherwise their time appears under the caller.
+`MINIPROF_HOTSPOTS_INTERVAL_MS` and `MINIPROF_HOTSPOTS_INLINE` tune it
+([configuration](configuration.md)); [snapshot reports](snapshot.md#hotspots)
+explains how to read the table.
+
+**`-s`, `--sample`** runs a sampling profile *instead of* a snapshot: call
+stacks every 10 ms, reported per function and per source line, grouped
+(USER, MPI, LIBC, ...) and per rank. The folder holds
+`miniprof_report.txt` (the profile), `miniprof.mpa` (the functions worth
+tracing) and `run.txt`; there is no `snapshot.json` or HTML report, and
+the summary line lists the top routines. Use it when you need more than
+`--hotspots` gives: inclusive call paths, source lines, or the list of
+functions to trace precisely. See [hotspots, sampling and
+tracing](sampling-and-tracing.md).
+
+**`-o`, `--output DIR`** names the result folder. Rank 0 creates it
+(parents included) relative to its working directory; the default is
+`miniprof_<app>_<date>_<time>`, so repeated runs do not overwrite each
+other. An existing folder is reused and its files replaced. If the
+application stops before `MPI_Finalize`, an empty folder is removed.
+
+**`--no-report`** writes only `snapshot.json` and `run.txt`: no text, HTML
+or CSV reports. Use it when the compute nodes have no Python 3, or to keep
+the end of a large job short; make the reports later with
+`miniprof-report snapshot.json --html report.html -o report.txt --csv csv`.
+
+**`-q`, `--quiet`** drops the summary lines rank 0 prints at the end. The
+reports are still written. Useful in sweeps and scripts.
+
+**`--check`** looks at the application and the node without running
+anything, and exits: no `mpirun` needed, so run it on a login node or at
+the start of a job script. It prints the miniprof installation, the MPI
+library the application uses, its OpenMP runtime (and warns when it is
+GCC's `libgomp`, which has no OpenMP detail), `perf_event_paranoid` (2 or
+less for hardware counters), whether the memory helper can read the
+memory controllers, and whether a calibration is set:
+
+```
+$ miniprof --check $(which pw.x)
+miniprof 1.1.0 in /opt/miniprof/1.1
+application: /opt/qe/bin/pw.x
+MPI: /opt/openmpi/5.0/lib/libmpi.so.40
+OpenMP: libomp.so
+perf_event_paranoid: 2
+memory helper: ready: /opt/miniprof/1.1/lib/miniprof-nodemon has CAP_PERFMON
+calibration: none in (MINIPROF_CALIBRATION unset): the roofline needs one: miniprof-calibrate -o DIR on one node of each type
+```
+
+It exits with 1 and a reason (`cannot profile: ...`) when miniprof cannot
+attach: the application is statically linked, not found, or uses a
+different MPI library from the one this miniprof was built for. Without
+`--check`, such an application simply runs unprofiled with the same
+one-line reason.
+
+**`--`** ends the options, for an application whose name starts with `-`.
+
+**`-h`, `--help`** prints the options.
 
 ## What you get
 
