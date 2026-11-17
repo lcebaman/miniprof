@@ -6,7 +6,7 @@ cheapest to most precise:
 
 | Tool | How | Gives | Rebuild? |
 |---|---|---|---|
-| `miniprof --hotspots` | CPU-time sampling alongside a snapshot | top 30 functions by exclusive CPU time, per-rank imbalance, in the snapshot report | no |
+| `miniprof --hotspots` | CPU-time sampling alongside a snapshot | top 30 functions by exclusive CPU time, per-rank imbalance, in the snapshot report | no (`-g` names inlined functions) |
 | `miniprof --sample` | call-stack sampling (sample mode) | every function and source line, by group, per rank; a list of functions worth tracing | no (`-g` for lines) |
 | trace mode | compiler instrumentation of chosen functions | exact calls, inclusive and exclusive time, counters per call; every MPI call | yes |
 
@@ -197,6 +197,7 @@ Table 2: Hardware Counter Characterisation (per function)
   dynamic symbol table, so `dladdr()` cannot name them, with or without
   `-rdynamic`. miniprof reads the binary's regular symbol table instead
   (in-process for hotspots, `addr2line`/`nm` for sampling and tracing).
+  With `-g`, both read the debug information for inlined functions.
   `-rdynamic` is not needed.
 - `addr2line` gives source lines and inlined-function names when the binary
   has `-g`. When GNU `addr2line` cannot read a DWARF 5 line table (binutils

@@ -38,10 +38,10 @@ mpirun -np 4 miniprof --sample ./examples/diffusion3d
 miniprof: top routines: compute_diffusion 18%, compute_viscous_dissipation 18%, compute_darcy_advection 15%, compute_radiation 9%, apply_bc 8%
 ```
 
-`miniprof --hotspots` would put the functions in the snapshot report
-instead, but it names functions from the symbol table, and at `-O2` the
-compiler has inlined these kernels into `main`. The sampling profile reads
-the debug information (`-g`) and names them, with source lines.
+`miniprof --hotspots` puts the same functions in the snapshot report
+instead. Both need `-g` to name these kernels: at `-O2` the compiler
+inlines them into `main`, and only the debug information still knows
+them. The sampling profile adds source lines.
 
 ## 2. A hybrid MPI + OpenMP code (LAMMPS)
 

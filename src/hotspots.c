@@ -99,6 +99,50 @@ static int by_samples(const void *a, const void *b)
     return (y > x) - (y < x);
 }
 
+/* Symbol-table names put an inlined function's samples under its caller
+ * (diffusion3d at -O2: 'main 82%'). For the addresses in the leading
+ * functions, read the innermost function from the debug information
+ * (addr2line, only for DSOs built with -g). MINIPROF_HOTSPOTS_INLINE=0
+ * turns it off. Returns the number of addresses renamed. */
+#define HS_REFINE 64
+static int by_name_only(const void *a, const void *b)
+{
+    return strcmp(((const miniprof_sym_t *)a)->name, ((const miniprof_sym_t *)b)->name);
+}
+static int refine_inline(miniprof_sym_t *s, int n)
+{
+    const char *e = getenv("MINIPROF_HOTSPOTS_INLINE");
+    if (e && strcmp(e, "0") == 0) return 0;
+    qsort(s, (size_t)n, sizeof(*s), by_name_only);
+    /* totals per name run; keep the HS_REFINE largest */
+    long *tot = calloc((size_t)n, sizeof(long));
+    char *want = calloc((size_t)n, 1);
+    if (!tot || !want) { free(tot); free(want); return 0; }
+    int nrun = 0;
+    long *runs = calloc((size_t)n, sizeof(long));
+    for (int i = 0; i < n; ) {
+        int j = i; long t = 0;
+        while (j < n && strcmp(s[j].name, s[i].name) == 0) t += s[j++].count;
+        for (int k = i; k < j; k++) tot[k] = t;
+        runs[nrun++] = t;
+        i = j;
+    }
+    long cut = 0;
+    if (nrun > HS_REFINE) {
+        /* the HS_REFINE-th largest run total */
+        for (int a = 0; a < HS_REFINE; a++) {
+            int mx = a;
+            for (int b = a + 1; b < nrun; b++) if (runs[b] > runs[mx]) mx = b;
+            long t = runs[a]; runs[a] = runs[mx]; runs[mx] = t;
+        }
+        cut = runs[HS_REFINE - 1];
+    }
+    for (int i = 0; i < n; i++) want[i] = tot[i] >= cut && tot[i] > 0;
+    int changed = symbolizer_inline_names(s, want, n);
+    free(tot); free(want); free(runs);
+    return changed;
+}
+
 int hotspots_collect(hs_entry_t *out, int max, long *total)
 {
     *total = 0;
@@ -111,6 +155,8 @@ int hotspots_collect(hs_entry_t *out, int max, long *total)
     double t0 = hs_now();
     symbolizer_resolve(s, g_npc, /*use_addr2line=*/0);   /* names only, in-process */
     double t1 = hs_now();
+    int inl = refine_inline(s, g_npc);
+    double t2 = hs_now();
 
     /* merge PCs into functions: sort by (name, dso), then fold runs.
      * Unnamed code (stripped libraries) is kept per DSO as "[dso]". */
@@ -136,8 +182,9 @@ int hotspots_collect(hs_entry_t *out, int max, long *total)
     qsort(f, (size_t)nf, sizeof(*f), by_samples);
     const char *v = getenv("MINIPROF_VERBOSE");
     if (v && atoi(v))
-        fprintf(stderr, "[miniprof] hotspots: %d addresses -> %d functions; names %.1f ms, merge %.1f ms\n",
-                g_npc, nf, 1e3 * (t1 - t0), 1e3 * (hs_now() - t1));
+        fprintf(stderr, "[miniprof] hotspots: %d addresses -> %d functions; names %.1f ms, "
+                "inlined %d (%.1f ms), merge %.1f ms\n",
+                g_npc, nf, 1e3 * (t1 - t0), inl, 1e3 * (t2 - t1), 1e3 * (hs_now() - t2));
     int n = nf < max ? nf : max;
     memcpy(out, f, (size_t)n * sizeof(*f));
     free(f); free(s);

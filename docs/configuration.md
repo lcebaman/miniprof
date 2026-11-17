@@ -33,6 +33,7 @@ make sure they reach every rank (Open MPI: `mpirun -x VAR`, or
 | `MINIPROF_SNAPSHOT` | `basic` | counter group: `basic`, `topdown`, `roofline`, `full` (the launcher's `--level`) |
 | `MINIPROF_HOTSPOTS` | `0` | `1` adds function hotspots (the launcher's `--hotspots`) |
 | `MINIPROF_HOTSPOTS_INTERVAL_MS` | `10` | hotspot sampling interval, CPU milliseconds per thread (1–1000) |
+| `MINIPROF_HOTSPOTS_INLINE` | `1` | `0` names hotspots from the symbol table only (no `addr2line`; inlined functions under their caller) |
 | `MINIPROF_COUNTERS_SPLIT` | `1` | `0` stops reading counters at MPI calls: no compute/MPI split, no per-call cost |
 | `MINIPROF_NO_RDPMC` | unset | set to read counters with `read()` instead of `rdpmc` |
 | `MINIPROF_OMPT` | `1` | `0` leaves OpenMP alone (no OMPT tool) |

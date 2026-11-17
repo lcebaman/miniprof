@@ -631,6 +631,73 @@ static int elf_lookup(const char *path, void *pc, void *fbase, char *out, size_t
     return 1;
 }
 
+/* ── inline-aware names for hotspots ─────────────────────────────────────── */
+typedef struct { const char *path; uint64_t rel; int idx; } inl_ref_t;
+
+static int inl_by_path(const void *a, const void *b)
+{
+    return strcmp(((const inl_ref_t *)a)->path, ((const inl_ref_t *)b)->path);
+}
+
+int symbolizer_inline_names(miniprof_sym_t *syms, const char *want, int n)
+{
+    inl_ref_t *r = calloc((size_t)n, sizeof(*r));
+    char (*paths)[MINIPROF_SYMBOL_LEN] = calloc((size_t)n, MINIPROF_SYMBOL_LEN);
+    if (!r || !paths) { free(r); free(paths); return 0; }
+    int nr = 0;
+    for (int i = 0; i < n; i++) {
+        if (!want[i]) continue;
+        Dl_info di;
+        if (!dladdr(syms[i].pc, &di) || !di.dli_fname || !di.dli_fname[0]) continue;
+        const char *p = di.dli_fname;
+        if (p[0] != '/' && g_exe_path[0] == '/') p = g_exe_path;
+        const elf_dso_t *e = elf_open(p);
+        if (!e || !e->has_lines) continue;            /* no debug info: keep the symbol name */
+        snprintf(paths[nr], MINIPROF_SYMBOL_LEN, "%.*s", MINIPROF_SYMBOL_LEN - 1, p);
+        r[nr].path = paths[nr];
+        r[nr].rel = (uint64_t)(uintptr_t)syms[i].pc - (e->is_dyn ? (uint64_t)(uintptr_t)di.dli_fbase : 0);
+        r[nr].idx = i;
+        nr++;
+    }
+    qsort(r, (size_t)nr, sizeof(*r), inl_by_path);
+    int changed = 0;
+    for (int a = 0; a < nr; ) {
+        int b = a;
+        while (b < nr && strcmp(r[b].path, r[a].path) == 0) b++;
+        /* addresses through a file on stdin: no command-line limit */
+        const char *td = getenv("TMPDIR");
+        char tmpl[512];
+        snprintf(tmpl, sizeof(tmpl), "%s/miniprof_inl_XXXXXX", td && *td ? td : "/tmp");
+        int fd = mkstemp(tmpl);
+        if (fd >= 0) {
+            FILE *f = fdopen(fd, "w");
+            for (int k = a; k < b; k++) fprintf(f, "0x%llx\n", (unsigned long long)r[k].rel);
+            fclose(f);
+            char cmd[1024 + MINIPROF_SYMBOL_LEN];
+            snprintf(cmd, sizeof(cmd), "%s -e '%s' -f -C < '%s' 2>/dev/null",
+                     addr2line_tool(), r[a].path, tmpl);
+            FILE *pp = mp_popen(cmd);
+            if (pp) {
+                char fn[1024], loc[1024];
+                for (int k = a; k < b; k++) {
+                    if (!fgets(fn, sizeof(fn), pp) || !fgets(loc, sizeof(loc), pp)) break;
+                    fn[strcspn(fn, "\n")] = '\0';
+                    if (fn[0] && strcmp(fn, "??") != 0 &&
+                        strcmp(fn, syms[r[k].idx].name) != 0) {
+                        snprintf(syms[r[k].idx].name, MINIPROF_SYMBOL_LEN, "%.*s", MINIPROF_SYMBOL_LEN - 1, fn);
+                        changed++;
+                    }
+                }
+                mp_pclose(pp);
+            }
+            unlink(tmpl);
+        }
+        a = b;
+    }
+    free(r); free(paths);
+    return changed;
+}
+
 /* ── main resolve entry point ────────────────────────────────────────────── */
 void symbolizer_resolve(miniprof_sym_t *syms, int n, int use_addr2line)
 {

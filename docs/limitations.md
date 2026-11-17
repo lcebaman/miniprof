@@ -47,8 +47,8 @@ Adding a wrapper is mechanical; see `src/mpi_trace.c`.
 - The FLOP counter does not separate precisions.
 - OpenMP detail needs OMPT (LLVM `libomp` or Intel `libiomp5`), not GCC's
   `libgomp`, and only one OMPT tool can be active in a process.
-- Hotspots name functions from the symbol table: inlined functions appear
-  as their caller. Use `--sample` with `-g` to see them.
+- Hotspots name inlined functions only in binaries built with `-g`;
+  otherwise their time appears under the caller.
 
 ## Sample and trace modes
 

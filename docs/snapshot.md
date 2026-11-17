@@ -31,41 +31,54 @@ sections say why they are missing):
 ```
 ==============================================================================
  miniprof snapshot  |  /home/user/miniprof/examples/diffusion3d
- 4 ranks on 1 node(s)  |  Skylake/Cascade Lake SP  |  2026-11-16T18:55:07Z
+ 4 ranks on 1 node(s)  |  Emerald Rapids  |  2026-11-17T09:06:47Z
 ==============================================================================
- Elapsed time          20.46 s  (slowest rank)
+ Elapsed time          23.51 s  (slowest rank)
 
  Time split (average over ranks)
-   Compute      92.7%  ############################..
-   MPI           7.3%  ##............................
+   Compute      88.8%  ###########################...
+   MPI          11.2%  ###...........................
    I/O           0.0%  ..............................
 
- Compute imbalance       0.8%   (perfect balance would save 0.8% of elapsed)
-   slowest ranks       1 (19.11 s), 0 (19.02 s), 3 (18.87 s)
- MPI time imbalance      7.7%   (min 1.34 s, max 1.62 s)
+ Compute imbalance       0.9%   (perfect balance would save 0.8% of elapsed)
+   slowest ranks       1 (21.06 s), 3 (20.99 s), 0 (20.85 s)
+ MPI time imbalance     10.1%   (min 2.45 s, max 2.94 s)
+ CPU utilisation        24.6%   (min 24.5%, max 24.7%; per physical core)
 
  MPI by class           time%    calls        data
-   p2p                   7.0%      3200   400.0 MiB
-   collective            0.3%       184   513.4 KiB
+   p2p                  10.6%      3200   400.0 MiB
+   collective            0.7%       184   513.4 KiB
 
  Top MPI functions      time%    imb%    calls   avg size
-   MPI_Sendrecv          7.0%    5.4%     3200  128.0 KiB
-   MPI_Allreduce         0.3%   42.0%      176        8 B
+   MPI_Sendrecv         10.6%   11.9%     3200  128.0 KiB
+   MPI_Allreduce         0.7%   21.8%      176        8 B
+   MPI_Gatherv           0.0%   40.2%        4  128.0 KiB
+   MPI_Gather            0.0%   74.3%        4        4 B
 
  Message sizes
    p2p          most calls: 128.0 KiB-256.0 KiB (100%);  most time: 128.0 KiB-256.0 KiB
    collective   most calls: 8 B-16 B (96%);  most time: 8 B-16 B
 
- Hotspots: CPU time sampled every 10 ms (4,045 samples, 40.45 s); time in the function itself
-   USER 91.7%  LIBC 8.1%  MPI 0.2%
+ Hotspots: CPU time sampled every 10 ms (4,618 samples, 46.18 s); time in the function itself
+   USER 90.1%  LIBC 9.3%  MPI 0.6%
     CPU%  CPU/rank  imbal  group  function  [library]
-    82.4    8.34 s     3%  USER   main  [diffusion3d]
-     9.1  925.0 ms     2%  USER   apply_bc  [diffusion3d]
-     4.4  442.5 ms    22%  LIBC   sched_yield  [libc.so.6]
+    16.6    1.92 s     3%  USER   compute_diffusion  [diffusion3d]
+    15.9    1.83 s     5%  USER   compute_viscous_dissipation  [diffusion3d]
+    15.0    1.73 s     8%  USER   compute_darcy_advection  [diffusion3d]
+     9.9    1.14 s     5%  USER   compute_phase_change  [diffusion3d]
+     8.1  932.5 ms     6%  USER   compute_radiation  [diffusion3d]
  ...
+
+ I/O                    read                 write             time (avg/rank)
+   POSIX           0 B (     0 calls)        0 B (     0 calls)   0 us
+   MPI-IO          0 B (     0 calls)        0 B (     0 calls)   0 us
+
  Hardware counters      unavailable: perf_event_open failed for generic/base: No such file or directory (no PMU: virtual machine or unsupported CPU?)
- Memory (node)          not measured: no node-level memory counters for uarch 'skylake_sp' (AMD Zen 4 / 5 / 6 only)
+
+ Memory (node)          not measured: no node-level memory counters for uarch 'emerald_rapids' (AMD Zen 4 / 5 / 6 only)
+
  Roofline               not available: no calibration: run miniprof-calibrate once per node type and set MINIPROF_CALIBRATION
+
  OpenMP                 not measured: application does not use OpenMP
 ```
 
@@ -167,8 +180,11 @@ tasks that workers run while waiting at a barrier count as compute.
 With `--hotspots` (or `MINIPROF_HOTSPOTS=1`), every thread is sampled on
 CPU time every 10 ms (`MINIPROF_HOTSPOTS_INTERVAL_MS`) and each sample
 counts in the function it interrupted. At `MPI_Finalize` each rank names
-its functions in-process from the binaries' symbol tables and sends its
-top 48; the report shows the top 30 across ranks:
+its functions from the binaries' symbol tables (in-process) and, for
+binaries built with `-g`, reads the innermost function of the addresses in
+its leading functions from the debug information, so inlined kernels get
+their own names. It sends its top 48; the report shows the top 30 across
+ranks:
 
 - the split by group: application (`USER`), MPI library, OpenMP runtime
   (`OMP`), other libraries;
@@ -181,11 +197,13 @@ How to read it:
 - Waiting in MPI shows as MPI library code (`opal_progress`,
   `[mca_btl_vader.so]`), waiting in OpenMP as runtime code. Libraries
   without function names show as `[library.so]`.
-- Names come from the symbol table, so **inlined functions appear as their
-  caller**: in the example above, `diffusion3d`'s stencil kernels are
-  inlined into `main` at `-O2`. The sampling profile (`--sample`) reads the
-  debug information instead and names them (`compute_diffusion` 18%,
-  `compute_viscous_dissipation` 18%...) with source lines; it needs `-g`.
+- **Inlined functions** are named only when the binary has debug
+  information (`-g`). Without it, their time appears under the function
+  they were inlined into. `diffusion3d` at `-O2` inlines its stencil
+  kernels into `main`: with `-g` the report shows `compute_diffusion` 17%,
+  `compute_viscous_dissipation` 17%...; without, `main` 82%. This step runs
+  `addr2line` once per binary with debug information, at finalize (about
+  10 ms); `MINIPROF_HOTSPOTS_INLINE=0` turns it off.
 - Each rank sends its top 48 functions; time in functions below that is
   shown as "minor functions" so the groups add up.
 
