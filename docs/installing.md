@@ -187,7 +187,10 @@ LD_PRELOAD=$PWD/libminiprof.so MINIPROF_MODE=snapshot mpirun -n 4 ./examples/hea
 python3 tools/miniprof_report.py miniprof_snapshot.json --html report.html
 ```
 
-`modulefiles/miniprof/1.0.lua` is an older module for the build tree that
-sets `LD_PRELOAD` for the whole shell, so every MPI program you then run is
-sampled. It is convenient for quick sampling experiments but has the
-drawback described above; prefer `make install` and the launcher.
+To try the launcher and module from a checkout, install into a scratch
+prefix inside it:
+
+```bash
+make install PREFIX=$PWD/_install MODULE_VERSION=dev
+module use $PWD/_install/share/modulefiles && module load miniprof/dev
+```
