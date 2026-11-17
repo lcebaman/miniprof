@@ -843,10 +843,12 @@ test-report-html:
 	    $$(ls miniprof_snapshot_*.json 2>/dev/null)
 	@echo "--- snapshot diff (miniprof_diff.py)"
 	@python3 tests/check_diff.py $$(ls miniprof_snapshot_*.json 2>/dev/null)
+	@echo "--- fingerprint (miniprof_fingerprint.py)"
+	@python3 tests/check_fingerprint.py $$(ls miniprof_snapshot_*.json 2>/dev/null)
 
 # ── install: a prefix with the launcher, tools and a module file ─────────────
 #   make install PREFIX=/opt/miniprof/1.1-openmpi5 [MODULE_VERSION=1.1-openmpi5]
-# Layout: bin/ (miniprof launcher, miniprof-report, -diff, -calibrate),
+# Layout: bin/ (miniprof launcher, miniprof-report, -diff, -csv, -fingerprint, -calibrate),
 # lib/ (libminiprof.so, miniprof-nodemon), share/miniprof/ (tools, calib/),
 # share/modulefiles/miniprof/<MODULE_VERSION>.lua (Lmod) and
 # share/modulefiles-tcl/miniprof/<MODULE_VERSION> (Tcl Environment Modules).
@@ -873,7 +875,8 @@ install: lib nodemon calibrate
 	install -m 644 docs/*.md $$d/share/doc/miniprof/docs/ && \
 	echo "$(MINIPROF_VERSION)" > $$d/share/miniprof/VERSION && \
 	ldd $(LIB) | awk '/libmpi(ch)?\.so/ {print $$1; exit}' > $$d/share/miniprof/mpi_soname && \
-	for t in report:miniprof_report.py diff:miniprof_diff.py csv:miniprof_csv.py; do \
+	for t in report:miniprof_report.py diff:miniprof_diff.py csv:miniprof_csv.py \
+		fingerprint:miniprof_fingerprint.py; do \
 		n=miniprof-$${t%%:*}; sed -e "s|@NAME@|$$n|" -e "s|@SCRIPT@|$${t#*:}|" \
 			packaging/miniprof-tool.in > $$d/bin/$$n && chmod 755 $$d/bin/$$n; done && \
 	for f in lua tcl; do \
@@ -900,6 +903,7 @@ test-install: lib nodemon calibrate $(EXAMPLE)
 	grep -q "ranks" launcher.err || { echo "FAIL: no summary line"; cat launcher.err; exit 1; } && \
 	$$tmp/p/bin/miniprof-report res/snapshot.json --oneline >/dev/null && \
 	$$tmp/p/bin/miniprof-csv res/snapshot.json csvout >/dev/null && [ -s csvout/summary.csv ] && \
+	$$tmp/p/bin/miniprof-fingerprint res res/snapshot.json --html fp.html | grep -q '^Class' && [ -s fp.html ] && \
 	$$tmp/p/bin/miniprof --check $(CURDIR)/$(EXAMPLE) >/dev/null && \
 	echo "stdin reaches rank 0" > in.txt && printf '#!/bin/sh\nhead -1 > got.$$$$\nexec "$$@"\n' > rd.sh && chmod +x rd.sh && \
 	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 1 $$tmp/p/bin/miniprof -q -o sin ./rd.sh \

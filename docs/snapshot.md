@@ -20,6 +20,7 @@ This page follows the report from top to bottom.
 - [Memory](#memory)
 - [Roofline](#roofline)
 - [Regions](#regions)
+- [Fingerprint](#fingerprint)
 - [Observations and thresholds](#observations-and-thresholds)
 - [Profiler overhead](#profiler-overhead)
 - [The JSON document](#the-json-document)
@@ -80,6 +81,14 @@ sections say why they are missing):
  Roofline               not available: no calibration: run miniprof-calibrate once per node type and set MINIPROF_CALIBRATION
 
  OpenMP                 not measured: application does not use OpenMP
+
+ Fingerprint            compute 89% not characterised (no hardware counters); MPI 10% bandwidth (large messages)
+   Where the time goes (% of elapsed)
+     MPI                     11.2%  ###...........................
+     Rank imbalance           0.8%  ..............................
+     I/O                      0.0%  ..............................
+   Use of the node (% of capability)
+     CPU utilisation         24.6%  #######.......................
 ```
 
 A section that cannot be measured always says why; the rest of the report
@@ -303,6 +312,51 @@ DRAM byte), under the calibrated DRAM bandwidth and peak FLOP ceilings.
 Code bracketed with `miniprof_region_begin/end` ([user
 guide](user-guide.md#regions-timing-parts-of-your-code)) gets its own
 calls, time, counters, top-down and roofline point, reduced across ranks.
+
+## Fingerprint
+
+A compact characterisation of the run, worked out from the snapshot after
+the run (it costs nothing while the application runs). The first line
+splits the run into its largest parts and says what limits each:
+
+```
+ Fingerprint            compute 63% memory-latency bound; MPI 12% bandwidth (large messages); OpenMP barrier wait 12%
+```
+
+Below it, fixed axes, all percentages, so runs of different applications
+or machines can be put side by side:
+
+| Group | Axes | Needs |
+|---|---|---|
+| Where the time goes (% of elapsed) | MPI, rank imbalance, I/O, OpenMP serial, OpenMP barrier wait | any level |
+| Compute pipeline (% of slots) | retiring, frontend bound, bad speculation, backend memory, backend core | `-l topdown` or higher |
+| Use of the node (% of capability) | CPU utilisation, DRAM bandwidth, FLOP rate, packed FP ops | DRAM and FLOP: `-l roofline` or `full`, with a calibration |
+
+An axis that was not measured is left out (`null` in JSON), never estimated.
+
+How the first line is built:
+
+- **Rank imbalance** is the time the average rank waits inside MPI for
+  the slowest one, so it is taken out of the MPI share: "MPI 12%" is MPI
+  time that better balance would not remove.
+- **MPI** is described as *collectives* when they take 60% or more of MPI
+  time; otherwise as *latency (small messages)* or *bandwidth (large
+  messages)*, depending on whether half the point-to-point time is in
+  messages below 16 KiB.
+- **OpenMP serial** and **barrier wait** are taken out of compute.
+- **Compute** is named from the strongest evidence available, in this
+  order: *memory-bandwidth bound* (at least 60% of calibrated DRAM
+  bandwidth); *FLOP bound* (at least 50% of calibrated peak); the largest
+  top-down stall (*memory-latency bound* when backend memory leads with
+  under 40% of DRAM bandwidth, *memory bound* when bandwidth was not
+  measured, *core bound*, *frontend bound*, *bad-speculation bound*);
+  *retiring well* (retiring at least 50%); the side of the roofline;
+  otherwise *not characterised*, with the reason.
+
+The descriptors under the axes (IPC, GFLOP/s and DRAM GB/s per node,
+FLOP per DRAM byte, MPI MB/s per rank, typical message size, memory per
+rank, power) are absolute values for context. To compare several runs,
+see [miniprof-fingerprint](comparing-runs.md#miniprof-fingerprint).
 
 ## Observations and thresholds
 

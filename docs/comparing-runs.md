@@ -1,6 +1,7 @@
 # Comparing runs, CSV and thresholds
 
 - [miniprof-diff](#miniprof-diff)
+- [miniprof-fingerprint](#miniprof-fingerprint)
 - [CSV export](#csv-export)
 - [Thresholds](#thresholds)
 
@@ -68,6 +69,31 @@ Things to keep in mind:
 
 [Examples](examples.md#4-why-is-one-node-pair-slower) shows a real
 comparison of two node pairs.
+
+## miniprof-fingerprint
+
+`miniprof-fingerprint` puts the [fingerprints](snapshot.md#fingerprint) of
+several runs side by side: one column per run, one row per axis. Use it to
+characterise a benchmark suite (which codes are bandwidth bound, which
+spend their time in small-message MPI) or to see how one code changes
+character across machines, rank counts or inputs.
+
+```bash
+miniprof-fingerprint wrf/ lammps/ mom6/                      # result folders or snapshot.json files
+miniprof-fingerprint run*/ --names 1n,2n,4n,8n --html fp.html --csv fp.csv --json fp.json
+```
+
+- Column names default to the result folder name (or the program name for
+  a JSON file); `--names` sets them.
+- `--html` writes a page with the same tables as the report's fingerprint
+  section; `--csv` one row per axis and descriptor; `--json` the full
+  fingerprints, including the components behind the class line.
+- A run at `basic` level has only the time axes and CPU utilisation; use
+  the same level for every run you compare.
+
+With one run it prints that run's fingerprint. `miniprof-diff` also shows
+both fingerprints, and says so when the leading part of the run changes
+(for example from memory-bandwidth bound compute to MPI).
 
 ## CSV export
 

@@ -582,6 +582,10 @@ def report(doc: dict, args) -> str:
                     p(f"   {r['name'][:20]:<20} {cpr:>9g}  {human_time(r['wall_s_per_rank']):>10}"
                       f"  {r['avg_team']:5.1f}  {r['imbalance_pct']:5.1f}   {r.get('location', '')}")
 
+    import miniprof_fingerprint
+    p("")
+    out.extend(miniprof_fingerprint.text_one(miniprof_fingerprint.fingerprint(doc)))
+
     obs = observations(doc, args)
     p("")
     src = getattr(args, "thresholds_source", "")

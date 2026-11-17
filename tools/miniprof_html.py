@@ -421,6 +421,12 @@ CSS = """
 *{box-sizing:border-box}
 body{margin:0}
 .mp{background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}
+.fpclass{font-size:16px;font-weight:600;margin:6px 0 10px}
+.fpclasses{padding-left:18px}
+table.fp{table-layout:fixed;width:100%}table.fp th:first-child,table.fp td:first-child{width:32%}
+table.fp td.num{white-space:nowrap}
+.fpt{display:inline-block;width:90px;height:8px;margin-right:8px;vertical-align:middle;background:var(--grid);border-radius:0 4px 4px 0}
+.fpt i{display:block;height:100%;background:var(--s1);border-radius:0 4px 4px 0}
 .wrap{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
 header h1{font-size:20px;font-weight:600;margin:0 0 4px;word-break:break-all}
 header .meta{color:var(--ink2);font-size:13px}
@@ -552,6 +558,12 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
     elif par:
         S.append('<section id="observations"><h2>Observations</h2><ul class="obs"><li class="ok">'
                  '<span class="ic" aria-hidden="true">✓</span><span>No threshold exceeded.</span></li></ul>' + thr + '</section>')
+
+    # ---- fingerprint
+    if par:
+        import miniprof_fingerprint as FP
+        section("fingerprint", "Fingerprint", FP.html_section([FP.fingerprint(doc)], ["this run"]) +
+                '<p class="note">Compare runs side by side: <code>miniprof-fingerprint RUN1 RUN2 ...</code></p>')
 
     # ---- time and ranks
     if par:
