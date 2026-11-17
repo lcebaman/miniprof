@@ -12,6 +12,7 @@ proc ModulesHelp { } {
     puts stderr "  miniprof --sample ...                        time per routine and source line"
     puts stderr "  miniprof --check pw.x                        can it profile pw.x here?"
     puts stderr "  miniprof-diff A/snapshot.json B/snapshot.json --html diff.html"
+    puts stderr "  miniprof-fingerprint run1 run2 ... --html fp.html   compare runs side by side"
     puts stderr ""
     puts stderr "Built against: @MPI@"
 }

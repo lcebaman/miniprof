@@ -17,6 +17,7 @@ report.txt, snapshot.json and CSV tables, and a one-line summary.
   miniprof --check pw.x                        can it profile pw.x here?
   miniprof-report snapshot.json                text report
   miniprof-diff A/snapshot.json B/snapshot.json --html diff.html
+  miniprof-fingerprint run1 run2 ... --html fp.html   compare runs side by side
 
 Built against: @MPI@
 The application must use the same MPI library (miniprof --check tells).
