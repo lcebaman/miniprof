@@ -59,7 +59,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace diffusion3d_hot hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma
 
 all: $(EXAMPLES)
 
@@ -77,6 +77,11 @@ heat1d+trace: heat1d.f90 $(LIB)
 
 diffusion3d: diffusion3d.c $(LIB)
 	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -lm -o $@
+
+# Fixed-size build for run-hotspots-validate: long enough (~1 s of CPU per
+# rank) to sample whatever grid the other tests use.
+diffusion3d_hot: diffusion3d.c $(LIB)
+	$(CC) $(CFLAGS) -DNX_GLOBAL=128 -DNY_GLOBAL=128 -DNZ_GLOBAL=64 -DNSTEPS=200 $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -lm -o $@
 
 diffusion3d+trace: diffusion3d.c $(LIB)
 	$(CC) $(CFLAGS) -DNX_GLOBAL=$(NX) -DNY_GLOBAL=$(NY) -DNZ_GLOBAL=$(NZ) -DNSTEPS=$(NSTEPS_3D) -finstrument-functions $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -lm -o $@
@@ -151,4 +156,4 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
 	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
-	      counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma
+	      counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma diffusion3d_hot

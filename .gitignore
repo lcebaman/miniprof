@@ -10,6 +10,7 @@ examples/heat1d
 examples/heat1d+trace
 examples/diffusion3d
 examples/diffusion3d+trace
+examples/diffusion3d_hot
 examples/hwc_validate
 examples/hwc_validate_omp
 examples/hwc_validate_smear

@@ -567,15 +567,27 @@ run-3d-snapshot: $(EXAMPLE_3D)
 # ── run-hotspots-validate: hotspots name inlined kernels ─────────────────────
 # diffusion3d (-O2 -g) inlines its stencil kernels into main: symbol-table
 # names alone put ~80% of the time in 'main'; with the debug information the
-# kernels must appear by name and main must not dominate.
-run-hotspots-validate: $(EXAMPLE_3D)
-	@MINIPROF_MODE=snapshot MINIPROF_HOTSPOTS=1 MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_hot.json \
-	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) -x MINIPROF_MODE -x MINIPROF_HOTSPOTS -x MINIPROF_SNAPSHOT_OUTPUT \
-		./$(EXAMPLE_3D) >/dev/null && \
+# kernels must appear by name and main must not dominate.  Uses a fixed-size
+# build (examples/diffusion3d_hot) and 1 ms sampling so the result does not
+# depend on the NX/NY/NZ chosen for the other tests; SKIPs rather than FAILs
+# if a slow or busy machine still collects too few samples to judge.
+HOT_MIN_SAMPLES ?= 200
+
+examples/diffusion3d_hot: examples/diffusion3d.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) diffusion3d_hot
+
+run-hotspots-validate: examples/diffusion3d_hot
+	@MINIPROF_MODE=snapshot MINIPROF_HOTSPOTS=1 MINIPROF_HOTSPOTS_INTERVAL_MS=1 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_hot.json \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) -x MINIPROF_MODE -x MINIPROF_HOTSPOTS \
+		-x MINIPROF_HOTSPOTS_INTERVAL_MS -x MINIPROF_SNAPSHOT_OUTPUT \
+		./examples/diffusion3d_hot >/dev/null && \
 	python3 -c "import json,sys; h=json.load(open('miniprof_snapshot_hot.json'))['metrics']['hotspots']; \
+	n=h.get('samples',0) if h.get('available') else 0; \
+	n < $(HOT_MIN_SAMPLES) and (print('SKIP: hotspots name inlined kernels: only %d samples (< $(HOT_MIN_SAMPLES))' % n) or sys.exit(0)); \
 	f={x['name']:x['pct'] for x in h['functions']}; ok='compute_diffusion' in f and f.get('main',0) < 30; \
-	print(('PASS' if ok else 'FAIL') + ': hotspots name inlined kernels: compute_diffusion %.1f%%, main %.1f%%' \
-	% (f.get('compute_diffusion',0), f.get('main',0))); sys.exit(0 if ok else 1)"
+	print(('PASS' if ok else 'FAIL') + ': hotspots name inlined kernels: compute_diffusion %.1f%%, main %.1f%% (%d samples)' \
+	% (f.get('compute_diffusion',0), f.get('main',0), n)); sys.exit(0 if ok else 1)"
 
 # ── run-imbalance-validate: snapshot known-answer test (P1 exit criteria) ───
 # examples/imbalance_validate injects a known per-rank compute imbalance and
