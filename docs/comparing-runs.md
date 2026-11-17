@@ -123,22 +123,22 @@ writes them into the result folder's `csv/`.
 
 The observations at the end of a report are triggered by thresholds:
 
-| Key | Default | Flags |
-|---|---|---|
-| `mpi_pct` | 20 | MPI above this % of the run |
-| `imbalance_pct` | 10 | compute imbalance across ranks above this % |
-| `io_pct` | 10 | I/O above this % of the run |
-| `cpu_util_pct` | 80 | CPU utilisation per core below this % |
-| `remote_pct` | 20 | remote-socket share of DRAM reads above this % |
-| `packed_pct` | 50 | packed (vector) FP operations below this % |
-| `serial_pct` | 20 | OpenMP serial time above this % of the run |
-| `omp_imbalance_pct` | 10 | OpenMP barrier or lock wait above this % of thread time |
-| `omp_idle_pct` | 20 | OpenMP worker spin between regions above this % of cycles |
-| `td_memory_pct` | 30 | top-down backend memory (or core) above this % of slots |
-| `td_frontend_pct` | 20 | top-down frontend bound above this % |
-| `td_badspec_pct` | 10 | top-down bad speculation above this % |
-| `roof_dram_pct` | 50 | a memory-bound run below this % of the DRAM ceiling |
-| `roof_peak_pct` | 20 | a compute-bound run below this % of peak FLOPs |
+| Key | Option | Default | Flags |
+|---|---|---|---|
+| `mpi_pct` | `--mpi-pct` | 20 | MPI above this % of the run |
+| `imbalance_pct` | `--imbalance-pct` | 10 | compute imbalance across ranks above this % |
+| `io_pct` | `--io-pct` | 10 | I/O above this % of the run |
+| `cpu_util_pct` | `--cpu-util-pct` | 80 | CPU utilisation per core below this % |
+| `remote_pct` | `--remote-pct` | 20 | remote-socket share of DRAM reads above this % |
+| `packed_pct` | `--packed-pct` | 50 | packed (vector) FP operations below this % |
+| `serial_pct` | `--serial-pct` | 20 | OpenMP serial time above this % of the run |
+| `omp_imbalance_pct` | `--omp-imbalance-pct` | 10 | OpenMP barrier or lock wait above this % of thread time |
+| `omp_idle_pct` | `--omp-idle-pct` | 20 | OpenMP worker spin between regions above this % of cycles |
+| `td_memory_pct` | `--td-memory-pct` | 30 | top-down backend memory (or core) above this % of slots |
+| `td_frontend_pct` | `--td-frontend-pct` | 20 | top-down frontend bound above this % |
+| `td_badspec_pct` | `--td-badspec-pct` | 10 | top-down bad speculation above this % |
+| `roof_dram_pct` | `--roof-dram-pct` | 50 | a memory-bound run below this % of the DRAM ceiling |
+| `roof_peak_pct` | `--roof-peak-pct` | 20 | a compute-bound run below this % of peak FLOPs |
 
 To change them, write the defaults to a file, edit it, and use it:
 
