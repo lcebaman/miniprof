@@ -28,6 +28,7 @@ miniprof: report /home/user/mp-test/miniprof_lmp_20261113_122838/report.html
 | How far from what the node can do? | roofline against calibrated ceilings |
 | Which functions burn the CPU time? | hotspots (`--hotspots`), or the sampling profile (`--sample`) |
 | Why is run B slower than run A? | `miniprof-diff` |
+| What kind of code is this, and how do several codes compare? | fingerprint (in every report), `miniprof-fingerprint` |
 
 Every report ends with **observations**: plain-language findings such as
 "MPI takes 49% of the run, mostly MPI_Wait; compute imbalance 35%" or
@@ -72,7 +73,7 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
 | [User guide](docs/user-guide.md) | The `miniprof` launcher, its options and output, profiling without it, regions in your code, C/C++ and Fortran |
 | [Snapshot reports](docs/snapshot.md) | Every section of the report: what is measured, how, and how to read it |
 | [Hotspots, sampling and tracing](docs/sampling-and-tracing.md) | Finding the hot functions; the sample → select → trace workflow; `mpa-check` |
-| [Comparing runs](docs/comparing-runs.md) | `miniprof-diff`, CSV export, thresholds |
+| [Comparing runs](docs/comparing-runs.md) | `miniprof-diff`, `miniprof-fingerprint`, CSV export, thresholds |
 | [Examples](docs/examples.md) | Worked examples on real applications: hybrid MD code, MPI-only ocean model, thread sweep, node comparison |
 | [Configuration](docs/configuration.md) | Every environment variable |
 | [Hardware support](docs/hardware.md) | What each CPU provides, counter groups, Zen 4/5/6 notes, permissions |

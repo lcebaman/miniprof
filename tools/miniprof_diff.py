@@ -32,6 +32,9 @@ import math
 import os
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import miniprof_fingerprint as FP  # noqa: E402
+
 
 def load(p):
     with open(p) as f:
@@ -150,6 +153,7 @@ def dram_gb(R):
 def analyse(A: Run, B: Run) -> dict:
     out = {"A": A.label, "B": B.label}
     out["elapsed"] = (A.elapsed, B.elapsed, ratio(B.elapsed, A.elapsed))
+    out["fingerprint"] = (FP.fingerprint(A.doc), FP.fingerprint(B.doc))
     comps = []
     for k, a, b in (("compute", A.comp, B.comp), ("MPI", A.mpi, B.mpi), ("I/O", A.io, B.io)):
         comps.append((k, a, b, None if a is None or b is None else b - a))
@@ -316,6 +320,11 @@ def verdict(A, B, d) -> list:
                  f"{energy(mem[1]['energy_j'])} (x{er:.2f}) at {mem[0]['power'] or 0:.0f} W -> {mem[1]['power'] or 0:.0f} W.")
     if mem and ((mem[0] or {}).get("coverage") or (mem[1] or {}).get("coverage")):
         v.append("Memory figures for a run with partial coverage count part of the node only (see memory).")
+    fa, fb = d["fingerprint"]
+    ca = [(c["name"], c["detail"]) for c in fa["components"][:1]]
+    cb = [(c["name"], c["detail"]) for c in fb["components"][:1]]
+    if ca and cb and ca != cb:
+        v.append(f"The run changed character: A is {fa['class']}; B is {fb['class']} (see fingerprint).")
     return v
 
 
@@ -413,6 +422,11 @@ def text(d, A, B) -> str:
             p(f"   {tag}  {x['gflops']:.1f} GFLOP/s at {x['ai']:.3g} FLOP/B, {regime} ({x['bound']} side), "
               f"{x['att']:.0f}% of attainable (peak {x['peak']:.0f} {x['peak_key']}, DRAM {x['roof_bw']:.0f} GB/s)"
               + ("  [estimate]" if x["estimate"] else ""))
+    fa, fb = d["fingerprint"]
+    p("")
+    p(" Fingerprint")
+    for line in FP.text_many([fa, fb], ["A", "B"]):
+        p("   " + line)
     if d.get("openmp"):
         p("")
         p(" OpenMP                                  A            B")
@@ -548,6 +562,8 @@ def html(d, A, B) -> str:
     if d.get("openmp"):
         section("openmp", "OpenMP", H.table(["", "A", "B"],
                                             [(k, H.num(a, "{:.1f}%"), H.num(b, "{:.1f}%")) for k, a, b in d["openmp"]]))
+
+    section("fingerprint", "Fingerprint", FP.html_section(list(d["fingerprint"]), ["A", "B"]))
 
     runs = []
     for tag, R in (("A", A), ("B", B)):

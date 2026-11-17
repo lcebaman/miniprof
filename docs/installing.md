@@ -25,7 +25,7 @@ This builds and installs:
 | Path | Contents |
 |---|---|
 | `bin/miniprof` | the launcher (see the [user guide](user-guide.md)) |
-| `bin/miniprof-report`, `miniprof-diff`, `miniprof-csv` | report, comparison and CSV tools |
+| `bin/miniprof-report`, `miniprof-diff`, `miniprof-fingerprint`, `miniprof-csv` | report, comparison, characterisation and CSV tools |
 | `bin/miniprof-calibrate` | measures the node's ceilings for the roofline |
 | `lib/libminiprof.so` | the profiler library |
 | `lib/miniprof-nodemon` | the node-level memory and energy helper |
