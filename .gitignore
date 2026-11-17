@@ -37,3 +37,4 @@ miniprof-calibrate
 examples/roofline_fma
 miniprof_calibration_quick.json
 calib/
+_install/
