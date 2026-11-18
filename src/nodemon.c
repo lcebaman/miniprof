@@ -455,6 +455,7 @@ int main(int argc, char **argv)
     static double s_rd[NM_SERIES], s_wr[NM_SERIES], s_en[NM_SERIES];
     uint64_t s_width = (uint64_t)interval * 1000000ull;
     int s_n = 0;
+    uint64_t s_end = 0;                        /* ns covered by the series */
     for (;;) {
         struct pollfd p = { 0, POLLIN, 0 };
         int r = poll(&p, 1, interval);
@@ -480,7 +481,12 @@ int main(int argc, char **argv)
             if (v->kind == EV_ENERGY) en += dlt;
         }
         {
-            uint64_t b = (t - t0) / s_width;
+            /* Spread the sample over the buckets [tprev, t) overlaps, in
+             * proportion to the overlap. Filing it whole in the bucket it
+             * ends in aliases with the poll period: samples that end just
+             * past a boundary leave one bucket empty and double the next. */
+            uint64_t a = tprev - t0, e = t - t0;
+            uint64_t b = e > a ? (e - 1) / s_width : e / s_width;
             while (b >= NM_SERIES) {           /* full: double the width */
                 for (int i = 0; i < NM_SERIES / 2; i++) {
                     s_rd[i] = s_rd[2 * i] + s_rd[2 * i + 1];
@@ -490,11 +496,18 @@ int main(int argc, char **argv)
                 for (int i = NM_SERIES / 2; i < NM_SERIES; i++) s_rd[i] = s_wr[i] = s_en[i] = 0;
                 s_width *= 2;
                 s_n = (s_n + 1) / 2;
-                b = (t - t0) / s_width;
+                b = e > a ? (e - 1) / s_width : e / s_width;
             }
-            for (int s = 0; s < g_nsockets; s++) { s_rd[b] += rd[s]; s_wr[b] += wr[s]; }
-            s_en[b] += en;
+            double srd = 0, swr = 0;
+            for (int s = 0; s < g_nsockets; s++) { srd += rd[s]; swr += wr[s]; }
+            for (uint64_t k = a / s_width; k <= b; k++) {
+                uint64_t lo = k * s_width > a ? k * s_width : a;
+                uint64_t hi = (k + 1) * s_width < e ? (k + 1) * s_width : e;
+                double f = e > a ? (double)(hi > lo ? hi - lo : 0) / (double)(e - a) : 1.0;
+                s_rd[k] += srd * f; s_wr[k] += swr * f; s_en[k] += en * f;
+            }
             if ((int)b + 1 > s_n) s_n = (int)b + 1;
+            s_end = e;
         }
         tprev = t;
         if (dt > interval * 0.5e-3) {          /* ignore a sliver before "stop" */
@@ -544,6 +557,16 @@ int main(int argc, char **argv)
     int any_remote = 0;
     for (int i = 0; i < g_nev; i++) any_remote |= g_ev[i].kind == EV_DF_REMOTE_IN;
     if (!any_remote) printf("remote unmeasured\n");
+    /* The last bucket is only partly covered: scale it to a full bucket so
+     * that sum / width stays a rate; drop it if it is a sliver. */
+    if (s_n > 0) {
+        uint64_t cov = s_end - (uint64_t)(s_n - 1) * s_width;
+        if (cov * 10 < s_width) s_n--;
+        else if (cov < s_width) {
+            double k = (double)s_width / (double)cov;
+            s_rd[s_n - 1] *= k; s_wr[s_n - 1] *= k; s_en[s_n - 1] *= k;
+        }
+    }
     printf("series t0_ns=%llu width_ns=%llu n=%d\n", (unsigned long long)t0,
            (unsigned long long)s_width, s_n);
     for (int i = 0; i < s_n; i++) printf("sv %.6g %.6g %.6g\n", s_rd[i], s_wr[i], s_en[i]);

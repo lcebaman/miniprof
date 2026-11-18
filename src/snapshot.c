@@ -1325,6 +1325,9 @@ static void write_timeline(jw_t *w, const node_rec_t *nodes, int nn)
     jw_str(w, "gflops", "FLOP rate of the ranks' MPI threads, summed over ranks (worker "
                         "threads are in the run totals, not here)");
     jw_str(w, "heatmap", "mpi_pct per group of consecutive ranks (rows) and bucket");
+    jw_str(w, "memory", "per node, from the memory helper's samples (every sample_s), put on "
+                        "the same buckets as t_s: the node leader's buckets, time-weighted; "
+                        "null where the helper did not sample");
     jw_end_obj(w);
 
     jw_begin_arr(w, "t_s");
@@ -1375,20 +1378,37 @@ static void write_timeline(jw_t *w, const node_rec_t *nodes, int nn)
         const nm_result_t *m = &nodes[i].mem;
         if (!m->available || m->series_n <= 0 || m->series_width_ns == 0) continue;
         k++;
-        double ws = m->series_width_ns * 1e-9;
+        /* Put the helper's samples on the ranks' buckets, so every series
+         * of the timeline shares one time axis: each rank bucket gets the
+         * time-weighted average rate of the helper buckets it overlaps,
+         * null where the helper did not run. */
+        double ws = m->series_width_ns * 1e-9, off = m->series_offset_s, W = t->width_s;
+        double rate[3][TL_BUCKETS];
+        for (int b = 0; b < nb; b++) {
+            double lo = b * W, hi = lo + W, cov = 0, sum[3] = {0, 0, 0};
+            int j0 = (int)floor((lo - off) / ws), j1 = (int)floor((hi - off) / ws);
+            for (int j = j0 < 0 ? 0 : j0; j <= j1 && j < m->series_n; j++) {
+                double a = off + j * ws, e = a + ws;
+                double ov = (e < hi ? e : hi) - (a > lo ? a : lo);
+                if (ov <= 0) continue;
+                cov += ov;
+                sum[0] += m->series_rd[j] / ws * 1e-9 * ov;
+                sum[1] += m->series_wr[j] / ws * 1e-9 * ov;
+                sum[2] += m->series_en_uj[j] * 1e-6 / ws * ov;
+            }
+            for (int q = 0; q < 3; q++) rate[q][b] = cov > 0.05 * W ? sum[q] / cov : NAN;
+        }
         jw_begin_obj(w, NULL);
         jw_str(w, "hostname", nodes[i].info.hostname);
-        jw_dbl(w, "t_offset_s", m->series_offset_s);
-        jw_dbl(w, "bucket_s", ws);
-        jw_begin_arr(w, "read_gb_s");
-        for (int b = 0; b < m->series_n; b++) jw_d4(w, m->series_rd[b] / ws * 1e-9);
-        jw_end_arr(w);
-        jw_begin_arr(w, "write_gb_s");
-        for (int b = 0; b < m->series_n; b++) jw_d4(w, m->series_wr[b] / ws * 1e-9);
-        jw_end_arr(w);
-        jw_begin_arr(w, "power_w");
-        for (int b = 0; b < m->series_n; b++) jw_d4(w, m->series_en_uj[b] * 1e-6 / ws);
-        jw_end_arr(w);
+        jw_dbl(w, "t_offset_s", 0.0);
+        jw_dbl(w, "bucket_s", W);
+        jw_dbl(w, "sample_s", ws);
+        const char *key[3] = { "read_gb_s", "write_gb_s", "power_w" };
+        for (int q = 0; q < 3; q++) {
+            jw_begin_arr(w, key[q]);
+            for (int b = 0; b < nb; b++) jw_d4(w, rate[q][b]);
+            jw_end_arr(w);
+        }
         jw_end_obj(w);
     }
     jw_end_arr(w);

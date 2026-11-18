@@ -75,6 +75,25 @@ def main() -> int:
         ipc = [x for x in t["ipc"]["avg"] if x is not None]
         check(len(ipc) >= nb // 2, f"IPC in {len(ipc)} of {nb} buckets")
 
+    # Node series (memory helper): on the ranks' buckets, and free of the
+    # sampling alias (empty buckets, doubled ones, a spike at the end).
+    # This program keeps every core busy (compute or MPI polling), so
+    # package power is steady through all three phases.
+    run_mem = ((json.load(open(a.file)).get("metrics") or {}).get("memory") or {})
+    for m in (t.get("memory") or [])[:1]:
+        check(abs(m["bucket_s"] - w) < 1e-9 and all(len(m[k]) == nb for k in ("read_gb_s", "write_gb_s", "power_w")),
+              f"node series on the ranks' {nb} buckets")
+        pw = [x for x in m["power_w"] if x is not None]
+        if len(pw) >= 8 and sorted(pw)[len(pw) // 2] > 1:
+            med = sorted(pw)[len(pw) // 2]
+            lo, hi = min(pw[1:]), max(pw[1:])
+            check(0.6 * med <= lo and hi <= 1.4 * med,
+                  f"power steady: {lo:.0f}..{hi:.0f} W around a median of {med:.0f} W (within 40%)")
+            tot = ((run_mem.get("per_node") or {}).get("power_w_avg"))
+            if tot:
+                check(abs(avg(pw) / tot - 1) < 0.15,
+                      f"power series average {avg(pw):.0f} W vs run total {tot:.0f} W (within 15%)")
+
     print("PASS" if not fails else f"FAIL ({len(fails)} checks)")
     return 0 if not fails else 1
 
