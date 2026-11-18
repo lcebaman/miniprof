@@ -173,8 +173,20 @@ def main() -> int:
         check(ok, f"dot_scalar scalar ops {scalar} == N*REPS (FMA) or 2*N*REPS per rank")
         dx = regions["daxpy"]["totals"]
         packed = dx.get("fp_packed128_ops", 0) + dx.get("fp_packed256_ops", 0) + dx.get("fp_packed512_ops", 0)
-        check(packed > 100 * max(dx.get("fp_scalar_ops", 0), 1),
-              f"daxpy is vectorised: packed ops {packed} >> scalar ops {dx.get('fp_scalar_ops', 0)}")
+        if c["uarch"] == "granite_rapids":
+            # FP_ARITH counts arithmetic instructions (an FMA twice), so the
+            # width mix adds back to the FLOPs whether or not the compiler
+            # vectorised daxpy (GCC 11 at -O2 does not):
+            # scalar + 2 x 128 + 4 x 256 + 8 x 512 = 2 N REPS per rank
+            fl = (dx.get("fp_scalar_ops", 0) + 2 * dx.get("fp_packed128_ops", 0)
+                  + 4 * dx.get("fp_packed256_ops", 0) + 8 * dx.get("fp_packed512_ops", 0))
+            check(near(fl, 2 * N * R * nranks),
+                  f"daxpy: width mix gives {fl} FP64 FLOPs vs exact {2 * N * R * nranks}")
+            if packed == 0:
+                print("INFO: daxpy was not vectorised by this compiler (GCC < 12 at -O2)")
+        else:
+            check(packed > 100 * max(dx.get("fp_scalar_ops", 0), 1),
+                  f"daxpy is vectorised: packed ops {packed} >> scalar ops {dx.get('fp_scalar_ops', 0)}")
         print("INFO: daxpy FP ops by width: " + ", ".join(
             f"{k}={dx.get(k, 0)}" for k in ("fp_scalar_ops", "fp_packed128_ops",
                                             "fp_packed256_ops", "fp_packed512_ops")))

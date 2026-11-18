@@ -103,6 +103,9 @@ print(f"  estimate {r.get('estimate')}; {r.get('regions_reason', '')}")
 for n, g in regs.items():
     print(f"  {n:<12} {g['gflops_per_s_node']:9.1f} GFLOP/s/node  {g['dram_read_gb_s_node']:7.1f} GB/s read  "
           f"AI(read) {g['arithmetic_intensity_read']:.4f}  {g['bound']}  {g['pct_of_attainable']:.0f}% of attainable")
+if "Granite Rapids" in (r.get("regions_reason") or ""):
+    print("  per-region points are not offered on Granite Rapids (core DRAM reads miss the L3 prefetcher): skipped")
+    sys.exit(0)
 for n in ("daxpy", "dot_scalar"):
     g = regs.get(n)
     check(g is not None, f"region {n} on the roofline")
