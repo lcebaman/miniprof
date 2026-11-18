@@ -129,6 +129,7 @@ Ceilings are measured, not taken from datasheets. Two examples:
 |---|---|---|
 | 2 × EPYC 9654 (Genoa, 192 cores, DDR5-4800) | 764 GB/s | 11.15 TFLOP/s (fp64_512 ≈ fp64_256: Zen 4 splits 512-bit operations) |
 | 2 × EPYC 9754 (Bergamo, 256 cores) | 752 GB/s streaming (about 82% of the 922 GB/s theoretical) | 12.46 TFLOP/s |
+| 2 × Xeon 6980P (Granite Rapids, 256 cores, SNC3) | 1241 GB/s | 22.92 TFLOP/s (fp64_512; 11.82 at fp64_256) |
 
 ## Probing a node
 
@@ -143,8 +144,11 @@ Ceilings are measured, not taken from datasheets. Two examples:
 | `tools/probe_fills.sh`, `tools/probe_df_zen6.sh`, `tools/probe_intel.sh` | event coverage checks used when adding a CPU |
 
 Validated so far on EPYC 9754 (Zen 4c), 9654 (Zen 4), 9555 (Zen 5) and 9996
-(Zen 6). Granite Rapids support is new and is being validated with
-`tools/probe_intel.sh` and the scripts above.
+(Zen 6), and Xeon 6980P (Granite Rapids, SNC3, RHEL 9.7 kernel) with
+`tools/probe_intel.sh` and `tools/validate_intel.sh`: exact region FLOPs,
+top-down within 3 points of perf, memory-controller bytes against a known
+triad, and the roofline runs at 74% of calibrated bandwidth and 89% of
+peak.
 
 `tools/probe_intel.sh` checks, on an Intel node, every event miniprof's
 Intel support uses against kernels with a known FLOP or byte count, and

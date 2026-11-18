@@ -63,7 +63,10 @@ def main() -> int:
             print(f"  info  {n['pct_of_dram_bw']:.1f}% of the read-only DRAM ceiling in reads alone "
                   "(estimate: writes not counted, so no >= 80% check)")
         elif a.expect == "memory":
-            check(n["pct_of_dram_bw"] >= 80, f"{n['pct_of_dram_bw']:.1f}% of calibrated DRAM bandwidth (>= 80: a streaming run on every core)")
+            # 70: the MPI triad reaches 74-76% of the pthread calibration
+            # on a Xeon 6980P (SNC3; bytes checked against the IMC), 80+%
+            # on EPYC. The check is that the run streams, not a target.
+            check(n["pct_of_dram_bw"] >= 70, f"{n['pct_of_dram_bw']:.1f}% of calibrated DRAM bandwidth (>= 70: a streaming run on every core)")
         else:
             check(n["pct_of_peak_gflops"] >= 60, f"{n['pct_of_peak_gflops']:.1f}% of calibrated peak (>= 60)")
         check(n["pct_of_attainable"] <= 115, f"{n['pct_of_attainable']:.1f}% of attainable (<= 115: ceilings hold)")

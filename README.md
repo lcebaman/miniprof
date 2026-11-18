@@ -90,7 +90,7 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
 - GNU binutils (`addr2line`, `nm`) for sampling and trace modes
 - Hardware counters: `perf_event_paranoid <= 2`. Full detail (top-down,
   memory, energy) is implemented for AMD Zen 4, Zen 5 and Zen 6 and Intel
-  Granite Rapids (new); other CPUs
+  Granite Rapids; other CPUs
   get cycles and instructions. Everything else works on any x86-64 Linux.
 - OpenMP detail needs a runtime with OMPT: LLVM `libomp` (clang, AOCC) or
   Intel `libiomp5`. GCC's `libgomp` has none.
