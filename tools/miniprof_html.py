@@ -297,6 +297,7 @@ def time_chart(t, lines, width=960, height=150, unit="", vmax=None, title=""):
     ml, mr, mt, mb = 70, 10, 8, 26          # left margin as heatmap(): one time axis
     pw, ph = width - ml - mr, height - mt - mb
     tmax = (t[-1] + (t[-1] - t[-2] if len(t) > 1 else 1)) if t else 1
+    half = (tmax - t[-1]) / 2 if t else 0   # a bucket's value is drawn at its middle, as in heatmap()
     vals = [v for _, vs, _, band in lines for v in (vs + (band[1] if band else [])) if v is not None]
     top, tks = axis(vmax if vmax is not None else max(vals + [1e-12]))
     X = lambda x: ml + x / tmax * pw
@@ -317,22 +318,22 @@ def time_chart(t, lines, width=960, height=150, unit="", vmax=None, title=""):
             for i, (a, b) in enumerate(zip(lo, hi)):
                 if a is None or b is None:
                     if len(seg) > 1:
-                        pts = [f"{X(t[j]):.1f},{Y(hi[j]):.1f}" for j in seg] + \
-                              [f"{X(t[j]):.1f},{Y(lo[j]):.1f}" for j in reversed(seg)]
+                        pts = [f"{X(t[j] + half):.1f},{Y(hi[j]):.1f}" for j in seg] + \
+                              [f"{X(t[j] + half):.1f},{Y(lo[j]):.1f}" for j in reversed(seg)]
                         out.append(f'<polygon points="{" ".join(pts)}" fill="var(--s{slot})" opacity=".14"/>')
                     seg = []
                 else:
                     seg.append(i)
             if len(seg) > 1:
-                pts = [f"{X(t[j]):.1f},{Y(hi[j]):.1f}" for j in seg] + \
-                      [f"{X(t[j]):.1f},{Y(lo[j]):.1f}" for j in reversed(seg)]
+                pts = [f"{X(t[j] + half):.1f},{Y(hi[j]):.1f}" for j in seg] + \
+                      [f"{X(t[j] + half):.1f},{Y(lo[j]):.1f}" for j in reversed(seg)]
                 out.append(f'<polygon points="{" ".join(pts)}" fill="var(--s{slot})" opacity=".14"/>')
         d, pen = [], False
         for x, v in zip(t, vs):
             if v is None:
                 pen = False
                 continue
-            d.append(f'{"L" if pen else "M"}{X(x):.1f},{Y(v):.1f}')
+            d.append(f'{"L" if pen else "M"}{X(x + half):.1f},{Y(v):.1f}')
             pen = True
         if d:
             out.append(f'<path d="{"".join(d)}" fill="none" stroke="var(--s{slot})" stroke-width="2" '
@@ -385,7 +386,7 @@ def heatmap(rows, t, row_label, width=960, unit="%"):
     return "".join(out)
 
 
-def timeline_body(tl):
+def timeline_body(tl, coverage=None):
     """The Timeline section of a report."""
     t = tl["t_s"]
     mp, io = tl["mpi_pct"], tl["io_pct"]
@@ -414,7 +415,8 @@ def timeline_body(tl):
                 time_chart(t, [("GFLOP/s", tl["gflops"], 1, None)], title="GFLOP/s over time")
     for m in (tl.get("memory") or [])[:4]:
         tm = [m["t_offset_s"] + i * m["bucket_s"] for i in range(len(m["read_gb_s"]))]
-        body += f'<h3>DRAM bandwidth, {esc(m["hostname"])} (GB/s)</h3>' + \
+        part = " · partial coverage (see Memory)" if coverage else ""
+        body += f'<h3>DRAM bandwidth, {esc(m["hostname"])} (GB/s){part}</h3>' + \
                 legend([(1, "read"), (2, "write")]) + \
                 time_chart(tm, [("read", m["read_gb_s"], 1, None), ("write", m["write_gb_s"], 2, None)],
                            unit="", title="DRAM bandwidth over time")
@@ -730,7 +732,7 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
         # ---- timeline (opt-in: MINIPROF_TIMELINE=1 / miniprof --timeline)
         tl = m.get("timeline")
         if tl and tl.get("available"):
-            section("timeline", "Timeline", timeline_body(tl))
+            section("timeline", "Timeline", timeline_body(tl, (m.get("memory") or {}).get("coverage")))
 
         # ---- hotspots (opt-in: MINIPROF_HOTSPOTS=1 / miniprof --hotspots)
         hs = m.get("hotspots")
