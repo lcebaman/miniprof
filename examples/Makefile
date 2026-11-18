@@ -127,12 +127,17 @@ counters_validate: counters_validate.c $(LIB)
 	$(CC) $(CFLAGS) -pthread $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 # Known DRAM traffic for the memory block (P5): a triad, see the header.
+# -O3, like miniprof-calibrate: the roofline check compares this run with
+# the calibrated bandwidth, so both must stream equally well (GCC 11 does
+# not vectorise at -O2).
 membw_validate: membw_validate.c $(LIB)
-	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -O3 $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
-# Compute-bound FMA workload for the roofline check (P6).
+# Compute-bound FMA workload for the roofline check (P6). -O3, like
+# miniprof-calibrate: GCC 11 at -O2 does not unroll the 12 chains, keeps
+# them in memory (load + FMA + store each) and reaches ~25% of peak.
 roofline_fma: roofline_fma.c $(LIB)
-	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+	$(CC) $(CFLAGS) -O3 $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 # Known-shape top-down workload (P4): one region per top-down category.
 topdown_validate: topdown_validate.c $(LIB)
