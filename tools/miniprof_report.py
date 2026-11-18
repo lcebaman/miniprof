@@ -3,9 +3,9 @@
 miniprof_report.py — one-page text summary of a miniprof snapshot JSON.
 
 APS-style: where the time went (compute / MPI / I/O), how unevenly, which
-MPI calls and message sizes dominate, I/O volume, CPU utilisation, and a
-short list of observations from simple thresholds. Version 0: the
-threshold rules here are placeholders for the guidance engine of phase P7.
+MPI calls and message sizes dominate, I/O volume, CPU utilisation, every
+metric block the snapshot collected, and a list of observations from the
+threshold rules in observations().
 
 Usage:
     miniprof_report.py SNAPSHOT.json [-o OUT.txt] [--html OUT.html]

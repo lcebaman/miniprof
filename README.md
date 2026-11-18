@@ -78,7 +78,8 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
 | [Examples](docs/examples.md) | Worked examples on real applications: hybrid MD code, MPI-only ocean model, thread sweep, node comparison |
 | [Configuration](docs/configuration.md) | Every environment variable |
 | [Hardware support](docs/hardware.md) | What each CPU provides, counter groups, Zen 4/5/6 and Granite Rapids notes, permissions |
-| [Development and testing](docs/development.md) | `make` targets, the test suite, validation, internals |
+| [Development and testing](docs/development.md) | `make` targets, the test suite, validation |
+| [Internals](docs/internals.md) | How the code works and how to extend it: lifecycle, subsystems, JSON contract, recipes |
 | [Known limitations](docs/limitations.md) | What miniprof does not cover |
 
 ## Requirements

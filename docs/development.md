@@ -93,6 +93,10 @@ count.
 
 ## Source layout
 
+For how the pieces work together, the rules hot paths follow and
+step-by-step recipes for extending miniprof, see
+[internals](internals.md).
+
 | File | Role |
 |---|---|
 | `miniprof.c` | init and finalize, mode switch, `MPI_Init`/`MPI_Finalize` interception |
