@@ -529,7 +529,7 @@ def report(doc: dict, args) -> str:
                 p(f"   all nodes           {mem['total_gb_s_all_nodes']:.1f} GB/s; per node "
                   f"min {pn['total_gb_s']['min']:.1f} / max {pn['total_gb_s']['max']:.1f}")
             if mem.get("remote_read_share_pct") is not None:
-                p(f"   Remote-socket reads {mem['remote_read_share_pct']:5.1f}%  of core reads, all sockets (NUMA placement)")
+                p(f"   Remote reads        {mem['remote_read_share_pct']:5.1f}%  of core reads, from another socket or NUMA node (placement)")
             p(f"   Package power       {pn['power_w_avg']:.0f} W per node, {mem['energy_j_all_nodes'] / 1e3:.2f} kJ in total")
             n0 = mem["nodes"][0]
             for so in n0["sockets"]:

@@ -1544,6 +1544,10 @@ static void core_reads(const nm_result_t *m, int s, double *local, double *remot
     *remote = (double)m->s[s].remote_in_bytes;
 }
 
+/* Below this rate of core DRAM reads (per socket, or per node on average)
+ * the remote share is noise: a few stray lines decide it. */
+#define REMOTE_MIN_GBS 1.0
+
 static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
 {
     int avail = 0;
@@ -1574,22 +1578,25 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
     jw_str(w, "read_gb_s", "DRAM read bandwidth over the run, includes write-allocate "
                            "reads and prefetches");
     jw_str(w, "peak_gb_s", "highest bandwidth over one sampling interval");
-    jw_str(w, "remote_read_share_pct", "share of core reads served by another socket "
-                                       "(NUMA placement), weighted by traffic; null for "
-                                       "a socket whose cores read < 1% of the node's total");
+    jw_str(w, "remote_read_share_pct", "share of core reads served by memory of another "
+                                       "socket or NUMA node (placement), weighted by traffic; "
+                                       "null for a socket whose cores read < 1% of the node's "
+                                       "total, or when core reads average under 1 GB/s (too "
+                                       "little traffic for the share to mean anything)");
     jw_str(w, "channels_active", "channels carrying at least 2% of the busiest "
                                  "channel's traffic");
     jw_end_obj(w);
 
     double nrd[4096] = {0}, nwr[4096] = {0};
-    double e_tot = 0, pw_sum = 0, peak_max = 0, all_loc = 0, all_rem = 0;
-    int no_remote = 0;
+    double e_tot = 0, pw_sum = 0, peak_max = 0, all_loc = 0, all_rem = 0, all_gbs = 0;
+    int no_remote = 0, n_cr = 0;
     int k = 0;
     jw_begin_arr(w, "nodes");
     for (int i = 0; i < nn; i++) {
         const nm_result_t *m = &nodes[i].mem;
         if (!m->available) continue;
         double el = m->elapsed_s, rd = 0, wr = 0, en = 0, node_cr = 0;
+        n_cr++;
         for (int s = 0; s < m->nsockets; s++) {
             double l, r;
             core_reads(m, s, &l, &r);
@@ -1632,7 +1639,8 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
             } else {
                 jw_dbl(w, "remote_read_gb_s", gbs((double)so->remote_in_bytes, el));
                 all_loc += l; all_rem += r;
-                if (l + r >= 0.01 * node_cr && l + r > 0) jw_dbl(w, "remote_read_share_pct", 100.0 * r / (l + r));
+                all_gbs += gbs(l + r, el);
+                if (l + r >= 0.01 * node_cr && gbs(l + r, el) >= REMOTE_MIN_GBS) jw_dbl(w, "remote_read_share_pct", 100.0 * r / (l + r));
                 else                                      jw_null(w, "remote_read_share_pct");
             }
             jw_dbl(w, "energy_j", so->energy_uj * 1e-6);
@@ -1701,7 +1709,9 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
     jw_dbl(w, "total_gb_s_all_nodes", st.sum);
     jw_dbl(w, "energy_j_all_nodes", e_tot);
     if (no_remote) jw_null(w, "remote_read_share_pct");
-    else jw_dbl(w, "remote_read_share_pct", all_loc + all_rem > 0 ? 100.0 * all_rem / (all_loc + all_rem) : 0.0);
+    else if (all_gbs < REMOTE_MIN_GBS * (n_cr > 0 ? n_cr : 1))   /* per node, on average */
+        jw_null(w, "remote_read_share_pct");
+    else jw_dbl(w, "remote_read_share_pct", 100.0 * all_rem / (all_loc + all_rem));
     jw_end_obj(w);
 }
 
