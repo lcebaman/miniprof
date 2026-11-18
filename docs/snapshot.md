@@ -15,6 +15,7 @@ This page follows the report from top to bottom.
 - [I/O](#io)
 - [OpenMP](#openmp)
 - [Hotspots](#hotspots)
+- [Timeline](#timeline)
 - [Hardware counters](#hardware-counters)
 - [Top-down](#top-down)
 - [Memory](#memory)
@@ -219,6 +220,58 @@ How to read it:
 Hotspots are off by default. Their cost was within run-to-run noise on
 LAMMPS.
 
+## Timeline
+
+The rest of the snapshot is totals over the run. With `--timeline` (or
+`MINIPROF_TIMELINE=1`) it also records how the run changed over time, so
+phases, drift and imbalance that moves between ranks show up instead of
+being averaged away. From `examples/timeline_validate` on 2 ranks (compute
+only, then rank 0 slow, then rank 1 slow):
+
+```
+ Timeline               2 ranks, 37 buckets of 50 ms, 0 to 1.9 s left to right
+   MPI % (avg)         |▁▁▁▁▁▁▁▁▁▁▁▁▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ | 0%..47%
+   MPI % (max rank)    |▁▁▁▁▁▁▁▁▁▁▁▁████████████▇███████████ | 0%..94%
+   MPI % by rank      (taller = more time in MPI)
+     rank 0            |▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▇███████████ |
+     rank 1            |▁▁▁▁▁▁▁▁▁▁▁▁████████████▁▁▁▁▁▁▁▁▁▁▁▁ |
+```
+
+The average alone says "MPI about half the time from 0.6 s on"; the rows
+show it is one rank waiting for the other, and that the waiting rank
+changes at 1.2 s. The HTML report draws the same series as charts that
+share one time axis, with a heatmap of MPI share by rank and time.
+
+What is recorded, per time bucket:
+
+| Series | Per | Source |
+|---|---|---|
+| MPI and I/O share of the bucket, min/avg/max over ranks | rank | the MPI and I/O wrappers, which already time every call; a call spanning buckets is split |
+| MPI share by rank group (heatmap) | up to 64 rows of consecutive ranks | as above |
+| IPC, min/avg/max over ranks | the thread that calls MPI | counter reads already made at MPI calls |
+| GFLOP/s, summed over ranks | the thread that calls MPI | as above |
+| DRAM read/write GB/s and package power | node (up to 16 nodes) | the memory helper's samples |
+
+How to read it:
+
+- Buckets start at 100 ms (`MINIPROF_TIMELINE_INTERVAL_MS`). A run longer
+  than 512 buckets doubles the width, merging neighbours, so any length
+  fits; the node series do the same with 256 buckets.
+- Each rank's buckets count from its own start. Ranks leave `MPI_Init` at
+  nearly the same time, so this is what you want for phases; it is not a
+  clock to compare with external logs.
+- IPC and GFLOP/s are those of the thread that calls MPI. In an
+  OpenMP code the worker threads are in the run totals but not in the
+  timeline. They are also only as fine as the gaps between MPI calls: the
+  counts between two MPI calls are spread over the buckets in between in
+  proportion to time.
+- MPI time is time inside MPI calls, waiting included: a rank waiting for
+  a slow one shows as MPI, as in the totals. The heatmap shows which.
+
+The timeline adds a clock read and an atomic add to each MPI and I/O call
+(tens of nanoseconds) and a few reductions at `MPI_Finalize`. It is off
+by default.
+
 ## Hardware counters
 
 Counted per thread, in user space (works at `perf_event_paranoid = 2`),
@@ -402,6 +455,7 @@ comparing the application's own timer with and without miniprof.
 | `metrics.memory` | memory and energy |
 | `metrics.roofline` | roofline per node and per region |
 | `metrics.hotspots` | hotspots, when requested |
+| `metrics.timeline` | time series, when requested: `t_s`, `mpi_pct`/`io_pct`/`ipc` (min/avg/max arrays), `gflops`, `heatmap`, `memory` per node |
 | `overhead` | miniprof's own cost, by phase |
 
 Every block has `available`, and a `reason` when it is false.

@@ -246,6 +246,18 @@ void nodemon_stop(nm_result_t *out)
                    s >= 0 && s < NM_MAX_SOCKETS && c >= 0 && c < NM_MAX_CHANS) {
             out->s[s].chan_rd[c] = rd; out->s[s].chan_wr[c] = wr;
             if (c + 1 > out->s[s].nchans) out->s[s].nchans = c + 1;
+        } else if (sscanf(line, "series t0_ns=%llu width_ns=%llu n=%d", &rd, &wr, &s) == 3) {
+            out->series_t0_ns = rd; out->series_width_ns = wr;
+            out->series_n = 0;
+            (void)s;
+        } else if (strncmp(line, "sv ", 3) == 0) {
+            double a, b, e;
+            if (sscanf(line + 3, "%lf %lf %lf", &a, &b, &e) == 3 && out->series_n < NM_SERIES) {
+                out->series_rd[out->series_n] = (float)a;
+                out->series_wr[out->series_n] = (float)b;
+                out->series_en_uj[out->series_n] = (float)e;
+                out->series_n++;
+            }
         } else if (strcmp(line, "remote unmeasured") == 0) {
             out->no_remote = 1;
         } else if (strncmp(line, "coverage ", 9) == 0) {

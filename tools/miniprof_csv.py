@@ -114,6 +114,27 @@ def write_csv(doc: dict, outdir: str) -> list:
     table("ranks.csv", [dict(flat(r), hostname=host.get(r.get("node"))) for r in ranks],
           first=("rank", "node", "hostname", "elapsed_s", "compute_s", "mpi_s", "io_s"))
 
+    tl = (doc.get("metrics") or {}).get("timeline") or {}
+    if tl.get("available"):
+        rows = []
+        for i, t in enumerate(tl["t_s"]):
+            r = {"t_s": t}
+            for k in ("mpi_pct", "io_pct", "ipc"):
+                for st in ("min", "avg", "max"):
+                    if tl.get(k):
+                        r[f"{k}.{st}"] = tl[k][st][i]
+            if tl.get("gflops"):
+                r["gflops"] = tl["gflops"][i]
+            rows.append(r)
+        table("timeline.csv", rows, first=("t_s",))
+        mrows = []
+        for m in tl.get("memory") or []:
+            for i in range(len(m["read_gb_s"])):
+                mrows.append({"hostname": m["hostname"], "t_s": m["t_offset_s"] + i * m["bucket_s"],
+                              "read_gb_s": m["read_gb_s"][i], "write_gb_s": m["write_gb_s"][i],
+                              "power_w": m["power_w"][i]})
+        table("timeline_memory.csv", mrows, first=("hostname", "t_s"))
+
     hs = (doc.get("metrics") or {}).get("hotspots") or {}
     if hs.get("available"):
         table("hotspots.csv", [flat(f) for f in hs.get("functions") or []],

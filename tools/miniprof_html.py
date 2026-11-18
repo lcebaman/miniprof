@@ -290,6 +290,140 @@ def paired_bars(rows, names=("A", "B"), width=960, bar_h=11, label_w=170, unit="
     return "".join(out)
 
 
+def time_chart(t, lines, width=960, height=150, unit="", vmax=None, title=""):
+    """Lines over time sharing one y axis. lines: [(name, values, slot,
+    band)] with band = (lows, highs) or None; None values break the line.
+    One hover target per bucket lists every series at that time."""
+    ml, mr, mt, mb = 70, 10, 8, 26          # left margin as heatmap(): one time axis
+    pw, ph = width - ml - mr, height - mt - mb
+    tmax = (t[-1] + (t[-1] - t[-2] if len(t) > 1 else 1)) if t else 1
+    vals = [v for _, vs, _, band in lines for v in (vs + (band[1] if band else [])) if v is not None]
+    top, tks = axis(vmax if vmax is not None else max(vals + [1e-12]))
+    X = lambda x: ml + x / tmax * pw
+    Y = lambda v: mt + ph - min(v, top) / top * ph
+    out = [f'<svg class="chart" viewBox="0 0 {width} {height}" role="img" aria-label="{esc(title)}">']
+    for k in tks:
+        y = Y(k)
+        out.append(f'<line class="grid" x1="{ml}" x2="{ml + pw}" y1="{y:.1f}" y2="{y:.1f}"/>'
+                   f'<text class="tick" x="{ml - 6}" y="{y + 4:.1f}" text-anchor="end">{tick_label(k, unit)}</text>')
+    _, xt = axis(tmax, 6)
+    for k in xt:
+        if k <= tmax:
+            out.append(f'<text class="tick" x="{X(k):.1f}" y="{mt + ph + 16}" text-anchor="middle">{tick_label(k)} s</text>')
+    for name, vs, slot, band in lines:
+        if band:
+            lo, hi = band
+            seg = []
+            for i, (a, b) in enumerate(zip(lo, hi)):
+                if a is None or b is None:
+                    if len(seg) > 1:
+                        pts = [f"{X(t[j]):.1f},{Y(hi[j]):.1f}" for j in seg] + \
+                              [f"{X(t[j]):.1f},{Y(lo[j]):.1f}" for j in reversed(seg)]
+                        out.append(f'<polygon points="{" ".join(pts)}" fill="var(--s{slot})" opacity=".14"/>')
+                    seg = []
+                else:
+                    seg.append(i)
+            if len(seg) > 1:
+                pts = [f"{X(t[j]):.1f},{Y(hi[j]):.1f}" for j in seg] + \
+                      [f"{X(t[j]):.1f},{Y(lo[j]):.1f}" for j in reversed(seg)]
+                out.append(f'<polygon points="{" ".join(pts)}" fill="var(--s{slot})" opacity=".14"/>')
+        d, pen = [], False
+        for x, v in zip(t, vs):
+            if v is None:
+                pen = False
+                continue
+            d.append(f'{"L" if pen else "M"}{X(x):.1f},{Y(v):.1f}')
+            pen = True
+        if d:
+            out.append(f'<path d="{"".join(d)}" fill="none" stroke="var(--s{slot})" stroke-width="2" '
+                       'stroke-linejoin="round" stroke-linecap="round"/>')
+    step = pw / max(len(t), 1)
+    for i, x in enumerate(t):
+        parts = []
+        for name, vs, _, band in lines:
+            if i < len(vs) and vs[i] is not None:
+                s = f"{name} {vs[i]:.3g}{unit}"
+                if band and band[0][i] is not None:
+                    s += f" ({band[0][i]:.3g}–{band[1][i]:.3g})"
+                parts.append(s)
+        if parts:
+            out.append(f'<rect class="hit" x="{X(x):.1f}" y="{mt}" width="{max(step, 1):.1f}" height="{ph}" '
+                       f'data-tip="{esc(f"{x:.2f} s: " + "; ".join(parts))}"/>')
+    out.append(f'<line class="axis" x1="{ml}" x2="{ml + pw}" y1="{mt + ph}" y2="{mt + ph}"/>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def heatmap(rows, t, row_label, width=960, unit="%"):
+    """Values 0-100 by row and time, one sequential hue (darker = more)."""
+    ml, mr, mt, mb = 70, 10, 4, 26
+    n, m = len(rows), len(t)
+    ch = max(4, min(18, 260 // max(n, 1)))
+    pw, ph = width - ml - mr, ch * n
+    tmax = (t[-1] + (t[-1] - t[-2] if m > 1 else 1)) if t else 1
+    cw = pw / max(m, 1)
+    out = [f'<svg class="chart" viewBox="0 0 {width} {ph + mt + mb}" role="img" aria-label="heatmap">']
+    every = max(1, math.ceil(n / 8))
+    for r, row in enumerate(rows):
+        y = mt + r * ch
+        if r % every == 0 or r == n - 1:
+            out.append(f'<text class="tick" x="{ml - 6}" y="{y + ch / 2 + 4:.1f}" text-anchor="end">'
+                       f'{esc(row_label(r))}</text>')
+        for i, v in enumerate(row):
+            if v is None:
+                continue
+            a = max(0.0, min(100.0, v))
+            out.append(f'<rect x="{ml + i * cw:.2f}" y="{y}" width="{cw + 0.3:.2f}" height="{ch - (1 if ch > 6 else 0)}" '
+                       f'fill="color-mix(in srgb, var(--s1) {a:.0f}%, var(--grid))" '
+                       f'data-tip="{esc(f"{row_label(r)}, {t[i]:.2f} s: {v:.1f}{unit}")}"/>')
+    _, xt = axis(tmax, 6)
+    for k in xt:
+        if k <= tmax:
+            out.append(f'<text class="tick" x="{ml + k / tmax * pw:.1f}" y="{mt + ph + 16}" text-anchor="middle">'
+                       f'{tick_label(k)} s</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def timeline_body(tl):
+    """The Timeline section of a report."""
+    t = tl["t_s"]
+    mp, io = tl["mpi_pct"], tl["io_pct"]
+    body = (f'<p class="note">{tl["ranks"]} ranks, buckets of {tl["bucket_s"] * 1000:.0f} ms '
+            f'(each rank from its own start). Lines are the average over ranks; the band is the '
+            f'lowest to highest rank.</p>')
+    lines = [("MPI", mp["avg"], 1, (mp["min"], mp["max"]))]
+    if any((x or 0) > 0.5 for x in io["avg"]):
+        lines.append(("I/O", io["avg"], 2, None))
+    body += "<h3>Time in MPI" + (" and I/O" if len(lines) > 1 else "") + " (% of each bucket)</h3>"
+    if len(lines) > 1:
+        body += legend([(1, "MPI (band: lowest–highest rank)"), (2, "I/O, average")])
+    body += time_chart(t, lines, unit="%", vmax=100, title="MPI share over time")
+    hm = tl.get("heatmap") or {}
+    if hm.get("values"):
+        k = hm["ranks_per_row"]
+        lab = (lambda r: f"rank {r}") if k == 1 else (lambda r: f"ranks {r * k}–{r * k + k - 1}")
+        body += "<h3>MPI share by rank over time (darker = more time in MPI)</h3>" + \
+                heatmap(hm["values"], t, lab)
+    if tl.get("ipc"):
+        ip = tl["ipc"]
+        body += "<h3>IPC of each rank's MPI thread</h3>" + \
+                time_chart(t, [("IPC", ip["avg"], 1, (ip["min"], ip["max"]))], title="IPC over time")
+    if tl.get("gflops"):
+        body += "<h3>GFLOP/s, all ranks' MPI threads</h3>" + \
+                time_chart(t, [("GFLOP/s", tl["gflops"], 1, None)], title="GFLOP/s over time")
+    for m in (tl.get("memory") or [])[:4]:
+        tm = [m["t_offset_s"] + i * m["bucket_s"] for i in range(len(m["read_gb_s"]))]
+        body += f'<h3>DRAM bandwidth, {esc(m["hostname"])} (GB/s)</h3>' + \
+                legend([(1, "read"), (2, "write")]) + \
+                time_chart(tm, [("read", m["read_gb_s"], 1, None), ("write", m["write_gb_s"], 2, None)],
+                           unit="", title="DRAM bandwidth over time")
+        if any((x or 0) > 0.5 for x in m["power_w"]):
+            body += f'<h3>Package power, {esc(m["hostname"])} (W)</h3>' + \
+                    time_chart(tm, [("power", m["power_w"], 1, None)], unit="", title="power over time")
+    return body
+
+
 def roofline_chart(ceil, points, width=960, height=420, ceil2=None):
     """Log-log roofline. ceil: peak, peak_key, all_gflops, dram (the run's
     mix-aware ceiling), dram_read, dram_triad. points: [(label, ai, gflops,
@@ -592,6 +726,11 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
             body += f'<p class="note">Slowest ranks by compute time: {esc(slow)}. Perfect balance would save ' \
                     f'{comp["imbalance_cost_pct"]:.1f}% of the elapsed time.</p>'
         section("parallel", "Time and balance", body)
+
+        # ---- timeline (opt-in: MINIPROF_TIMELINE=1 / miniprof --timeline)
+        tl = m.get("timeline")
+        if tl and tl.get("available"):
+            section("timeline", "Timeline", timeline_body(tl))
 
         # ---- hotspots (opt-in: MINIPROF_HOTSPOTS=1 / miniprof --hotspots)
         hs = m.get("hotspots")

@@ -27,6 +27,7 @@ miniprof: report /home/user/mp-test/miniprof_lmp_20261113_122838/report.html
 | How much DRAM bandwidth, how much from the other socket, how much power? | memory block per node, socket and channel |
 | How far from what the node can do? | roofline against calibrated ceilings |
 | Which functions burn the CPU time? | hotspots (`--hotspots`), or the sampling profile (`--sample`) |
+| Does it change over the run, or move between ranks? | `miniprof --timeline` |
 | Why is run B slower than run A? | `miniprof-diff` |
 | What kind of code is this, and how do several codes compare? | fingerprint (in every report), `miniprof-fingerprint` |
 

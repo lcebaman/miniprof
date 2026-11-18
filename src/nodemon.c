@@ -450,6 +450,11 @@ int main(int argc, char **argv)
 
     double peak_rd[NM_MAX_SOCKETS] = {0}, peak_wr[NM_MAX_SOCKETS] = {0}, peak_node = 0;
     int samples = 0;
+    /* time series of the node (P7 timeline): bytes and energy per bucket,
+     * buckets start at the interval and double (merging pairs) when full */
+    static double s_rd[NM_SERIES], s_wr[NM_SERIES], s_en[NM_SERIES];
+    uint64_t s_width = (uint64_t)interval * 1000000ull;
+    int s_n = 0;
     for (;;) {
         struct pollfd p = { 0, POLLIN, 0 };
         int r = poll(&p, 1, interval);
@@ -463,7 +468,7 @@ int main(int argc, char **argv)
         }
         uint64_t t = now_ns();
         double dt = (t - tprev) * 1e-9;
-        double rd[NM_MAX_SOCKETS] = {0}, wr[NM_MAX_SOCKETS] = {0};
+        double rd[NM_MAX_SOCKETS] = {0}, wr[NM_MAX_SOCKETS] = {0}, en = 0;
         for (int i = 0; i < g_nev; i++) {
             ev_t *v = &g_ev[i];
             uint64_t raw, ena, run;
@@ -472,6 +477,24 @@ int main(int argc, char **argv)
             v->raw = raw; v->ena = ena; v->run = run;
             if (v->kind == EV_UMC_RD) rd[v->socket] += dlt;
             if (v->kind == EV_UMC_WR) wr[v->socket] += dlt;
+            if (v->kind == EV_ENERGY) en += dlt;
+        }
+        {
+            uint64_t b = (t - t0) / s_width;
+            while (b >= NM_SERIES) {           /* full: double the width */
+                for (int i = 0; i < NM_SERIES / 2; i++) {
+                    s_rd[i] = s_rd[2 * i] + s_rd[2 * i + 1];
+                    s_wr[i] = s_wr[2 * i] + s_wr[2 * i + 1];
+                    s_en[i] = s_en[2 * i] + s_en[2 * i + 1];
+                }
+                for (int i = NM_SERIES / 2; i < NM_SERIES; i++) s_rd[i] = s_wr[i] = s_en[i] = 0;
+                s_width *= 2;
+                s_n = (s_n + 1) / 2;
+                b = (t - t0) / s_width;
+            }
+            for (int s = 0; s < g_nsockets; s++) { s_rd[b] += rd[s]; s_wr[b] += wr[s]; }
+            s_en[b] += en;
+            if ((int)b + 1 > s_n) s_n = (int)b + 1;
         }
         tprev = t;
         if (dt > interval * 0.5e-3) {          /* ignore a sliver before "stop" */
@@ -521,6 +544,9 @@ int main(int argc, char **argv)
     int any_remote = 0;
     for (int i = 0; i < g_nev; i++) any_remote |= g_ev[i].kind == EV_DF_REMOTE_IN;
     if (!any_remote) printf("remote unmeasured\n");
+    printf("series t0_ns=%llu width_ns=%llu n=%d\n", (unsigned long long)t0,
+           (unsigned long long)s_width, s_n);
+    for (int i = 0; i < s_n; i++) printf("sv %.6g %.6g %.6g\n", s_rd[i], s_wr[i], s_en[i]);
     printf("peak node=%.6g\nend\n", peak_node);
     return 0;
 }

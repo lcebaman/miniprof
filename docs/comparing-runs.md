@@ -115,6 +115,7 @@ names (`time_s.avg`):
 | `memory_nodes.csv`, `memory_sockets.csv`, `memory_channels.csv` | memory |
 | `roofline_nodes.csv` | roofline per node |
 | `hotspots.csv` | hotspot functions |
+| `timeline.csv`, `timeline_memory.csv` | timeline series, per bucket (with `--timeline`) |
 
 Files for blocks a run did not collect are not written. The launcher
 writes them into the result folder's `csv/`.

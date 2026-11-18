@@ -49,6 +49,10 @@ Adding a wrapper is mechanical; see `src/mpi_trace.c`.
 - The FLOP counter does not separate precisions.
 - OpenMP detail needs OMPT (LLVM `libomp` or Intel `libiomp5`), not GCC's
   `libgomp`, and only one OMPT tool can be active in a process.
+- The timeline's IPC and GFLOP/s come from the thread that calls MPI,
+  at its MPI calls: OpenMP worker threads are not in them, and a long
+  stretch without MPI calls is spread evenly. MPI and I/O shares are
+  exact per bucket for every thread.
 - Hotspots name inlined functions only in binaries built with `-g`;
   otherwise their time appears under the caller.
 - The fingerprint's class line comes from fixed rules (documented in

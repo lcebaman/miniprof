@@ -36,6 +36,8 @@
  *   socket <s> rd=<B> wr=<B> remote_in=<B> energy_uj=<uJ> peak_rd=<B/s> peak_wr=<B/s>
  *   chan <s> <c> rd=<B> wr=<B>
  *   coverage <text>                          only when part of the node is counted (Zen 6)
+ *   series t0_ns=<CLOCK_MONOTONIC ns> width_ns=<ns> n=<buckets>   (P7 timeline)
+ *   sv <read B> <write B> <energy uJ>        n lines: the node, bucket by bucket
  *   peak node=<B/s>
  *   end
  */
@@ -44,6 +46,7 @@
 
 #define NM_MAX_SOCKETS 8
 #define NM_MAX_CHANS   24        /* memory-controller PMUs per socket */
+#define NM_SERIES      256       /* node time-series buckets (timeline)  */
 
 typedef struct {
     uint64_t rd_bytes, wr_bytes;          /* DRAM, from the memory controllers */
@@ -61,6 +64,12 @@ typedef struct {
     int      interval_ms;
     int      samples;
     int      no_remote;                   /* remote-socket traffic not measured */
+    /* time series of the whole node (P7): bucket i covers
+     * [series_t0_ns + i w, + w), w = series_width_ns, CLOCK_MONOTONIC */
+    int      series_n;
+    uint64_t series_t0_ns, series_width_ns;
+    double   series_offset_s;             /* series start - the leader rank's timeline start */
+    float    series_rd[NM_SERIES], series_wr[NM_SERIES], series_en_uj[NM_SERIES];
     int      multiplexed;
     double   elapsed_s;
     double   peak_node_bps;               /* sum over sockets, best interval */
