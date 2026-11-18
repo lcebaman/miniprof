@@ -102,7 +102,9 @@ def main() -> int:
     # the socket whose cores did the work: the one with most remote reads
     # (remote run) or most DRAM reads (local run)
     socks = n0["sockets"]
-    if a.remote:
+    if m.get("remote_read_share_pct") is None:   # Intel: the helper does not measure UPI traffic
+        print("  remote-socket reads not measured on this CPU: remote checks skipped")
+    elif a.remote:
         s = max(socks, key=lambda x: x["remote_read_gb_s"])
         if s["remote_read_share_pct"] is None:
             s["remote_read_share_pct"] = 0.0

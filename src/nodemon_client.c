@@ -107,9 +107,11 @@ void nodemon_start(const char *uarch, int verbose)
     const char *nt = getenv("MINIPROF_NODEMON_TEST");
     const char *ua = nt ? (strcmp(nt, "partial") == 0 ? "swtest-partial" : "swtest") : uarch;
     if (!ua || (strcmp(ua, "zen4") && strcmp(ua, "zen5") && strcmp(ua, "zen6") &&
+                strcmp(ua, "granite_rapids") &&
                 strcmp(ua, "swtest") && strcmp(ua, "swtest-partial"))) {
         snprintf(g_reason, sizeof(g_reason),
-                 "no node-level memory counters for uarch '%s' (AMD Zen 4 / 5 / 6 only)",
+                 "no node-level memory counters for uarch '%s' (AMD Zen 4 / 5 / 6, "
+                 "Intel Granite Rapids)",
                  ua && *ua ? ua : "unknown");
         return;
     }
@@ -244,6 +246,8 @@ void nodemon_stop(nm_result_t *out)
                    s >= 0 && s < NM_MAX_SOCKETS && c >= 0 && c < NM_MAX_CHANS) {
             out->s[s].chan_rd[c] = rd; out->s[s].chan_wr[c] = wr;
             if (c + 1 > out->s[s].nchans) out->s[s].nchans = c + 1;
+        } else if (strcmp(line, "remote unmeasured") == 0) {
+            out->no_remote = 1;
         } else if (strncmp(line, "coverage ", 9) == 0) {
             snprintf(out->coverage, sizeof(out->coverage), "%.255s", line + 9);
         } else if (sscanf(line, "peak node=%lf", &pn) == 1) {

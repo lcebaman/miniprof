@@ -1,9 +1,10 @@
 #!/bin/bash
-# validate_topdown.sh — P4 top-down cross-check on a real Zen 4 / Zen 5 node.
+# validate_topdown.sh — P4 top-down cross-check on a real Zen 4/5/6 or Granite Rapids node.
 #
 #   1. encodings: every raw config in miniprof's top-down tables against
 #      the config perf itself uses for the named event (perf stat -vv);
-#   2. reference: perf stat -M PipelineL1 and PipelineL2 on
+#   2. reference: perf stat -M PipelineL1 and PipelineL2 (Intel: TopdownL1
+#      and TopdownL2) on
 #      examples/topdown_validate (one process, MINIPROF_MODE=off);
 #   3. miniprof: the same workload, MINIPROF_SNAPSHOT=topdown on 3 ranks;
 #      level 1/2 compared with perf (whole run, compute scope), then the
@@ -53,15 +54,16 @@ done < "$TMP/events.txt"
 echo "  $NBAD encoding problem(s)"
 
 echo
-echo "==================== 3. perf stat -M PipelineL1 / PipelineL2 ===================="
-for g in PipelineL1 PipelineL2; do
+if grep -q GenuineIntel /proc/cpuinfo; then G1=TopdownL1; G2=TopdownL2; else G1=PipelineL1; G2=PipelineL2; fi
+echo "==================== 3. perf stat -M $G1 / $G2 ===================="
+for g in $G1 $G2; do
     MINIPROF_MODE=off perf stat -M $g -- "$BIN" "$SCALE" >/dev/null 2> "$TMP/$g.txt"
     grep -E '#' "$TMP/$g.txt"
 done
 
 echo
 echo "==================== 4. miniprof vs perf (whole run, % of slots) ===================="
-python3 - "$OUT" "$TMP/PipelineL1.txt" "$TMP/PipelineL2.txt" <<'PY'
+python3 - "$OUT" "$TMP/$G1.txt" "$TMP/$G2.txt" <<'PY'
 import json, re, sys
 td = json.load(open(sys.argv[1]))["metrics"]["topdown"]
 perf = {}
@@ -73,7 +75,15 @@ alias = {"frontend_bound_latency": "frontend_latency", "frontend_bound_bandwidth
          "backend_bound_memory": "backend_memory", "backend_bound_cpu": "backend_cpu",
          "bad_speculation_mispredicts": "bad_speculation_mispredicts",
          "bad_speculation_pipeline_restarts": "bad_speculation_pipeline_restarts",
-         "retiring_fastpath": "retiring_fastpath", "retiring_microcode": "retiring_microcode"}
+         "retiring_fastpath": "retiring_fastpath", "retiring_microcode": "retiring_microcode",
+         # Intel TMA names (perf's graniterapids metrics)
+         "tma_frontend_bound": "frontend_bound", "tma_bad_speculation": "bad_speculation",
+         "tma_backend_bound": "backend_bound", "tma_retiring": "retiring",
+         "tma_fetch_latency": "frontend_latency", "tma_fetch_bandwidth": "frontend_bandwidth",
+         "tma_branch_mispredicts": "bad_speculation_mispredicts",
+         "tma_machine_clears": "bad_speculation_pipeline_restarts",
+         "tma_memory_bound": "backend_memory", "tma_core_bound": "backend_cpu",
+         "tma_light_operations": "retiring_fastpath", "tma_heavy_operations": "retiring_microcode"}
 perf = {alias.get(k, k): v for k, v in perf.items()}
 if not td.get("available"):
     print("miniprof top-down unavailable:", td.get("reason")); sys.exit(0)

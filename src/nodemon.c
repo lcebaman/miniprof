@@ -8,8 +8,9 @@
  *
  * Kept deliberately small and closed:
  *   - takes no paths, event lists or other free-form input: only --uarch
- *     (zen4|zen5|zen6) and --interval-ms (10..10000);
- *   - opens a fixed set of events on the amd_umc_*, amd_df and power PMUs,
+ *     (zen4|zen5|zen6|granite_rapids) and --interval-ms (10..10000);
+ *   - opens a fixed set of events on the amd_umc_*, amd_df, uncore_imc_*
+ *     and power PMUs,
  *     found through sysfs, then DROPS all capabilities before sampling;
  *   - counts only node-wide hardware events: it cannot attach to, read
  *     or sample any process;
@@ -240,9 +241,60 @@ static void setup_df_dram(int nchan)
     }
 }
 
+static void setup_energy(void);
+
+/* Intel Granite Rapids: DRAM traffic from the memory controllers. The
+ * kernel exposes one uncore_imc_N PMU per channel; its cpumask holds one
+ * CPU per socket, so each PMU is opened once per socket. Each channel has
+ * two sub-channels with their own CAS counters (graniterapids
+ * uncore-memory JSON): UNC_M_CAS_COUNT_SCH0/1.RD (event 0x05/0x06, umask
+ * 0xcf) and .WR (umask 0xf0), 64 B per CAS, as perf's memory_bandwidth_*
+ * metrics. Four events on the IMC's four counters: no multiplexing.
+ * Remote-socket traffic (UPI) is not measured here; the core counters
+ * give the remote share of the job's reads. */
+static int cmp_imc(const void *a, const void *b)
+{
+    return atoi((const char *)a + 11) - atoi((const char *)b + 11);   /* "uncore_imc_N" */
+}
+
+static void setup_intel_imc(void)
+{
+    static char names[128][32];
+    int nu = 0;
+    DIR *d = opendir(SYSPMU);
+    if (!d) die("no %s", SYSPMU);
+    struct dirent *de;
+    while ((de = readdir(d)) && nu < 128) {
+        const char *n = de->d_name;
+        if (strncmp(n, "uncore_imc_", 11) == 0 && n[11] >= '0' && n[11] <= '9')
+            snprintf(names[nu++], sizeof(names[0]), "%.31s", n);
+    }
+    closedir(d);
+    if (nu == 0) die("no uncore_imc_N PMUs (kernel without Granite Rapids uncore support?)");
+    qsort(names, (size_t)nu, sizeof(names[0]), cmp_imc);
+    for (int i = 0; i < nu; i++) {
+        int type = pmu_type(names[i]), cpus[NM_MAX_SOCKETS];
+        int nc = type >= 0 ? pmu_cpus(names[i], cpus, NM_MAX_SOCKETS) : 0;
+        for (int k = 0; k < nc; k++) {
+            int s = sock_index(cpu_socket(cpus[k]));
+            int c = g_nchans[s]++;
+            if (c >= NM_MAX_CHANS) die("more than %d memory channels per socket", NM_MAX_CHANS);
+            open_ev(type, 0xcf05, cpus[k], EV_UMC_RD, s, c, 64.0, names[i]);   /* SCH0.RD */
+            open_ev(type, 0xcf06, cpus[k], EV_UMC_RD, s, c, 64.0, names[i]);   /* SCH1.RD */
+            open_ev(type, 0xf005, cpus[k], EV_UMC_WR, s, c, 64.0, names[i]);   /* SCH0.WR */
+            open_ev(type, 0xf006, cpus[k], EV_UMC_WR, s, c, 64.0, names[i]);   /* SCH1.WR */
+        }
+    }
+}
+
 static void setup(const char *uarch)
 {
     if (strcmp(uarch, "swtest") == 0) { setup_swtest(); return; }
+    if (strcmp(uarch, "granite_rapids") == 0) {
+        setup_intel_imc();
+        setup_energy();
+        return;
+    }
     if (strcmp(uarch, "swtest-partial") == 0) {   /* test the coverage path */
         setup_swtest();
         g_coverage = "test: part of the node";
@@ -304,7 +356,12 @@ df_remote:;
         }
     }
 
-    /* package energy, in microjoules */
+    setup_energy();
+}
+
+/* package energy, in microjoules */
+static void setup_energy(void)
+{
     int ptype = pmu_type("power"), pcpus[NM_MAX_SOCKETS];
     int np = ptype >= 0 ? pmu_cpus("power", pcpus, NM_MAX_SOCKETS) : 0;
     char b[128];
@@ -365,12 +422,13 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--uarch") == 0 && i + 1 < argc) uarch = argv[++i];
         else if (strcmp(argv[i], "--interval-ms") == 0 && i + 1 < argc) interval = atoi(argv[++i]);
-        else die("usage: miniprof-nodemon --uarch zen4|zen5|zen6 [--interval-ms 10..10000]");
+        else die("usage: miniprof-nodemon --uarch zen4|zen5|zen6|granite_rapids [--interval-ms 10..10000]");
     }
     if (!uarch || (strcmp(uarch, "zen4") != 0 && strcmp(uarch, "zen5") != 0 &&
-                   strcmp(uarch, "zen6") != 0 && strcmp(uarch, "swtest") != 0 &&
+                   strcmp(uarch, "zen6") != 0 && strcmp(uarch, "granite_rapids") != 0 &&
+                   strcmp(uarch, "swtest") != 0 &&
                    strcmp(uarch, "swtest-partial") != 0))
-        die("unsupported uarch '%s' (zen4, zen5, zen6)", uarch ? uarch : "");
+        die("unsupported uarch '%s' (zen4, zen5, zen6, granite_rapids)", uarch ? uarch : "");
     if (interval < 10 || interval > 10000) die("interval-ms out of range");
     setvbuf(stdout, NULL, _IOLBF, 0);
     prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);   /* never outlive the rank */
@@ -460,6 +518,9 @@ int main(int argc, char **argv)
         }
     }
     if (g_coverage) printf("coverage %s\n", g_coverage);
+    int any_remote = 0;
+    for (int i = 0; i < g_nev; i++) any_remote |= g_ev[i].kind == EV_DF_REMOTE_IN;
+    if (!any_remote) printf("remote unmeasured\n");
     printf("peak node=%.6g\nend\n", peak_node);
     return 0;
 }

@@ -76,7 +76,7 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
 | [Comparing runs](docs/comparing-runs.md) | `miniprof-diff`, `miniprof-fingerprint`, CSV export, thresholds |
 | [Examples](docs/examples.md) | Worked examples on real applications: hybrid MD code, MPI-only ocean model, thread sweep, node comparison |
 | [Configuration](docs/configuration.md) | Every environment variable |
-| [Hardware support](docs/hardware.md) | What each CPU provides, counter groups, Zen 4/5/6 notes, permissions |
+| [Hardware support](docs/hardware.md) | What each CPU provides, counter groups, Zen 4/5/6 and Granite Rapids notes, permissions |
 | [Development and testing](docs/development.md) | `make` targets, the test suite, validation, internals |
 | [Known limitations](docs/limitations.md) | What miniprof does not cover |
 
@@ -89,7 +89,8 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
 - Python 3 (standard library only) for the reports
 - GNU binutils (`addr2line`, `nm`) for sampling and trace modes
 - Hardware counters: `perf_event_paranoid <= 2`. Full detail (top-down,
-  memory, energy) is implemented for AMD Zen 4, Zen 5 and Zen 6; other CPUs
+  memory, energy) is implemented for AMD Zen 4, Zen 5 and Zen 6 and Intel
+  Granite Rapids (new); other CPUs
   get cycles and instructions. Everything else works on any x86-64 Linux.
 - OpenMP detail needs a runtime with OMPT: LLVM `libomp` (clang, AOCC) or
   Intel `libiomp5`. GCC's `libgomp` has none.

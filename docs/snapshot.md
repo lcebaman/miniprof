@@ -76,7 +76,7 @@ sections say why they are missing):
 
  Hardware counters      unavailable: perf_event_open failed for generic/base: No such file or directory (no PMU: virtual machine or unsupported CPU?)
 
- Memory (node)          not measured: no node-level memory counters for uarch 'emerald_rapids' (AMD Zen 4 / 5 / 6 only)
+ Memory (node)          not measured: no node-level memory counters for uarch 'emerald_rapids' (AMD Zen 4 / 5 / 6, Intel Granite Rapids)
 
  Roofline               not available: no calibration: run miniprof-calibrate once per node type and set MINIPROF_CALIBRATION
 
@@ -243,9 +243,14 @@ fit are dropped from the end of the group, and the JSON says which.
 
 ## Top-down
 
-At `--level topdown` (AMD Zen 4/5/6), AMD's pipeline-utilisation model,
-the one behind `perf stat -M PipelineL1,PipelineL2`, as a share of
-dispatch slots:
+At `--level topdown`, a top-down breakdown of the compute pipeline. On AMD
+Zen 4/5/6 it is AMD's pipeline-utilisation model, the one behind
+`perf stat -M PipelineL1,PipelineL2`, as a share of dispatch slots. On
+Intel Granite Rapids it is Intel's TMA, as `perf stat -M TopdownL1,TopdownL2`,
+as a share of pipeline slots, with level 2 under Intel's names (fetch
+latency, branch mispredicts, memory/core bound, heavy operations); see
+[hardware support](hardware.md#granite-rapids). The table below uses
+the AMD names:
 
 | Level 1 | Level 2 | What to do about it |
 |---|---|---|
@@ -270,7 +275,8 @@ dispatch slots:
 
 ## Memory
 
-Node-level counters, per node and per socket (AMD Zen 4/5/6, any level,
+Node-level counters, per node and per socket (AMD Zen 4/5/6, Intel
+Granite Rapids without the remote share; any level,
 needs the [memory helper](installing.md#the-memory-helper)):
 
 - DRAM read and write bandwidth, average and peak (best 100 ms interval),

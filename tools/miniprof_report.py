@@ -258,7 +258,7 @@ def observations(doc: dict, args) -> list:
             add("topdown", f"Bad speculation {tdc['bad_speculation']:.1f}% (> {args.td_badspec_pct:g}%): "
                        "branch mispredictions or pipeline restarts.")
     if mem and mem.get("available"):
-        if mem["remote_read_share_pct"] > args.remote_pct:
+        if (mem.get("remote_read_share_pct") or 0) > args.remote_pct:
             where = "come from another NUMA node" if mem.get("coverage") else "cross sockets"
             add("memory", f"{mem['remote_read_share_pct']:.1f}% of DRAM reads {where} (> {args.remote_pct:g}%): "
                        "check binding and first-touch initialisation.")
@@ -268,9 +268,9 @@ def observations(doc: dict, args) -> list:
                 add("memory", f"Socket {so['socket']} of node 0 uses {ch['active']} of {ch['count']} memory "
                            "channels: memory is concentrated in a few NUMA domains (placement, or NPS mode).")
                 break
-    rem = cd.get("remote_dram_fill_pct")
+    rem = cd.get("remote_dram_fill_pct", cd.get("remote_dram_read_pct"))
     if rem is not None and rem > args.remote_pct:
-        add("counters", f"{rem:.1f}% of DRAM fills come from a remote NUMA node (> {args.remote_pct:g}%): "
+        add("counters", f"{rem:.1f}% of DRAM reads come from a remote NUMA node (> {args.remote_pct:g}%): "
                    "check process/thread binding and first-touch initialisation.")
     if "packed_fp_ops_pct" in cd and cd["packed_fp_ops_pct"] < args.packed_pct:
         add("counters", f"Only {cd['packed_fp_ops_pct']:.1f}% of FP-unit ops are packed (< {args.packed_pct:g}%): "
@@ -419,8 +419,12 @@ def report(doc: dict, args) -> str:
             if "l2_misses_per_kilo_instr" in cd:
                 p(f"   L2 misses           {cd['l2_misses_per_kilo_instr']:.2f} per 1000 instructions")
             if "dram_read_gb_per_s" in cd:
-                p(f"   DRAM reads          {cd['dram_read_gb_per_s']:.2f} GB/s (this job's threads: L1D fills + "
-                  f"L2-prefetch misses; {cd.get('flops_per_dram_read_byte', 0):.3g} FLOP per byte read)")
+                rem = cd.get("remote_dram_read_pct")
+                src = ("demand + prefetch reads from DRAM" if "remote_dram_read_pct" in cd or
+                       cnt.get("uarch") == "granite_rapids" else "L1D fills + L2-prefetch misses")
+                p(f"   DRAM reads          {cd['dram_read_gb_per_s']:.2f} GB/s (this job's threads: {src}; "
+                  f"{cd.get('flops_per_dram_read_byte', 0):.3g} FLOP per byte read"
+                  + (f"; {rem:.1f}% from the other socket" if rem is not None else "") + ")")
             elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 p(f"   DRAM fills          >= {cd['dram_fill_gb_per_s']:.2f} GB/s (L1D fills from DRAM, "
@@ -461,7 +465,8 @@ def report(doc: dict, args) -> str:
             if mem["nodes_measured"] > 1:
                 p(f"   all nodes           {mem['total_gb_s_all_nodes']:.1f} GB/s; per node "
                   f"min {pn['total_gb_s']['min']:.1f} / max {pn['total_gb_s']['max']:.1f}")
-            p(f"   Remote-socket reads {mem['remote_read_share_pct']:5.1f}%  of core reads, all sockets (NUMA placement)")
+            if mem.get("remote_read_share_pct") is not None:
+                p(f"   Remote-socket reads {mem['remote_read_share_pct']:5.1f}%  of core reads, all sockets (NUMA placement)")
             p(f"   Package power       {pn['power_w_avg']:.0f} W per node, {mem['energy_j_all_nodes'] / 1e3:.2f} kJ in total")
             n0 = mem["nodes"][0]
             for so in n0["sockets"]:
@@ -520,8 +525,9 @@ def report(doc: dict, args) -> str:
             tdc = dict((td.get("compute") or {}).get("level1") or {})
             l2 = (td.get("compute") or {}).get("level2") or {}
             tdc.update(l2)
-            p(f" Top-down               {td['uarch']}, % of dispatch slots ({td['dispatch_width']}/cycle), "
-              "outside MPI")
+            slots = td.get("slots_label", "dispatch slots")
+            per = f" ({td['dispatch_width']}/cycle)" if slots == "dispatch slots" else ""
+            p(f" Top-down               {td['uarch']}, % of {slots}{per}, outside MPI")
             if td.get("note"):
                 p(f"   note: {td['note']}")
             subs = {"frontend_bound": ("frontend_latency", "frontend_bandwidth", "latency", "bandwidth"),
@@ -529,6 +535,8 @@ def report(doc: dict, args) -> str:
                                         "mispredicts", "restarts"),
                     "backend_bound": ("backend_memory", "backend_cpu", "memory", "cpu"),
                     "retiring": ("retiring_fastpath", "retiring_microcode", "fastpath", "microcode")}
+            lab2 = td.get("level2_labels") or {}
+            subs = {k: (a, b, lab2.get(a, la), lab2.get(b, lb)) for k, (a, b, la, lb) in subs.items()}
             names = {"frontend_bound": "Frontend bound", "bad_speculation": "Bad speculation",
                      "backend_bound": "Backend bound", "retiring": "Retiring"}
             if tdc:

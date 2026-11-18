@@ -149,6 +149,10 @@ def main() -> int:
         check(0.05 < d.get("ipc_compute", 0) < 8, f"IPC (compute) {d.get('ipc_compute'):.3f} plausible")
         ghz = d.get("ghz_effective", 0)
         check(0.5 < ghz < 7.0, f"effective frequency {ghz:.2f} GHz plausible")
+        if "remote_dram_read_pct" in d:
+            print(f"INFO: dram_read_gb_per_s={d.get('dram_read_gb_per_s'):.2f} "
+                  f"remote_dram_read_pct={d['remote_dram_read_pct']:.2f} "
+                  f"l2_mpki={d.get('l2_misses_per_kilo_instr', 0):.2f}")
         if "remote_dram_fill_pct" in d:
             print(f"INFO: dram_fill_gb_per_s={d.get('dram_fill_gb_per_s'):.2f} "
                   f"remote_dram_fill_pct={d['remote_dram_fill_pct']:.2f} "
@@ -156,9 +160,13 @@ def main() -> int:
     elif group == "roofline":
         for n in ("daxpy", "dot_scalar"):
             t = regions[n]["totals"]
-            rb = 64 * (t.get("dram_fills", 0) + t.get("dram_l2pf", 0))
-            print(f"INFO: {n}: DRAM reads {rb / 1e9:.3f} GB (fills {t.get('dram_fills', 0)}, "
-                  f"L2-prefetch misses {t.get('dram_l2pf', 0)}); streamed {16 * N * R * nranks / 1e9:.3f} GB")
+            if "dram_reads" in t:      # Intel: all core DRAM reads (OCR.READS_TO_CORE.DRAM)
+                rb = 64 * t["dram_reads"]
+                how = f"core DRAM reads {t['dram_reads']}"
+            else:
+                rb = 64 * (t.get("dram_fills", 0) + t.get("dram_l2pf", 0))
+                how = f"fills {t.get('dram_fills', 0)}, L2-prefetch misses {t.get('dram_l2pf', 0)}"
+            print(f"INFO: {n}: DRAM reads {rb / 1e9:.3f} GB ({how}); streamed {16 * N * R * nranks / 1e9:.3f} GB")
         check("dram_read_bytes" in d, "run-level DRAM reads derived")
     elif group == "vector":
         # fp_ops_retired_by_width counts every FP-unit uop of that width,

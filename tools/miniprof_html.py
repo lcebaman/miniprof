@@ -717,9 +717,13 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
             if "l2_misses_per_kilo_instr" in cd:
                 rows.append(("L2 misses", f'{cd["l2_misses_per_kilo_instr"]:.2f}', "per 1000 instructions"))
             if "dram_read_gb_per_s" in cd:
+                rem = cd.get("remote_dram_read_pct")
+                src = ("demand + prefetch reads from DRAM" if "remote_dram_read_pct" in cd or
+                       cnt.get("uarch") == "granite_rapids" else "L1D fills + L2-prefetch misses")
                 rows.append(("DRAM reads", f'{cd["dram_read_gb_per_s"]:.1f} GB/s',
-                             f'this job\'s threads: L1D fills + L2-prefetch misses; '
-                             f'{cd.get("flops_per_dram_read_byte", 0):.3g} FLOP per byte read'))
+                             f'this job\'s threads: {src}; '
+                             f'{cd.get("flops_per_dram_read_byte", 0):.3g} FLOP per byte read'
+                             + (f'; {rem:.1f}% from the other socket' if rem is not None else "")))
             elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 rows.append(("DRAM fills", f'≥ {cd["dram_fill_gb_per_s"]:.1f} GB/s',
@@ -764,7 +768,9 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
                 rl = (r.get("topdown") or {}).get("level1")
                 if rl:
                     rows.append((r["name"], rl, None))
-            body = f'<p class="note">{esc(td["uarch"])}: % of dispatch slots ({td["dispatch_width"]} per cycle), ' \
+            slots = td.get("slots_label", "dispatch slots")
+            per = f' ({td["dispatch_width"]} per cycle)' if slots == "dispatch slots" else ""
+            body = f'<p class="note">{esc(td["uarch"])}: % of {esc(slots)}{per}, ' \
                    'outside MPI.' + (f' {esc(td["note"])}' if td.get("note") else "") + "</p>"
             if rows:
                 body += legend([(s, n) for s, _, n in keys])
@@ -796,7 +802,8 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
                 body += f'<p class="note"><b>Partial coverage:</b> {esc(mem["coverage"])}.</p>'
             body += f'<p class="note">Sampled every {mem["interval_ms"]} ms on {mem["nodes_measured"]} node(s)' \
                     + (f'; {mem["nodes_without"]} without: {esc(mem.get("reason_missing"))}' if mem.get("nodes_without") else "") \
-                    + f'. Remote reads: {mem["remote_read_share_pct"]:.1f}% of core reads. ' \
+                    + (f'. Remote reads: {mem["remote_read_share_pct"]:.1f}% of core reads. '
+                       if mem.get("remote_read_share_pct") is not None else ". ") + \
                       f'Energy: {mem["energy_j_all_nodes"] / 1e3:.1f} kJ in total.</p>'
             rows = []
             for nd in mem["nodes"]:

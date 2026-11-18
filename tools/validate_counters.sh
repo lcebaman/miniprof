@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# validate_counters.sh — P3 counter validation on a real node (Zen 4 / Zen 5)
+# validate_counters.sh — P3 counter validation on a real node (Zen 4/5/6, Granite Rapids)
 #
 # Run from the repo root on a COMPUTE node with MPI and perf available,
 # inside an allocation (e.g. salloc -N1 --exclusive, then this script):
@@ -47,14 +47,22 @@ step make -s lib || { echo "build failed"; exit 1; }
 step make -s -C examples counters_validate mpi_percall imbalance_validate || { echo "build failed"; exit 1; }
 
 sec "perf stat reference: user-space FLOPs, whole run, MINIPROF_MODE=off"
+# AMD: one FLOP event. Intel: FP_ARITH_INST_RETIRED by width, weighted
+# (scalar 1, 128b double 2, 4_flops 4, 8_flops 8, 512b single 16).
+if grep -q GenuineIntel /proc/cpuinfo; then
+  PEV="cpu/event=0xc7,umask=0x03,name=fpw1/u,cpu/event=0xc7,umask=0x04,name=fpw2/u,cpu/event=0xc7,umask=0x18,name=fpw4/u,cpu/event=0xc7,umask=0x60,name=fpw8/u,cpu/event=0xc7,umask=0x80,name=fpw16/u"
+else
+  PEV="fp_ret_sse_avx_ops.all:u"
+fi
 cat > "$TMP/wrap.sh" <<WRAP
 #!/bin/sh
-exec perf stat -x, -e fp_ret_sse_avx_ops.all:u -o "$TMP/perf.\$\$.txt" "\$@"
+exec perf stat -x, -e "$PEV" -o "$TMP/perf.\$\$.txt" "\$@"
 WRAP
 chmod +x "$TMP/wrap.sh"
 MINIPROF_MODE=off $LAUNCH "$NP" "$TMP/wrap.sh" ./examples/counters_validate "$CV_N" "$CV_REPS"
-PERF_FLOPS=$(cat "$TMP"/perf.*.txt 2>/dev/null | grep -v '^#' | grep fp_ret | \
-             awk -F, '$1 ~ /^[0-9]+$/ {s += $1} END {printf "%.0f", s}')
+PERF_FLOPS=$(cat "$TMP"/perf.*.txt 2>/dev/null | grep -v '^#' | grep -E 'fp_ret|fpw' | \
+             awk -F, '$1 ~ /^[0-9]+$/ {w = 1; if (match($3, /fpw[0-9]+/)) w = substr($3, RSTART + 3, RLENGTH - 3); s += $1 * w}
+                      END {printf "%.0f", s}')
 echo "perf stat FLOPs summed over $(ls "$TMP"/perf.*.txt 2>/dev/null | wc -l) ranks: ${PERF_FLOPS:-none}"
 cat "$TMP"/perf.*.txt 2>/dev/null | grep -v '^#' | head -4
 
@@ -66,7 +74,7 @@ for lvl in basic roofline full; do
   EXTRA=""
   [ "$lvl" = basic ] && [ -n "${PERF_FLOPS:-}" ] && [ "${PERF_FLOPS:-0}" != 0 ] && EXTRA="--perf-flops $PERF_FLOPS"
   python3 tools/validate_counters.py "$J" --n "$CV_N" --reps "$CV_REPS" $EXTRA; rc=$?
-  [ $rc -eq 77 ] && rc=1   # on a real Zen node "unavailable" is a failure
+  [ $rc -eq 77 ] && rc=1   # on a supported node "unavailable" is a failure
   mark $rc
   python3 -c "import json,sys; c=json.load(open('$J'))['metrics']['counters']; \
 print(json.dumps({k: c.get(k) for k in ('uarch','group','read_method','reads','events','derived')}, indent=1))"
@@ -91,6 +99,7 @@ int main(void) {
 DAX
 cc -O3 -march=native -o "$TMP/daxpy_mix" "$TMP/daxpy.c" 2>&1
 "$TMP/daxpy_mix"
+grep -q GenuineIntel /proc/cpuinfo && echo "(AMD only: skipped)" || \
 for um in 0x0f 0x1f 0x40 0x4f 0x60 0x6f 0x80 0x8f 0xa0 0xaf; do
   r=$(perf stat -x, -e "cpu/event=0x03,umask=$um/u" -- "$TMP/daxpy_mix" 2>&1 >/dev/null | grep -v '^#' | tail -1)
   printf 'umask=%-5s %s\n' "$um" "$r"
