@@ -777,9 +777,10 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     if (intel) {
         jw_str(w, "flops", "FP_ARITH_INST_RETIRED by width, weighted by FLOPs per instruction "
                            "(an FMA counts twice); FP16 and AMX not included");
-        jw_str(w, "dram_reads", "lines read from DRAM into the core's caches (OCR.READS_TO_CORE.DRAM: "
-                                "demand and prefetch reads, RFOs, code; local and remote) x 64 B; "
-                                "writebacks are not included");
+        jw_str(w, "dram_fills", "core-observed DRAM reads (OCR.READS_TO_CORE.DRAM: demand and L1/L2 "
+                                "prefetch reads, RFOs, code) x 64 B; misses lines the L3 prefetcher "
+                                "brings in (most of a streaming read) and all writebacks: a lower "
+                                "bound on DRAM traffic, not a bandwidth measurement");
         jw_str(w, "fp_ops_width", "arithmetic FP instructions by vector width (FP_ARITH_INST_RETIRED; "
                                   "an FMA counts twice; no loads, stores or moves)");
     } else {
@@ -879,14 +880,6 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
     if (iL2 >= 0 && iI >= 0)
         jw_dbl(w, "l2_misses_per_kilo_instr", 1000.0 * ratio((double)tot[iL2], (double)tot[iI]));
     int iPf = kind_index(CK_DRAM_L2PF, n_active);
-    int iDR = kind_index(CK_DRAM_READS, n_active), iRR = kind_index(CK_DRAM_READS_REMOTE, n_active);
-    if (iDR >= 0) {   /* Intel: every line the core read from DRAM, demand and prefetch */
-        double rb = 64.0 * (double)tot[iDR];
-        jw_dbl(w, "dram_read_bytes", rb);
-        jw_dbl(w, "dram_read_gb_per_s", el_max > 0 ? rb / el_max * 1e-9 : 0.0);
-        if (iF >= 0) jw_dbl(w, "flops_per_dram_read_byte", ratio((double)tot[iF], rb));
-        if (iRR >= 0) jw_dbl(w, "remote_dram_read_pct", 100.0 * ratio((double)tot[iRR], (double)tot[iDR]));
-    }
     if (iD >= 0 && iPf >= 0) {
         double rb = 64.0 * ((double)tot[iD] + (double)tot[iPf]);
         jw_dbl(w, "dram_read_bytes", rb);
@@ -1481,7 +1474,6 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     int iF = kind_index(CK_FLOPS, g_cnt.n_active);
     int iD = kind_index(CK_DRAM_FILLS, g_cnt.n_active);
     int iPf = kind_index(CK_DRAM_L2PF, g_cnt.n_active);
-    if (iD < 0) iD = kind_index(CK_DRAM_READS, g_cnt.n_active);   /* Intel: all core DRAM reads */
     int mem_any = 0, mem_part = 0;
     for (int i = 0; i < nn; i++) {
         mem_any |= nodes[i].mem.available;
@@ -1535,15 +1527,11 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     double bw_triad = cal_num(k1);
     jw_bool(w, "available", 1);
     jw_bool(w, "estimate", est);
-    int ocr = kind_index(CK_DRAM_READS, g_cnt.n_active) >= 0;   /* Intel */
+    int ocr = g_cnt_group && strcmp(g_cnt_group->uarch, "granite_rapids") == 0;
     if (est && ocr)
-        jw_str(w, "dram_bytes", mem_part
-               ? "estimate: the memory block covers only part of the node, so DRAM bytes are this "
-                 "job's DRAM reads from core counters (OCR.READS_TO_CORE.DRAM: demand + prefetch, "
-                 "x 64 B, both sockets); writes not included"
-               : "estimate: no memory block (miniprof-nodemon), so DRAM bytes are this job's DRAM "
-                 "reads from core counters (OCR.READS_TO_CORE.DRAM: demand + prefetch, x 64 B); "
-                 "writes not included");
+        jw_str(w, "dram_bytes", "estimate: no whole-node memory counts, so DRAM bytes are this job's "
+                                "core-observed DRAM reads (OCR.READS_TO_CORE.DRAM x 64 B): misses lines "
+                                "the L3 prefetcher brings in, a lower bound; writes not included");
     else if (est)
         jw_str(w, "dram_bytes", iPf >= 0
                ? (mem_part ? "estimate: the memory block covers only part of the node, so DRAM bytes "
@@ -1561,9 +1549,10 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     write_calibration_ref(w);
     jw_begin_obj(w, "definitions");
     if (est && ocr)
-        jw_str(w, "arithmetic_intensity", "FLOPs / (core DRAM reads x 64 B), this job's threads, user "
-                                          "space. Write-backs are not counted, so the intensity is an "
-                                          "upper bound; the DRAM ceiling is the read-only one");
+        jw_str(w, "arithmetic_intensity", "FLOPs / (core-observed DRAM reads x 64 B), this job's "
+                                          "threads, user space. Lines brought in by the L3 prefetcher "
+                                          "and write-backs are not counted: a LOWER bound on DRAM "
+                                          "bytes, so the intensity is an UPPER bound");
     else if (est)
         jw_str(w, "arithmetic_intensity", "FLOPs / (L1D fills from DRAM x 64 B), this job's threads, "
                                           "user space. The fills miss write-backs and lines that only "
@@ -1579,13 +1568,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
                       "names another (fp32_512, fp64_256, ...): the FLOP counter does not "
                       "separate precisions");
     jw_str(w, "scope", "whole run, per node; FLOPs include those inside MPI calls");
-    jw_str(w, "regions", ocr ?
-                         "per user region (MINIPROF_SNAPSHOT=roofline): FLOPs per DRAM byte READ, "
-                         "reads = OCR.READS_TO_CORE.DRAM x 64 B (demand + prefetch); "
-                         "compared with the read-only DRAM ceiling; rate per node = per-rank "
-                         "rate x ranks per node. Counts are those of the threads that entered "
-                         "the region" :
-                         "per user region (MINIPROF_SNAPSHOT=roofline): FLOPs per DRAM byte READ, "
+    jw_str(w, "regions", "per user region (MINIPROF_SNAPSHOT=roofline): FLOPs per DRAM byte READ, "
                          "reads = (L1D fills from DRAM + L2-prefetcher misses to DRAM) x 64 B; "
                          "compared with the read-only DRAM ceiling; rate per node = per-rank "
                          "rate x ranks per node. Counts are those of the threads that entered "
@@ -1670,7 +1653,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
      * on streaming code, so they are not used for regions. Writes are not
      * counted: the intensity is per byte READ and the read-only ceiling
      * applies. Rate per node = the region's per-rank rate x ranks/node. */
-    if (iD >= 0 && (iPf >= 0 || ocr) && g_nrreg > 0) {   /* Intel: OCR reads are complete */
+    if (iD >= 0 && iPf >= 0 && g_nrreg > 0) {
         double rpn = nn > 0 ? (double)nr / nn : 1.0;
         double bwr = cal_bw_mix("node", 1.0);
         jw_begin_arr(w, "regions");
@@ -1678,7 +1661,7 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
             const region_red_t *g = &g_rreg[u];
             double avg_s = g->ranks ? g->ns_sum * 1e-9 / g->ranks : 0.0;
             double fl = (double)g->ev[0][iF];
-            double by = 64.0 * ((double)g->ev[0][iD] + (iPf >= 0 ? (double)g->ev[0][iPf] : 0.0));
+            double by = 64.0 * ((double)g->ev[0][iD] + (double)g->ev[0][iPf]);
             if (fl <= 0 || avg_s <= 0) continue;
             double gfl = fl / g->ranks / avg_s * 1e-9 * rpn;
             double ai = by > 0 ? fl / by : NAN;
@@ -1695,7 +1678,10 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         }
         jw_end_arr(w);
     } else if (g_nrreg > 0) {
-        jw_str(w, "regions_reason", "per-region points need MINIPROF_SNAPSHOT=roofline (FLOPs and "
+        jw_str(w, "regions_reason", ocr ?
+                                    "per-region points need complete DRAM reads by region; Granite "
+                                    "Rapids' core counters miss the L3 prefetcher's lines" :
+                                    "per-region points need MINIPROF_SNAPSHOT=roofline (FLOPs and "
                                     "DRAM reads by region from core counters)");
     }
     jw_end_obj(w);

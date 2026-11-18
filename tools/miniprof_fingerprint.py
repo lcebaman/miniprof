@@ -190,7 +190,7 @@ def fingerprint(doc):
         ds["arith_intensity"] = cd["flops_per_dram_fill_byte"]
     ds["l2_mpki"] = _num(cd.get("l2_misses_per_kilo_instr"))
     if ds["remote_read_pct"] is None:
-        ds["remote_read_pct"] = _num(cd.get("remote_dram_fill_pct", cd.get("remote_dram_read_pct")))
+        ds["remote_read_pct"] = _num(cd.get("remote_dram_fill_pct"))
     mpi = par.get("mpi") or {}
     tot_bytes = sum((c or {}).get("bytes") or 0 for c in (mpi.get("by_class") or {}).values())
     if el > 0 and tot_bytes:

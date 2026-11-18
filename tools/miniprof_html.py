@@ -717,17 +717,14 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
             if "l2_misses_per_kilo_instr" in cd:
                 rows.append(("L2 misses", f'{cd["l2_misses_per_kilo_instr"]:.2f}', "per 1000 instructions"))
             if "dram_read_gb_per_s" in cd:
-                rem = cd.get("remote_dram_read_pct")
-                src = ("demand + prefetch reads from DRAM" if "remote_dram_read_pct" in cd or
-                       cnt.get("uarch") == "granite_rapids" else "L1D fills + L2-prefetch misses")
                 rows.append(("DRAM reads", f'{cd["dram_read_gb_per_s"]:.1f} GB/s',
-                             f'this job\'s threads: {src}; '
-                             f'{cd.get("flops_per_dram_read_byte", 0):.3g} FLOP per byte read'
-                             + (f'; {rem:.1f}% from the other socket' if rem is not None else "")))
+                             f'this job\'s threads: L1D fills + L2-prefetch misses; '
+                             f'{cd.get("flops_per_dram_read_byte", 0):.3g} FLOP per byte read'))
             elif "dram_fill_gb_per_s" in cd:
                 rem = cd.get("remote_dram_fill_pct")
                 rows.append(("DRAM fills", f'≥ {cd["dram_fill_gb_per_s"]:.1f} GB/s',
-                             "L1D fills from DRAM (lower bound)" + (f"; {rem:.1f}% remote" if rem is not None else "")))
+                             ("core-observed DRAM reads" if cnt.get("uarch") == "granite_rapids" else "L1D fills from DRAM")
+                             + " (lower bound)" + (f"; {rem:.1f}% remote" if rem is not None else "")))
             body = f'<p class="note">{esc(cnt["uarch"])}, {esc(cnt["group"])} group, user space, read via ' \
                    f'{esc(cnt["read_method"])}' + (f'; {cnt["multiplexed_ranks"]} rank(s) multiplexed'
                                                    if cnt.get("multiplexed_ranks") else "") + ".</p>"

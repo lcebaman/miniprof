@@ -36,7 +36,8 @@ typedef enum {
     CK_INSTRUCTIONS,
     CK_FLOPS,              /* FP operations, FMA counted as 2               */
     CK_L2_MISSES,          /* demand L2 misses (data + instruction)         */
-    CK_DRAM_FILLS,         /* L1D fills sourced from DRAM/IO, any node      */
+    CK_DRAM_FILLS,         /* L1D fills sourced from DRAM/IO, any node (Intel:
+                              core-observed DRAM reads; both lower bounds)  */
     CK_DRAM_FILLS_REMOTE,  /* ... from DRAM/IO on another NUMA node         */
     CK_FP_SCALAR,          /* retired FP-unit ops by width — includes FP
                               loads, stores and moves, not only arithmetic  */
@@ -57,10 +58,7 @@ typedef enum {
     CK_RESYNCS,            /* pipeline restarts (resyncs, non-cond. redirects) */
     CK_DRAM_L2PF,          /* L2-prefetcher requests that miss L2 and L3
                               (lines the L2 prefetcher brought from DRAM)   */
-    /* Intel */
-    CK_DRAM_READS,         /* lines read from DRAM into the core's caches,
-                              demand and prefetch (OCR.READS_TO_CORE.DRAM)   */
-    CK_DRAM_READS_REMOTE,  /* ... from the other socket's DRAM              */
+    /* Intel top-down */
     CK_SLOTS,              /* top-down slots (fixed counter 3)              */
     CK_TD_RETIRING,        /* perf metric events, in slots: level 1 ...     */
     CK_TD_BADSPEC,

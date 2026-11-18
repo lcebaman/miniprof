@@ -11,7 +11,7 @@ hardware sections depend on the CPU and on permissions.
 | AMD Zen 4 (Genoa, Bergamo, Siena) | IPC, FLOPs, DRAM fills, L2 misses, FP width mix | yes (6 slots/cycle) | yes (data fabric) | yes |
 | AMD Zen 5 (Turin) | as Zen 4 | yes (8 slots/cycle) | yes (memory controllers) | yes |
 | AMD Zen 6 (Venice) | as Zen 5 (same encodings, checked against perf) | yes | node 0 only on the RHEL 9 kernel (see below) | estimate unless memory covers every node |
-| Intel Granite Rapids | IPC, FLOPs, DRAM reads (demand + prefetch, remote share), L2 misses, FP width mix | yes (Intel TMA, levels 1 and 2) | yes (memory controllers; no remote-socket traffic) | yes |
+| Intel Granite Rapids | IPC, FLOPs, core-observed DRAM reads (lower bound, remote share), L2 misses, FP width mix | yes (Intel TMA, levels 1 and 2) | yes (memory controllers; no remote-socket traffic) | yes (run level; no per-region points) |
 | Other Intel (Skylake SP to Emerald Rapids) and other CPUs | cycles and instructions (IPC) | no | no | no |
 
 The microarchitecture is read from CPUID and shown in the report header
@@ -35,8 +35,8 @@ group, chosen by the level:
 
 | Level | Group | AMD Zen events | Intel Granite Rapids events |
 |---|---|---|---|
-| `basic` | `base` | cycles, instructions, FLOPs (takes two counters), plus if they fit: L1D fills from DRAM, from the remote socket, L2 misses | cycles, instructions, FLOPs (five events), plus if they fit: DRAM reads, remote DRAM reads, L2 misses |
-| `roofline` | `roofline` | cycles, FLOPs, L1D fills from DRAM, L2-prefetcher requests that miss L2 and L3 | cycles, instructions, FLOPs, DRAM reads |
+| `basic` | `base` | cycles, instructions, FLOPs (takes two counters), plus if they fit: L1D fills from DRAM, from the remote socket, L2 misses | cycles, instructions, FLOPs (five events), plus if they fit: core-observed DRAM reads, remote DRAM reads, L2 misses |
+| `roofline` | `roofline` | cycles, FLOPs, L1D fills from DRAM, L2-prefetcher requests that miss L2 and L3 | cycles, instructions, FLOPs, core-observed DRAM reads |
 | `topdown` | | 12 pipeline events in three sets, one set per thread (see [snapshot reports](snapshot.md#top-down)) | slots and perf's eight `topdown-*` metric events, levels 1 and 2 in one group |
 | `full` | `vector` | FP operations by width (scalar, 128, 256, 512-bit), cycles | FP arithmetic instructions by width, cycles, instructions |
 
@@ -68,11 +68,15 @@ Encodings are those of the kernel's `graniterapids` event tables.
   128-bit single and 256-bit double 4, 256-bit single and 512-bit double
   8, 512-bit single 16), as perf's FLOPs metric does; the report shows one
   FLOP count. FP16 and AMX operations are not counted.
-- **DRAM reads** (`OCR.READS_TO_CORE.DRAM`) count every line the core
-  reads from DRAM, demand and prefetch, local and remote: unlike Zen's L1D
-  fills this is the core's whole DRAM read traffic, so it is not a lower
-  bound, and per-region roofline points work at `basic` too. Writebacks
-  are not counted. The remote share comes from `OCR.READS_TO_CORE.REMOTE_DRAM`.
+- **DRAM reads seen by the core** (`OCR.READS_TO_CORE.DRAM`): demand
+  and L1/L2-prefetch reads served by DRAM. They miss the lines the L3
+  prefetcher brings in, which the core then finds in L3: on a Xeon 6980P a
+  10.7 GB streaming read showed 0.75 GB here and 12.7 GB at the memory
+  controllers (with the first touch). Like Zen's L1D fills they are a
+  lower bound, reported as `dram_fills`, and per-region roofline points
+  (which need complete reads by region) are not offered; the run-level
+  roofline uses the memory controllers. The remote share comes from
+  `OCR.READS_TO_CORE.REMOTE_DRAM`.
 - **FP width mix** (`full`) counts arithmetic instructions only, an FMA
   twice; Zen's width events also count FP loads, stores and moves, so the
   mixes of the two vendors are not comparable.

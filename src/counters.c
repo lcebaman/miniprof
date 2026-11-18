@@ -269,11 +269,15 @@ static const cnt_group_t k_groups[] = {
      * folded into one logical "flops" (perf's FLOPs metric does the same).
      * FP16 (FP_ARITH_INST_RETIRED2) and AMX are not counted.
      *
-     * DRAM: OCR.READS_TO_CORE.DRAM counts every cacheable read, RFO and
-     * code request served by DRAM, demand and prefetch (L1 and L2
-     * prefetchers), local or remote socket: the core's whole DRAM read
-     * traffic in lines. Offcore-response events need an MSR (config1) and
-     * run on counters 0-3; there are two MSRs, used by event 0x2a and 0x2b. */
+     * DRAM: OCR.READS_TO_CORE.DRAM counts the core's reads, RFOs and code
+     * requests served by DRAM, demand and L1/L2 prefetch. It does NOT see
+     * lines the L3 (LLC) prefetcher brings in, which the core then finds
+     * in L3: on a Xeon 6980P a 10.7 GB streaming read showed 0.75 GB here
+     * against 12.7 GB at the memory controllers (tools/probe_intel.sh).
+     * So it is a lower bound, like Zen's L1D fills, and is reported as
+     * dram_fills; per-region roofline points need the complete count and
+     * are not offered on Granite Rapids. Offcore-response events need an
+     * MSR (config1) and counters 0-3; two MSRs, for event 0x2a and 0x2b. */
 #define IR(ev, um)        PERF_TYPE_RAW, CNT_INTEL_RAW(ev, um), 0
 #define IOCR(ev, rsp)     PERF_TYPE_RAW, CNT_INTEL_RAW(ev, 0x01), (rsp)
 #define FP(um, w, name)   { CK_FLOPS, name, IR(0xc7, um), w }
@@ -285,8 +289,8 @@ static const cnt_group_t k_groups[] = {
         FP(0x18,  4, "fp_arith_inst_retired.4_flops"),
         FP(0x60,  8, "fp_arith_inst_retired.8_flops"),
         FP(0x80, 16, "fp_arith_inst_retired.512b_packed_single"),
-        { CK_DRAM_READS,        "ocr.reads_to_core.dram",        IOCR(0x2a, 0x73C004477ull), 0 },
-        { CK_DRAM_READS_REMOTE, "ocr.reads_to_core.remote_dram", IOCR(0x2b, 0x730004477ull), 0 },
+        { CK_DRAM_FILLS,        "ocr.reads_to_core.dram",        IOCR(0x2a, 0x73C004477ull), 0 },
+        { CK_DRAM_FILLS_REMOTE, "ocr.reads_to_core.remote_dram", IOCR(0x2b, 0x730004477ull), 0 },
         { CK_L2_MISSES,         "l2_rqsts.miss",                 IR(0x24, 0x3f), 0 },
     } },
     { "granite_rapids", "roofline", 8, 8, {
@@ -297,7 +301,7 @@ static const cnt_group_t k_groups[] = {
         FP(0x18,  4, "fp_arith_inst_retired.4_flops"),
         FP(0x60,  8, "fp_arith_inst_retired.8_flops"),
         FP(0x80, 16, "fp_arith_inst_retired.512b_packed_single"),
-        { CK_DRAM_READS, "ocr.reads_to_core.dram", IOCR(0x2a, 0x73C004477ull), 0 },
+        { CK_DRAM_FILLS, "ocr.reads_to_core.dram", IOCR(0x2a, 0x73C004477ull), 0 },
     } },
     /* vector: arithmetic FP instructions by width (both precisions). Unlike
      * Zen's FP-unit ops these leave out loads, stores and moves, and an FMA
@@ -349,7 +353,7 @@ static const char *k_kind_names[CK_COUNT] = {
     "ret_ops", "disp_ops", "fe_empty_slots", "be_stall_slots", "smt_slots",
     "fe_latency_cycles", "noret_load_cycles", "noret_notcomplete_cycles",
     "ucode_ops", "br_misp", "resyncs", "dram_l2pf",
-    "dram_reads", "dram_reads_remote", "slots", "td_retiring", "td_bad_spec",
+    "slots", "td_retiring", "td_bad_spec",
     "td_fe_bound", "td_be_bound", "td_heavy_ops", "td_br_mispredict",
     "td_fetch_lat", "td_mem_bound", "uop_dropping"
 };

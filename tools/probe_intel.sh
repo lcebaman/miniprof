@@ -44,17 +44,22 @@ cat > "$TMP/k.c" <<'EOF'
 #include <time.h>
 static double now(void){struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);return t.tv_sec+t.tv_nsec*1e-9;}
 #define CH 12
+/* asm volatile: keeps GCC from treating the kernels as pure and calling
+ * them once for the R repetitions */
 __attribute__((target("avx512f"),noinline)) static double fma512d(long n){
+  __asm__ volatile("");
   __m512d a[CH],x=_mm512_set1_pd(1.0000001),y=_mm512_set1_pd(1e-9);
   for(int i=0;i<CH;i++)a[i]=_mm512_set1_pd(i);
   for(long k=0;k<n;k++) for(int i=0;i<CH;i++) a[i]=_mm512_fmadd_pd(a[i],x,y);
   double s=0; for(int i=0;i<CH;i++) s+=_mm512_reduce_add_pd(a[i]); return s;}
 __attribute__((target("avx2,fma"),noinline)) static double fma256s(long n){
+  __asm__ volatile("");
   __m256 a[CH],x=_mm256_set1_ps(1.0000001f),y=_mm256_set1_ps(1e-9f);
   for(int i=0;i<CH;i++)a[i]=_mm256_set1_ps(i);
   for(long k=0;k<n;k++) for(int i=0;i<CH;i++) a[i]=_mm256_fmadd_ps(a[i],x,y);
   float t[8]; double s=0; for(int i=0;i<CH;i++){_mm256_storeu_ps(t,a[i]); for(int j=0;j<8;j++) s+=t[j];} return s;}
 __attribute__((target("fma"),noinline)) static double scalard(long n){
+  __asm__ volatile("");
   __m128d a[CH],x=_mm_set_sd(1.0000001),y=_mm_set_sd(1e-9);
   for(int i=0;i<CH;i++)a[i]=_mm_set_sd(i);
   for(long k=0;k<n;k++) for(int i=0;i<CH;i++) a[i]=_mm_fmadd_sd(a[i],x,y);
