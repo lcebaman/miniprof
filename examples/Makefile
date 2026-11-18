@@ -29,6 +29,17 @@ ifeq ($(wildcard $(CC)),)
 CC := mpicc
 endif
 endif
+# The examples are MPI programs: a CC from the environment (modules often
+# set CC=gcc) compiles them when mpi.h is on CPATH but cannot link them.
+# Use the MPI wrapper instead, unless CC was given on the command line.
+ifeq ($(origin CC), environment)
+ifeq ($(findstring mpi,$(notdir $(CC))),)
+MPICC_FOUND := $(shell command -v mpicc 2>/dev/null)
+ifneq ($(MPICC_FOUND),)
+CC := $(MPICC_FOUND)
+endif
+endif
+endif
 
 ifeq ($(origin FC), default)
 FC := $(shell command -v mpifort 2>/dev/null || true)
