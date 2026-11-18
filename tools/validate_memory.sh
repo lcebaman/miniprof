@@ -1,5 +1,5 @@
 #!/bin/bash
-# validate_memory.sh — P5 memory block on a real Zen 4 / Zen 5 node.
+# validate_memory.sh — P5 memory block on a real Zen 4/5/6 or Granite Rapids node.
 #
 # Builds miniprof-nodemon, makes sure it holds CAP_PERFMON (sudo -n setcap
 # if passwordless sudo is available, otherwise says what to run), then

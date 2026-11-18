@@ -36,7 +36,8 @@ typedef enum {
     CK_INSTRUCTIONS,
     CK_FLOPS,              /* FP operations, FMA counted as 2               */
     CK_L2_MISSES,          /* demand L2 misses (data + instruction)         */
-    CK_DRAM_FILLS,         /* L1D fills sourced from DRAM/IO, any node      */
+    CK_DRAM_FILLS,         /* L1D fills sourced from DRAM/IO, any node (Intel:
+                              core-observed DRAM reads; both lower bounds)  */
     CK_DRAM_FILLS_REMOTE,  /* ... from DRAM/IO on another NUMA node         */
     CK_FP_SCALAR,          /* retired FP-unit ops by width — includes FP
                               loads, stores and moves, not only arithmetic  */
@@ -57,10 +58,21 @@ typedef enum {
     CK_RESYNCS,            /* pipeline restarts (resyncs, non-cond. redirects) */
     CK_DRAM_L2PF,          /* L2-prefetcher requests that miss L2 and L3
                               (lines the L2 prefetcher brought from DRAM)   */
+    /* Intel top-down */
+    CK_SLOTS,              /* top-down slots (fixed counter 3)              */
+    CK_TD_RETIRING,        /* perf metric events, in slots: level 1 ...     */
+    CK_TD_BADSPEC,
+    CK_TD_FE,
+    CK_TD_BE,
+    CK_TD_HEAVY,           /* ... and level 2: heavy operations (retiring)  */
+    CK_TD_BRMISP,          /*   branch mispredicts (bad speculation)        */
+    CK_TD_FETCHLAT,        /*   fetch latency (frontend)                    */
+    CK_TD_MEMBOUND,        /*   memory bound (backend)                      */
+    CK_UOP_DROPPING,       /* INT_MISC.UOP_DROPPING: frontend correction    */
     CK_COUNT
 } cnt_kind_t;
 
-#define CNT_MAX_EVENTS 6
+#define CNT_MAX_EVENTS 12  /* physical events per group (Intel base: 10)  */
 #define CNT_MAX_SETS   3   /* event sets rotated over threads (top-down)   */
 
 typedef struct {
@@ -68,6 +80,12 @@ typedef struct {
     const char *perf_name;   /* name `perf list` uses — for docs/validation */
     uint32_t    type;        /* PERF_TYPE_RAW or PERF_TYPE_HARDWARE         */
     uint64_t    config;
+    uint64_t    config1;     /* Intel offcore_rsp (OCR events), else 0      */
+    /* weight > 0: one part of a kind counted by several events (Intel
+     * FLOPs: FP_ARITH_INST_RETIRED by width). The parts of a kind are
+     * summed, each times its weight, into one logical event: everything
+     * outside counters.c sees one "flops" event. */
+    unsigned    weight;
 } cnt_event_t;
 
 typedef struct {
@@ -76,7 +94,14 @@ typedef struct {
     int         n_required;  /* events [0, n_required) must schedule        */
     int         n_events;    /* events [n_required, n_events) are optional  */
     cnt_event_t ev[CNT_MAX_EVENTS];
+    int         no_rdpmc;    /* always read(): Intel top-down metric events
+                                cannot be read with rdpmc as counts        */
 } cnt_group_t;
+
+/* Intel raw encoding: EventSelect → config[7:0], UMask → [15:8],
+ * CounterMask → [31:24] (sysfs cpu/format). */
+#define CNT_INTEL_RAW(event, umask) \
+    ((uint64_t)((event) & 0xff) | ((uint64_t)((umask) & 0xff) << 8))
 
 /* AMD raw encoding: EventSelect[7:0] → config[7:0], UnitMask → [15:8],
  * EventSelect[11:8] → config[35:32] (sysfs: event=config:0-7,32-35). */

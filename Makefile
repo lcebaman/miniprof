@@ -539,9 +539,13 @@ tests/test_units: tests/test_units.c src/sysinfo.c src/json_writer.c \
                   src/sysinfo.h src/json_writer.h
 	$(CC_HOST) -O2 -g -Wall -Wextra -o $@ tests/test_units.c src/sysinfo.c src/json_writer.c -lm
 
-test-units: tests/test_units
+tests/test_counters_fold: tests/test_counters_fold.c src/counters.c src/counters.h
+	$(CC_HOST) -O1 -g -Wall -Wextra -o $@ tests/test_counters_fold.c src/counters.c -lpthread -ldl
+
+test-units: tests/test_units tests/test_counters_fold
 	./tests/test_units tests/test_units_out.json
 	python3 tests/check_units_json.py tests/test_units_out.json
+	./tests/test_counters_fold
 
 # ── run-3d-snapshot: snapshot mode + JSON structural check ──────────────────
 # No rebuild needed — the normal diffusion3d binary, MINIPROF_MODE=snapshot.
@@ -744,6 +748,13 @@ run-topdown-validate: examples/topdown_validate
 	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_td_swtest.json \
 	mpirun $(MPIRUN_FLAGS) -n 3 ./examples/topdown_validate 0.02 >/dev/null || exit 1; \
 	python3 tools/validate_topdown.py miniprof_snapshot_td_swtest.json --plumbing; rc=$$?; \
+	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable"; \
+	elif [ $$rc -ne 0 ]; then exit 1; fi; \
+	echo "--- top-down plumbing, Intel path (one perf-metrics group, MINIPROF_COUNTERS_TEST=tma)"; \
+	MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT=topdown MINIPROF_COUNTERS_TEST=tma \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_td_swtma.json \
+	mpirun $(MPIRUN_FLAGS) -n 2 ./examples/topdown_validate 0.02 >/dev/null || exit 1; \
+	python3 tools/validate_topdown.py miniprof_snapshot_td_swtma.json --plumbing; rc=$$?; \
 	if [ $$rc -eq 77 ]; then echo "SKIP: software perf events unavailable"; \
 	elif [ $$rc -ne 0 ]; then exit 1; fi; \
 	if [ ! -e /sys/bus/event_source/devices/cpu/type ] && \
@@ -983,4 +994,4 @@ clean:
 	      examples/counters_validate miniprof_snapshot_cv_*.json \
 	      examples/omp_validate examples/omp_validate_clang examples/omp_validate_gcc \
 	      examples/topdown_validate examples/membw_validate examples/roofline_fma \
-	      tests/test_units tests/test_units_out.json
+	      tests/test_units tests/test_units_out.json tests/test_counters_fold

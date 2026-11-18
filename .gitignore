@@ -40,3 +40,4 @@ miniprof_calibration_quick.json
 calib/
 _install/
 __pycache__/
+tests/test_counters_fold

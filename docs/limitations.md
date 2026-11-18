@@ -37,7 +37,9 @@ Adding a wrapper is mechanical; see `src/mpi_trace.c`.
 ## Snapshot mode
 
 - Hardware detail (top-down, memory, energy, roofline) is implemented for
-  AMD Zen 4, 5 and 6. Other CPUs get IPC only. See
+  AMD Zen 4, 5 and 6 and Intel Granite Rapids.
+  Other CPUs get IPC only. On Granite Rapids the memory block has no
+  remote-socket share, and FP16/AMX operations are not counted as FLOPs. See
   [hardware support](hardware.md).
 - One counter group per run: IPC/FLOPs (`basic`) and top-down are separate
   runs.

@@ -761,6 +761,10 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
         jw_str(w, "type", e->type == PERF_TYPE_RAW ? "raw" :
                           e->type == PERF_TYPE_SOFTWARE ? "software" : "hardware");
         jw_str(w, "config", cfg);
+        if (e->config1) {
+            snprintf(cfg, sizeof(cfg), "0x%llx", (unsigned long long)e->config1);
+            jw_str(w, "config1", cfg);
+        }
         jw_bool(w, "optional", i >= g_cnt_group->n_required);
         jw_bool(w, "active", i < n_active);
         jw_end_obj(w);
@@ -769,15 +773,27 @@ static void write_counters(jw_t *w, const rank_rec_t *r, int n)
 
     jw_begin_obj(w, "definitions");
     jw_str(w, "compute", "counts outside MPI calls (includes I/O); mpi = inside MPI calls");
-    jw_str(w, "dram_fills", "L1D fills sourced from DRAM/IO, x64 B per line; misses lines the "
-                            "L2 prefetcher brought in and all writebacks, so it is a lower "
-                            "bound on DRAM traffic, not a bandwidth measurement");
+    int intel = strcmp(g_cnt_group->uarch, "granite_rapids") == 0;
+    if (intel) {
+        jw_str(w, "flops", "FP_ARITH_INST_RETIRED by width, weighted by FLOPs per instruction "
+                           "(an FMA counts twice); FP16 and AMX not included");
+        jw_str(w, "dram_fills", "core-observed DRAM reads (OCR.READS_TO_CORE.DRAM: demand and L1/L2 "
+                                "prefetch reads, RFOs, code) x 64 B; misses lines the L3 prefetcher "
+                                "brings in (most of a streaming read) and all writebacks: a lower "
+                                "bound on DRAM traffic, not a bandwidth measurement");
+        jw_str(w, "fp_ops_width", "arithmetic FP instructions by vector width (FP_ARITH_INST_RETIRED; "
+                                  "an FMA counts twice; no loads, stores or moves)");
+    } else {
+        jw_str(w, "dram_fills", "L1D fills sourced from DRAM/IO, x64 B per line; misses lines the "
+                                "L2 prefetcher brought in and all writebacks, so it is a lower "
+                                "bound on DRAM traffic, not a bandwidth measurement");
+        jw_str(w, "fp_ops_width", "FP-unit ops by vector width, including FP loads, stores and "
+                                  "register moves: shows how much vector hardware is used, not "
+                                  "the share of arithmetic that is vectorised");
+    }
     jw_str(w, "ghz_effective", "cycles / user CPU time (user-space counts)");
     jw_str(w, "omp_idle", "OpenMP worker threads between parallel regions (spinning in the runtime's "
                           "thread pool): kept out of compute; totals = compute + mpi + omp_idle");
-    jw_str(w, "fp_ops_width", "FP-unit ops by vector width, including FP loads, stores and "
-                              "register moves: shows how much vector hardware is used, not "
-                              "the share of arithmetic that is vectorised");
     jw_end_obj(w);
 
     uint64_t tot[CNT_MAX_EVENTS] = {0}, comp[CNT_MAX_EVENTS] = {0}, mpi[CNT_MAX_EVENTS] = {0},
@@ -923,6 +939,37 @@ static td_t td_compute(uint64_t ev[CNT_MAX_SETS][CNT_MAX_EVENTS], int W)
 {
     td_t t;
     memset(&t, 0, sizeof(t));
+    int M = set_by_name("td_metrics");
+    if (M >= 0) {
+        /* Intel TMA from perf's metric events (slot counts), as perf's
+         * graniterapids metrics: level 1 normalised by their sum, the
+         * frontend corrected by INT_MISC.UOP_DROPPING, bad speculation the
+         * remainder; level 2 as shares of their level-1 parent. */
+        int iS = set_idx(M, CK_SLOTS), iR = set_idx(M, CK_TD_RETIRING), iB = set_idx(M, CK_TD_BADSPEC);
+        int iF = set_idx(M, CK_TD_FE), iE = set_idx(M, CK_TD_BE), iH = set_idx(M, CK_TD_HEAVY);
+        int iM = set_idx(M, CK_TD_BRMISP), iL = set_idx(M, CK_TD_FETCHLAT), iMem = set_idx(M, CK_TD_MEMBOUND);
+        int iD = set_idx(M, CK_UOP_DROPPING);
+        if (iS < 0 || iR < 0 || iB < 0 || iF < 0 || iE < 0 || ev[M][iS] == 0) return t;
+        double tot = (double)ev[M][iR] + (double)ev[M][iB] + (double)ev[M][iF] + (double)ev[M][iE];
+        if (tot <= 0) return t;
+        double slots = (double)ev[M][iS];
+        double drop = iD >= 0 ? (double)ev[M][iD] / slots : 0.0;
+        t.slots = slots;
+        t.l1  = 1;
+        t.fe  = ev[M][iF] / tot - drop;
+        if (t.fe < 0) t.fe = 0;
+        t.be  = ev[M][iE] / tot;
+        t.ret = ev[M][iR] / tot;
+        t.bs  = 1.0 - (t.fe + t.be + t.ret);
+        if (t.bs < 0) t.bs = 0;
+#define SHARE(x, parent) ((parent) > 0 ? ((x) / (parent) > 1 ? 1.0 : ((x) < 0 ? 0.0 : (x) / (parent))) : 0.0)
+        if (iH >= 0) { t.l2_ret = 1; t.ucode = SHARE(ev[M][iH] / tot, t.ret); }
+        if (iM >= 0) { t.l2_bs = 1;  t.misp = SHARE(ev[M][iM] / tot, t.bs); }
+        if (iL >= 0) { t.l2_fe = 1;  t.fe_lat = SHARE(ev[M][iL] / tot - drop, t.fe); }
+        if (iMem >= 0) { t.l2_be = 1; t.be_mem = SHARE(ev[M][iMem] / tot, t.be); }
+#undef SHARE
+        return t;
+    }
     int A = set_by_name("td_l1"), B = set_by_name("td_febe"), C = set_by_name("td_rbs");
     int aC = set_idx(A, CK_CYCLES), aR = set_idx(A, CK_RET_OPS), aD = set_idx(A, CK_DISP_OPS);
     int aF = set_idx(A, CK_FE_EMPTY_SLOTS), aB = set_idx(A, CK_BE_STALL_SLOTS);
@@ -1004,7 +1051,8 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
     int avail = 0;
     for (int i = 0; i < n; i++) avail += r[i].cnt_available;
     int W = g_cnt_group ? cnt_dispatch_width(g_cnt_group->uarch) : 0;
-    if (!avail || g_cnt.nsets <= 1 || W == 0) {
+    int tma = set_by_name("td_metrics") >= 0;   /* Intel: one set, perf metric events */
+    if (!avail || (g_cnt.nsets <= 1 && !tma) || W == 0) {
         jw_bool(w, "available", 0);
         jw_str(w, "reason", !avail ? (g_cnt_reason[0] ? g_cnt_reason : "counters unavailable") :
                             cnt_set_note()[0] ? cnt_set_note() :
@@ -1014,11 +1062,30 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
     }
     jw_bool(w, "available", 1);
     jw_str(w, "uarch", g_cnt_group->uarch);
-    jw_str(w, "model", "AMD pipeline utilisation (perf PipelineL1/L2)");
-    jw_int(w, "dispatch_width", W);
-    jw_str(w, "method", "each thread counts one event set for the whole run, set = "
-                        "(rank + thread) mod sets; ratios only within a set; level 2 "
-                        "shares applied to the level 1 fractions");
+    if (tma) {
+        jw_str(w, "model", "Intel TMA (perf topdown metric events, as perf's TopdownL1/L2)");
+        jw_int(w, "dispatch_width", W);
+        jw_str(w, "slots_label", "pipeline slots");
+        jw_str(w, "method", "one event group per thread: the slots counter and the "
+                            "PERF_METRICS-based topdown-* events, levels 1 and 2 together");
+        jw_begin_obj(w, "level2_labels");
+        jw_str(w, "retiring_fastpath", "light operations");
+        jw_str(w, "retiring_microcode", "heavy operations");
+        jw_str(w, "bad_speculation_mispredicts", "branch mispredicts");
+        jw_str(w, "bad_speculation_pipeline_restarts", "machine clears");
+        jw_str(w, "backend_memory", "memory bound");
+        jw_str(w, "backend_cpu", "core bound");
+        jw_str(w, "frontend_latency", "fetch latency");
+        jw_str(w, "frontend_bandwidth", "fetch bandwidth");
+        jw_end_obj(w);
+    } else {
+        jw_str(w, "model", "AMD pipeline utilisation (perf PipelineL1/L2)");
+        jw_int(w, "dispatch_width", W);
+        jw_str(w, "slots_label", "dispatch slots");
+        jw_str(w, "method", "each thread counts one event set for the whole run, set = "
+                            "(rank + thread) mod sets; ratios only within a set; level 2 "
+                            "shares applied to the level 1 fractions");
+    }
 
     uint64_t comp[CNT_MAX_SETS][CNT_MAX_EVENTS], mpi[CNT_MAX_SETS][CNT_MAX_EVENTS];
     memset(comp, 0, sizeof(comp)); memset(mpi, 0, sizeof(mpi));
@@ -1045,12 +1112,31 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
         if (!th[k]) all_measured = 0;
     }
     jw_end_arr(w);
-    if (g_cnt.nsets < CNT_MAX_SETS || !all_measured)
+    if (!tma && (g_cnt.nsets < CNT_MAX_SETS || !all_measured))
         jw_str(w, "note", cnt_set_note()[0] ? cnt_set_note() :
                           "level 2 is partial: fewer counted threads than event sets "
                           "(run with >= 3 ranks or threads)");
 
     jw_begin_obj(w, "definitions");
+    if (tma) {
+        jw_str(w, "units", "percent of pipeline slots, user space");
+        jw_str(w, "compute", "outside MPI calls: the application's own code");
+        jw_str(w, "mpi", "inside MPI calls: mostly the MPI library polling for progress");
+        jw_str(w, "frontend_bound", "slots the frontend left empty while the backend could take "
+                                    "ops, less slots of ops dropped (uop dropping)");
+        jw_str(w, "bad_speculation", "slots used by ops that were squashed, and recovery: 100 minus "
+                                     "the other three");
+        jw_str(w, "backend_bound", "slots left empty because the backend was full");
+        jw_str(w, "retiring", "slots used by ops that retired: useful work");
+        jw_str(w, "backend_memory", "memory bound: backend stalls on loads and stores");
+        jw_str(w, "backend_cpu", "core bound: backend stalls on execution units");
+        jw_str(w, "frontend_latency", "fetch latency: i-cache/iTLB misses, redirects");
+        jw_str(w, "retiring_microcode", "heavy operations: instructions of two or more ops, "
+                                        "including microcode");
+        jw_str(w, "bad_speculation_mispredicts", "branch mispredicts; the rest is machine clears");
+        jw_end_obj(w);
+        goto td_values;
+    }
     jw_str(w, "units", "percent of dispatch slots (dispatch_width per cycle), user space");
     jw_str(w, "compute", "outside MPI calls: the application's own code");
     jw_str(w, "mpi", "inside MPI calls: mostly the MPI library polling for progress");
@@ -1069,6 +1155,7 @@ static void write_topdown(jw_t *w, const rank_rec_t *r, int n)
                                   "(fetch latency: i-cache/iTLB misses, redirects)");
     jw_end_obj(w);
 
+td_values:;
     td_t tc = td_compute(comp, W), tm = td_compute(mpi, W);
     write_td(w, "compute", &tc);
     write_td(w, "mpi", &tm);
@@ -1256,6 +1343,7 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
 
     double nrd[4096] = {0}, nwr[4096] = {0};
     double e_tot = 0, pw_sum = 0, peak_max = 0, all_loc = 0, all_rem = 0;
+    int no_remote = 0;
     int k = 0;
     jw_begin_arr(w, "nodes");
     for (int i = 0; i < nn; i++) {
@@ -1295,12 +1383,18 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
                            100.0 * (so->peak_rd_bps + so->peak_wr_bps) * 1e-9 / cb);
                 }
             }
-            jw_dbl(w, "remote_read_gb_s", gbs((double)so->remote_in_bytes, el));
             double l, r;
             core_reads(m, s, &l, &r);
-            all_loc += l; all_rem += r;
-            if (l + r >= 0.01 * node_cr && l + r > 0) jw_dbl(w, "remote_read_share_pct", 100.0 * r / (l + r));
-            else                                      jw_null(w, "remote_read_share_pct");
+            if (m->no_remote) {
+                no_remote = 1;
+                jw_null(w, "remote_read_gb_s");
+                jw_null(w, "remote_read_share_pct");
+            } else {
+                jw_dbl(w, "remote_read_gb_s", gbs((double)so->remote_in_bytes, el));
+                all_loc += l; all_rem += r;
+                if (l + r >= 0.01 * node_cr && l + r > 0) jw_dbl(w, "remote_read_share_pct", 100.0 * r / (l + r));
+                else                                      jw_null(w, "remote_read_share_pct");
+            }
             jw_dbl(w, "energy_j", so->energy_uj * 1e-6);
             jw_dbl(w, "power_w", el > 0 ? so->energy_uj * 1e-6 / el : 0.0);
             double busiest = 0;
@@ -1366,7 +1460,8 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
     jw_end_obj(w);
     jw_dbl(w, "total_gb_s_all_nodes", st.sum);
     jw_dbl(w, "energy_j_all_nodes", e_tot);
-    jw_dbl(w, "remote_read_share_pct", all_loc + all_rem > 0 ? 100.0 * all_rem / (all_loc + all_rem) : 0.0);
+    if (no_remote) jw_null(w, "remote_read_share_pct");
+    else jw_dbl(w, "remote_read_share_pct", all_loc + all_rem > 0 ? 100.0 * all_rem / (all_loc + all_rem) : 0.0);
     jw_end_obj(w);
 }
 
@@ -1432,7 +1527,12 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
     double bw_triad = cal_num(k1);
     jw_bool(w, "available", 1);
     jw_bool(w, "estimate", est);
-    if (est)
+    int ocr = g_cnt_group && strcmp(g_cnt_group->uarch, "granite_rapids") == 0;
+    if (est && ocr)
+        jw_str(w, "dram_bytes", "estimate: no whole-node memory counts, so DRAM bytes are this job's "
+                                "core-observed DRAM reads (OCR.READS_TO_CORE.DRAM x 64 B): misses lines "
+                                "the L3 prefetcher brings in, a lower bound; writes not included");
+    else if (est)
         jw_str(w, "dram_bytes", iPf >= 0
                ? (mem_part ? "estimate: the memory block covers only part of the node, so DRAM bytes "
                              "are this job's DRAM reads from core counters (L1D fills + L2-prefetch "
@@ -1448,7 +1548,12 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         jw_str(w, "dram_bytes", "measured: whole-node DRAM reads + writes (miniprof-nodemon)");
     write_calibration_ref(w);
     jw_begin_obj(w, "definitions");
-    if (est)
+    if (est && ocr)
+        jw_str(w, "arithmetic_intensity", "FLOPs / (core-observed DRAM reads x 64 B), this job's "
+                                          "threads, user space. Lines brought in by the L3 prefetcher "
+                                          "and write-backs are not counted: a LOWER bound on DRAM "
+                                          "bytes, so the intensity is an UPPER bound");
+    else if (est)
         jw_str(w, "arithmetic_intensity", "FLOPs / (L1D fills from DRAM x 64 B), this job's threads, "
                                           "user space. The fills miss write-backs and lines that only "
                                           "L2 prefetchers brought in: a LOWER bound on DRAM bytes, so "
@@ -1573,7 +1678,10 @@ static void write_roofline(jw_t *w, const rank_rec_t *r, int nr, const node_rec_
         }
         jw_end_arr(w);
     } else if (g_nrreg > 0) {
-        jw_str(w, "regions_reason", "per-region points need MINIPROF_SNAPSHOT=roofline (FLOPs and "
+        jw_str(w, "regions_reason", ocr ?
+                                    "per-region points need complete DRAM reads by region; Granite "
+                                    "Rapids' core counters miss the L3 prefetcher's lines" :
+                                    "per-region points need MINIPROF_SNAPSHOT=roofline (FLOPs and "
                                     "DRAM reads by region from core counters)");
     }
     jw_end_obj(w);

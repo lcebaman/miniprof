@@ -60,6 +60,7 @@ typedef struct {
     int      nsockets;
     int      interval_ms;
     int      samples;
+    int      no_remote;                   /* remote-socket traffic not measured */
     int      multiplexed;
     double   elapsed_s;
     double   peak_node_bps;               /* sum over sockets, best interval */

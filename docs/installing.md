@@ -99,7 +99,7 @@ sudo setcap cap_perfmon+ep /opt/miniprof/1.1-ompi5/lib/miniprof-nodemon
 - `share/miniprof/tools/nodemon_ready.sh <helper>` tells you whether it
   will work on this node.
 
-Memory counters are implemented for AMD Zen 4, 5 and 6; see
+Memory counters are implemented for AMD Zen 4, 5 and 6 and Intel Granite Rapids; see
 [hardware support](hardware.md#memory). Without the helper, the snapshot
 says why and everything else is unaffected.
 

@@ -20,8 +20,9 @@ Checks (real counters):
              redirect bubble: no ops from the frontend), not bad
              speculation, which counts only the squashed ops
 
---plumbing: software test events (MINIPROF_COUNTERS_TEST=1): only checks
-that the sets rotated over threads and every block is present.
+--plumbing: software test events (MINIPROF_COUNTERS_TEST=1, or =tma for the
+Intel one-group path): only checks that the sets were measured and every
+block is present.
 
 Exit 77 when top-down was not measured (no PMU, unsupported CPU).
 
@@ -54,14 +55,15 @@ def main() -> int:
             fails.append(msg)
 
     sets = td["sets"]
-    check(len(sets) == 3, f"3 event sets ({[s['name'] for s in sets]})")
+    tma = [s["name"] for s in sets] == ["td_metrics"]   # Intel: one group, perf metric events
+    check(len(sets) == 3 or tma, f"3 event sets, or Intel's one metrics group ({[s['name'] for s in sets]})")
     for s in sets:
         check(s["threads"] > 0, f"set {s['name']} measured by {s['threads']} thread(s) on {s['ranks']} rank(s)")
     regions = {r["name"]: r["topdown"] for r in td.get("regions", [])}
     for name in ("alu", "fpchain", "chase", "stream", "branch"):
         check(name in regions, f"region {name} present")
 
-    if td.get("uarch") == "swtest":
+    if td.get("uarch") in ("swtest", "swtest_tma"):
         a.plumbing = True          # software test events: no shapes to check
     if a.plumbing:
         check(td["compute"]["level1"] is not None, "compute level1 present")

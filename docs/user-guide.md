@@ -86,7 +86,7 @@ to collect them all in one run:
 
 Each level is a separate run; IPC from a `basic` run and top-down from a
 `topdown` run of the same input can be read together. Hardware detail
-beyond IPC needs AMD Zen 4, 5 or 6 ([hardware support](hardware.md)); the
+beyond IPC needs AMD Zen 4, 5 or 6 or Intel Granite Rapids ([hardware support](hardware.md)); the
 roofline and the fingerprint's DRAM and FLOP measures also need a
 calibration ([installing](installing.md)). See also
 [choosing a level](#choosing-a-level).
@@ -204,7 +204,7 @@ split, MPI, I/O, OpenMP, memory, hotspots) is collected at every level.
 | Level | Counters | Use it for |
 |---|---|---|
 | `basic` | cycles, instructions, FLOPs, DRAM fills | the first look: IPC, GFLOP/s, roofline per node |
-| `topdown` | pipeline slots: frontend, bad speculation, backend (memory/core), retiring | *why* the core is slow (AMD Zen 4/5/6) |
+| `topdown` | pipeline slots: frontend, bad speculation, backend (memory/core), retiring | *why* the core is slow (AMD Zen 4/5/6, Intel Granite Rapids) |
 | `roofline` | cycles, FLOPs, DRAM reads incl. prefetch | roofline points per user region |
 | `full` | FP operations by vector width | how much code is vectorised |
 
@@ -328,7 +328,7 @@ have no symbol of their own; their time shows under the caller.
 | `miniprof: command not found` in a job | the module was loaded in your login shell only: add `module use` / `module load` to the job script |
 | `not profiling: ... uses libmpi.so.X but this miniprof was built for libmpi.so.Y` | load the miniprof module built for that MPI |
 | `hardware counters unavailable: ... Permission denied` | `perf_event_paranoid` is 3 or more; ask for 2 |
-| `memory block unavailable` | grant the helper its capability ([installing](installing.md#the-memory-helper)), or not a Zen 4/5/6 node |
+| `memory block unavailable` | grant the helper its capability ([installing](installing.md#the-memory-helper)), or not a Zen 4/5/6 or Granite Rapids node |
 | `roofline: no calibration` | run `miniprof-calibrate` for this node type |
 | `OpenMP not measured: no OMPT` | GCC's `libgomp`; build with clang, AOCC or Intel oneAPI for the OpenMP section |
 | `OpenMP not measured: ... ran no parallel region` | the application links an OpenMP runtime but did not use it |
