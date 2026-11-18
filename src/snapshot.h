@@ -10,17 +10,16 @@
  * (MINIPROF_SNAPSHOT_OUTPUT, default miniprof_snapshot.json) that every
  * later report — text verdict, HTML, `miniprof diff` — is generated from.
  *
- * MINIPROF_SNAPSHOT selects which counter groups a run collects, so the
- * groups never have to be multiplexed onto the PMU together:
- *   basic    — time split, CPU utilisation, base counters (default)
- *   topdown  — basic + top-down pipeline utilisation group
- *   roofline — basic + FLOP/byte groups for the roofline
- *   full     — everything (multiplexed; for quick looks, not for numbers)
+ * MINIPROF_SNAPSHOT selects the ONE core-counter group a run collects
+ * (a CPU has too few counters for all of them; see counters.c):
+ *   basic    — cycles, instructions, FLOPs, DRAM fills (default)
+ *   topdown  — the top-down event sets instead
+ *   roofline — FLOPs + DRAM reads, for per-region roofline points
+ *   full     — FP operations by vector width
+ * Everything that is not a core counter (time split, MPI, I/O, OpenMP,
+ * memory, hotspots, timeline) is collected at every level.
  *
- * Phase P0 (this file's first version) implements the scaffolding only:
- * mode switch, level selection, node/rank metadata, overhead accounting
- * and the versioned JSON container. Every metric block is present in the
- * schema as `null` until the phase that fills it lands.
+ * docs/internals.md describes the whole snapshot pipeline.
  */
 
 typedef enum {
@@ -31,7 +30,7 @@ typedef enum {
 } snapshot_level_t;
 
 #define MINIPROF_SNAPSHOT_SCHEMA         "miniprof-snapshot"
-#define MINIPROF_SNAPSHOT_SCHEMA_VERSION "0.7.0"
+#define MINIPROF_SNAPSHOT_SCHEMA_VERSION "0.8.0"   /* 0.8: metrics.timeline */
 #define MINIPROF_DEFAULT_SNAPSHOT_OUTPUT "miniprof_snapshot.json"
 
 void snapshot_init(int verbose);
