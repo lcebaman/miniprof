@@ -52,6 +52,7 @@ on every pull request with `MPIRUN_FLAGS=--oversubscribe NRANKS=2`.
 | `run-hwc-validate`, `-omp`, `-smear` | sample mode's per-function counter classification, per-thread counters, and the interval-smearing warning |
 | `run-ext-trace` | trace mode's MPI test/wait and RMA wrappers |
 | `test-report-html` | text, HTML, CSV, diff and fingerprint reports against fixtures (`tests/fixtures/`), including escaping; the fingerprint's axes stay within 0-100, its components add up to the run, and its classification rules hold on the fixtures and on synthetic edge cases |
+| `run-timeline-validate` | timeline: three known phases (compute only, rank 0 slow, last rank slow) in the MPI series and the heatmap (`examples/timeline_validate`, `tools/validate_timeline.py`) |
 | `test-install` | installs into a scratch prefix and runs the launcher: snapshot, `--hotspots`, `--sample`, `--check`, stdin passed to rank 0, `miniprof-csv` and `miniprof-fingerprint`, module files |
 
 `make check` also runs the example workflows (`run`, `run-trace`,

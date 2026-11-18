@@ -56,6 +56,7 @@
  */
 
 #include "mpi_trace.h"
+#include "timeline.h"
 #include "trace_store.h"
 #include "counters.h"
 #include "../include/miniprof.h"
@@ -166,6 +167,7 @@ static void record(int id, uint64_t dt_ns, long bytes)
         __atomic_fetch_add(&g_snap.ns[id], dt_ns, __ATOMIC_RELAXED);
         __atomic_fetch_add(&g_snap.hist_calls[cls][bin], 1, __ATOMIC_RELAXED);
         __atomic_fetch_add(&g_snap.hist_ns[cls][bin], dt_ns, __ATOMIC_RELAXED);
+        if (tl_on) tl_add(TL_MPI, now_ns(), dt_ns);
         return;
     }
 

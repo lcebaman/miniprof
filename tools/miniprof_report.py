@@ -45,6 +45,60 @@ def bar(pct: float, width: int = 30) -> str:
     return "#" * n + "." * (width - n)
 
 
+SPARK = " ▁▂▃▄▅▆▇█"
+
+
+def spark(values, width=60, vmax=None):
+    """A sparkline of `width` characters; buckets are averaged into each
+    character, None (no data) prints as a space."""
+    vals = list(values)
+    if not vals:
+        return ""
+    cols = []
+    for c in range(min(width, len(vals))):
+        a, b = c * len(vals) // min(width, len(vals)), (c + 1) * len(vals) // min(width, len(vals))
+        xs = [v for v in vals[a:max(b, a + 1)] if v is not None]
+        cols.append(sum(xs) / len(xs) if xs else None)
+    top = vmax if vmax else max([x for x in cols if x is not None] + [1e-12])
+    return "".join(" " if x is None else SPARK[1 + min(7, int(x / top * 7.999))] if x > 0 else SPARK[1]
+                   for x in cols)
+
+
+def timeline_lines(tl, width=60):
+    """Text lines for the Timeline section."""
+    t = tl["t_s"]
+    span = t[-1] + tl["bucket_s"] if t else 0
+    out = [f" Timeline               {tl['ranks']} ranks, {len(t)} buckets of {tl['bucket_s'] * 1000:.0f} ms, "
+           f"0 to {span:.1f} s left to right"]
+    rows = [("MPI % (avg)", tl["mpi_pct"]["avg"], 100, "{:.0f}%"),
+            ("MPI % (max rank)", tl["mpi_pct"]["max"], 100, "{:.0f}%")]
+    if any((x or 0) > 0.5 for x in tl["io_pct"]["avg"]):
+        rows.append(("I/O % (avg)", tl["io_pct"]["avg"], 100, "{:.0f}%"))
+    if tl.get("ipc"):
+        rows.append(("IPC (avg)", tl["ipc"]["avg"], None, "{:.2f}"))
+    if tl.get("gflops"):
+        rows.append(("GFLOP/s", tl["gflops"], None, "{:.3g}"))
+    for m in (tl.get("memory") or [])[:1]:
+        tot = [None if a is None else a + (b or 0) for a, b in zip(m["read_gb_s"], m["write_gb_s"])]
+        rows.append((f"DRAM GB/s (node 0)", tot, None, "{:.0f}"))
+        if any((x or 0) > 0.5 for x in m["power_w"]):
+            rows.append(("Power W (node 0)", m["power_w"], None, "{:.0f}"))
+    for lab, vals, vmax, fmt in rows:
+        xs = [v for v in vals if v is not None]
+        if not xs:
+            continue
+        rng = f"{fmt.format(min(xs))}..{fmt.format(max(xs))}"
+        out.append(f"   {lab:<19} |{spark(vals, width, vmax)}| {rng}")
+    hm = (tl.get("heatmap") or {}).get("values") or []
+    if 1 < len(hm) <= 16:
+        k = tl["heatmap"]["ranks_per_row"]
+        out.append("   MPI % by rank      (taller = more time in MPI)")
+        for r, row in enumerate(hm):
+            lab = f"rank {r}" if k == 1 else f"ranks {r * k}-{r * k + k - 1}"
+            out.append(f"     {lab:<17} |{spark(row, width, 100)}|")
+    return out
+
+
 def bin_label(lower: int) -> str:
     if lower == 0:
         return "0 B"
@@ -377,6 +431,13 @@ def report(doc: dict, args) -> str:
     elif hs:
         p("")
         p(f" Hotspots: unavailable ({hs.get('reason')})")
+
+    # timeline (opt-in)
+    tl = (doc.get("metrics") or {}).get("timeline")
+    if tl and tl.get("available"):
+        p("")
+        for line in timeline_lines(tl):
+            p(line)
 
     # I/O
     p("")

@@ -30,6 +30,7 @@
 #define _GNU_SOURCE
 #include "counters.h"
 #include "../include/miniprof.h"
+#include "timeline.h"
 
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
@@ -782,6 +783,23 @@ static void to_logical(int k, const uint64_t *phys, uint64_t *out)
     for (int p = 0; p < g_set_nev[k]; p++) out[g_lmap[k][p]] += g_lw[k][p] * phys[p];
 }
 
+/* Timeline (P7): cumulative cycles, instructions and FLOPs of the MPI
+ * thread at one of its boundaries. */
+static void tl_mark_main(const thread_slot_t *s, const uint64_t *phys)
+{
+    if (!tl_on || s != g_main_slot) return;
+    uint64_t lg[CNT_MAX_EVENTS], c[TL_CNT] = {0, 0, 0};
+    unsigned valid = 0;
+    to_logical(s->set, phys, lg);
+    for (int e = 0; e < g_lnev[s->set]; e++) {
+        cnt_kind_t k = g_lsets[s->set].ev[e].kind;
+        if (k == CK_CYCLES)       { c[0] = lg[e]; valid |= 1; }
+        if (k == CK_INSTRUCTIONS) { c[1] = lg[e]; valid |= 2; }
+        if (k == CK_FLOPS)        { c[2] = lg[e]; valid |= 4; }
+    }
+    tl_mark(now_ns(), c, valid);
+}
+
 int cnt_init(const char *uarch, const char *group, int rank)
 {
     g_regions_on = 1;
@@ -868,6 +886,13 @@ int cnt_init(const char *uarch, const char *group, int rank)
 
 const char *cnt_set_note(void) { return g_set_note; }
 
+void cnt_timeline_mark(void)
+{
+    if (!g_active || !g_main_slot || t_slot != g_main_slot) return;
+    uint64_t v[CNT_MAX_EVENTS];
+    if (read_now(g_main_slot, v) == 0) tl_mark_main(g_main_slot, v);
+}
+
 void cnt_stop(void)
 {
     g_regions_on = 0;
@@ -887,6 +912,7 @@ static inline void switch_bucket(thread_slot_t *s, int to)
         s->last[i] = v[i];
     }
     s->bucket = to;
+    tl_mark_main(s, v);
 }
 
 static inline void boundary(int entering_mpi)
@@ -1080,6 +1106,7 @@ void cnt_collect(cnt_result_t *out)
          * would read THIS thread's counters). */
         group_read_t g;
         if (read_group(s, &g) != 0) continue;
+        tl_mark_main(s, g.v);
         if (g.time_running < g.time_enabled - g.time_enabled / 100) out->multiplexed = 1;
         out->threads++;
         out->set_threads[s->set]++;

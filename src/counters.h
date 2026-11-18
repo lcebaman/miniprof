@@ -138,6 +138,8 @@ int  cnt_init(const char *uarch, const char *group, int rank);
 /* Why a requested top-down set is missing ("" if none is). */
 const char *cnt_set_note(void);
 void cnt_stop(void);   /* stop boundary reads (start of finalize) */
+/* Timeline (P7): mark the MPI thread's counters now (call on that thread) */
+void cnt_timeline_mark(void);
 
 typedef struct {
     int      available;

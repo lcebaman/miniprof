@@ -70,7 +70,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace diffusion3d_hot hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace diffusion3d_hot hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma timeline_validate
 
 all: $(EXAMPLES)
 
@@ -144,6 +144,10 @@ counters_validate: counters_validate.c $(LIB)
 membw_validate: membw_validate.c $(LIB)
 	$(CC) $(CFLAGS) -O3 $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
+# Known phases for the snapshot timeline (P7).
+timeline_validate: timeline_validate.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
 # Compute-bound FMA workload for the roofline check (P6). -O3, like
 # miniprof-calibrate: GCC 11 at -O2 does not unroll the 12 chains, keeps
 # them in memory (load + FMA + store each) and reaches ~25% of peak.
@@ -172,4 +176,4 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
 	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
-	      counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma diffusion3d_hot
+	      counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma diffusion3d_hot timeline_validate

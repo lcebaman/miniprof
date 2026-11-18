@@ -107,6 +107,7 @@ LIB_SRCS := src/profile_store.c    \
             src/symbolizer.c       \
             src/spawn.c            \
             src/hotspots.c         \
+            src/timeline.c         \
             src/aggregator.c       \
             src/mpa_writer.c       \
             src/trace_store.c      \
@@ -148,7 +149,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         example-mpi-ext-validate mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
-        run-ext-trace run-3d-snapshot run-hotspots-validate test-units overhead-3d \
+        run-ext-trace run-3d-snapshot run-hotspots-validate run-timeline-validate test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
         run-omp-validate run-omp-idle-validate test-ompt-abi run-topdown-validate \
         nodemon nodemon-setcap run-memory-validate calibrate run-calibrate-test \
@@ -539,8 +540,8 @@ tests/test_units: tests/test_units.c src/sysinfo.c src/json_writer.c \
                   src/sysinfo.h src/json_writer.h
 	$(CC_HOST) -O2 -g -Wall -Wextra -o $@ tests/test_units.c src/sysinfo.c src/json_writer.c -lm
 
-tests/test_counters_fold: tests/test_counters_fold.c src/counters.c src/counters.h
-	$(CC_HOST) -O1 -g -Wall -Wextra -o $@ tests/test_counters_fold.c src/counters.c -lpthread -ldl
+tests/test_counters_fold: tests/test_counters_fold.c src/counters.c src/counters.h src/timeline.c
+	$(CC_HOST) -O1 -g -Wall -Wextra -o $@ tests/test_counters_fold.c src/counters.c src/timeline.c -lpthread -ldl
 
 test-units: tests/test_units tests/test_counters_fold
 	./tests/test_units tests/test_units_out.json
@@ -592,6 +593,23 @@ run-hotspots-validate: examples/diffusion3d_hot
 	f={x['name']:x['pct'] for x in h['functions']}; ok='compute_diffusion' in f and f.get('main',0) < 30; \
 	print(('PASS' if ok else 'FAIL') + ': hotspots name inlined kernels: compute_diffusion %.1f%%, main %.1f%% (%d samples)' \
 	% (f.get('compute_diffusion',0), f.get('main',0), n)); sys.exit(0 if ok else 1)"
+
+# ── run-timeline-validate: per-rank time series (P7) ────────────────────────
+# Three known phases (compute only; rank 0 slow; last rank slow) must show
+# in the timeline's MPI share and heatmap; software counter events
+# (MINIPROF_COUNTERS_TEST=1) exercise the counter marks.
+TL_PHASE ?= 0.6
+
+examples/timeline_validate: examples/timeline_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) timeline_validate
+
+run-timeline-validate: examples/timeline_validate
+	@MINIPROF_MODE=snapshot MINIPROF_TIMELINE=1 MINIPROF_TIMELINE_INTERVAL_MS=50 MINIPROF_COUNTERS_TEST=1 \
+	MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_timeline.json \
+	mpirun $(MPIRUN_FLAGS) -n $(NRANKS) -x MINIPROF_MODE -x MINIPROF_TIMELINE \
+		-x MINIPROF_TIMELINE_INTERVAL_MS -x MINIPROF_COUNTERS_TEST -x MINIPROF_SNAPSHOT_OUTPUT \
+		./examples/timeline_validate $(TL_PHASE) >/dev/null && \
+	python3 tools/validate_timeline.py miniprof_snapshot_timeline.json --phase $(TL_PHASE)
 
 # ── run-imbalance-validate: snapshot known-answer test (P1 exit criteria) ───
 # examples/imbalance_validate injects a known per-rank compute imbalance and
@@ -924,6 +942,10 @@ test-install: lib nodemon calibrate $(EXAMPLE)
 		$(CURDIR)/$(EXAMPLE) >/dev/null 2>hot.err && \
 	{ grep -q "hotspots:" hot.err && grep -q 'id="hotspots"' hot/report.html || \
 		{ echo "FAIL: miniprof --hotspots"; cat hot.err; exit 1; }; } && \
+	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof --timeline -o tlr \
+		$(CURDIR)/$(EXAMPLE) >/dev/null 2>tl.err && \
+	{ grep -q 'id="timeline"' tlr/report.html && [ -s tlr/csv/timeline.csv ] || \
+		{ echo "FAIL: miniprof --timeline"; cat tl.err; exit 1; }; } && \
 	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof --sample -o smp \
 		$(CURDIR)/$(EXAMPLE) >/dev/null 2>sample.err && \
 	{ [ -s smp/miniprof_report.txt ] && grep -q "top routines" sample.err || \
@@ -950,7 +972,8 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-3d-trace || FAIL=1; \
 	$(MAKE) run-ext-trace || FAIL=1; \
 	$(MAKE) run-3d-snapshot || FAIL=1; \
-	$(MAKE) run-hotspots-validate || FAIL=1; \
+	$(MAKE) run-hotspots-validate   || FAIL=1; \
+	$(MAKE) run-timeline-validate || FAIL=1; \
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	$(MAKE) run-counters-validate || FAIL=1; \

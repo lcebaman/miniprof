@@ -50,6 +50,7 @@ Options go between `miniprof` and the application (each is explained [below](#ea
 |---|---|
 | `-l`, `--level L` | snapshot detail: `basic` (default), `topdown`, `roofline` or `full`, see [below](#choosing-a-level) |
 | `-H`, `--hotspots` | add the top functions to the snapshot (CPU-time sampling every 10 ms per thread); off by default |
+| `-t`, `--timeline` | add time series to the snapshot: MPI/I/O share per rank, IPC, GFLOP/s, node bandwidth and power over time; off by default |
 | `-s`, `--sample` | a sampling profile instead of a snapshot: time per function and source line, per rank |
 | `-o`, `--output DIR` | result folder (default `miniprof_<app>_<date>_<time>` in the working directory) |
 | `--no-report` | write only `snapshot.json` (no text, HTML or CSV) |
@@ -106,6 +107,17 @@ their own names; otherwise their time appears under the caller.
 `MINIPROF_HOTSPOTS_INTERVAL_MS` and `MINIPROF_HOTSPOTS_INLINE` tune it
 ([configuration](configuration.md)); [snapshot reports](snapshot.md#hotspots)
 explains how to read the table.
+
+**`-t`, `--timeline`** adds how the run changed over time to the
+snapshot: per time bucket (100 ms to start with), the share of time in MPI
+and I/O per rank, IPC and GFLOP/s of the thread that calls MPI, and each
+node's DRAM bandwidth and power. It shows phases, drift and imbalance
+that moves between ranks, which the run totals average away: sparklines
+in `report.txt`, charts and a ranks × time heatmap in `report.html`,
+`csv/timeline.csv` and `csv/timeline_memory.csv`. It costs a clock read
+per MPI and I/O call and a few reductions at the end; off by default.
+Combine it with any level and with `--hotspots`. See
+[snapshot reports](snapshot.md#timeline).
 
 **`-s`, `--sample`** runs a sampling profile *instead of* a snapshot: call
 stacks every 10 ms, reported per function and per source line, grouped

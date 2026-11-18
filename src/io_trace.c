@@ -35,6 +35,7 @@
 #define _GNU_SOURCE
 #include "io_trace.h"
 #include "mpi_trace.h"     /* g_miniprof_tool_depth */
+#include "timeline.h"
 
 #include <mpi.h>
 #include <dlfcn.h>
@@ -86,18 +87,21 @@ static inline uint64_t now_ns(void)
 }
 
 #define ADD(field, v) __atomic_fetch_add(&(field), (uint64_t)(v), __ATOMIC_RELAXED)
+/* time spent in an I/O call: the totals, and the timeline when it is on */
+#define ADD_T(field, v) do { uint64_t d_ = (uint64_t)(v); ADD(field, d_);        \
+                             if (tl_on) tl_add(TL_IO, now_ns(), d_); } while (0)
 
 static inline void count_read(io_counters_t *c, ssize_t n, uint64_t dt)
 {
     ADD(c->read_calls, 1);
     if (n > 0) ADD(c->read_bytes, n);
-    ADD(c->read_ns, dt);
+    ADD_T(c->read_ns, dt);
 }
 static inline void count_write(io_counters_t *c, ssize_t n, uint64_t dt)
 {
     ADD(c->write_calls, 1);
     if (n > 0) ADD(c->write_bytes, n);
-    ADD(c->write_ns, dt);
+    ADD_T(c->write_ns, dt);
 }
 
 void io_trace_set_enabled(int enabled)
@@ -207,7 +211,7 @@ static inline int after_open(const char *path, int fd, uint64_t t0)
         fd_mark(fd, 1);
         if (counting()) {
             ADD(g_io.posix.open_calls, 1);
-            ADD(g_io.posix.meta_ns, now_ns() - t0);
+            ADD_T(g_io.posix.meta_ns, now_ns() - t0);
         }
     }
     return fd;
@@ -271,7 +275,7 @@ int close(int fd)
     uint64_t t0 = now_ns();
     int rc = real_close(fd);
     ADD(g_io.posix.close_calls, 1);
-    ADD(g_io.posix.meta_ns, now_ns() - t0);
+    ADD_T(g_io.posix.meta_ns, now_ns() - t0);
     return rc;
 }
 
@@ -325,7 +329,7 @@ ssize_t __pread64_chk(int fd, void *buf, size_t n, off64_t off, size_t buflen)
         uint64_t t0_ = now_ns();                                   \
         int rc_ = REALCALL;                                        \
         ADD(g_io.posix.sync_calls, 1);                             \
-        ADD(g_io.posix.meta_ns, now_ns() - t0_);                   \
+        ADD_T(g_io.posix.meta_ns, now_ns() - t0_);                   \
         return rc_;                                                \
     } while (0)
 
@@ -340,7 +344,7 @@ static inline FILE *after_fopen(const char *path, FILE *f, uint64_t t0)
         fd_mark(fileno(f), 1);
         if (counting()) {
             ADD(g_io.posix.open_calls, 1);
-            ADD(g_io.posix.meta_ns, now_ns() - t0);
+            ADD_T(g_io.posix.meta_ns, now_ns() - t0);
         }
     }
     return f;
@@ -371,7 +375,7 @@ int fclose(FILE *f)
     uint64_t t0 = now_ns();
     int rc = real_fclose(f);
     ADD(g_io.posix.close_calls, 1);
-    ADD(g_io.posix.meta_ns, now_ns() - t0);
+    ADD_T(g_io.posix.meta_ns, now_ns() - t0);
     return rc;
 }
 
@@ -513,7 +517,7 @@ static inline long io_type_size(MPI_Datatype dt)
         uint64_t elapsed_ = now_ns() - t0_;                        \
         g_miniprof_tool_depth--;                                   \
         ADD(g_io.mpiio.COUNTER, 1);                                \
-        ADD(g_io.mpiio.meta_ns, elapsed_);                         \
+        ADD_T(g_io.mpiio.meta_ns, elapsed_);                         \
         return rc_;                                                \
     } while (0)
 
@@ -528,7 +532,7 @@ static inline long io_type_size(MPI_Datatype dt)
         int rc_ = CALL;                                            \
         uint64_t elapsed_ = now_ns() - t0_;                        \
         g_miniprof_tool_depth--;                                   \
-        ADD(g_io.mpiio.meta_ns, elapsed_);                         \
+        ADD_T(g_io.mpiio.meta_ns, elapsed_);                         \
         return rc_;                                                \
     } while (0)
 
@@ -652,7 +656,7 @@ extern void pmpi_file_write_at_all_(F*, MPI_Offset*, const void*, F*, F*, F*, F*
         uint64_t elapsed_ = now_ns() - t0_;                        \
         g_miniprof_tool_depth--;                                   \
         ADD(g_io.mpiio.COUNTER, 1);                                \
-        ADD(g_io.mpiio.meta_ns, elapsed_);                         \
+        ADD_T(g_io.mpiio.meta_ns, elapsed_);                         \
     } while (0)
 
 void mpi_file_open_(F *comm, char *name, F *amode, F *info, F *fh, F *ierr, size_t len)

@@ -25,6 +25,7 @@
 #include "mpi_trace.h"
 #include "io_trace.h"
 #include "counters.h"
+#include "timeline.h"
 #include "nodemon.h"
 #include "ompt.h"
 #include "hotspots.h"
@@ -260,6 +261,8 @@ void snapshot_init(int verbose)
     mpi_trace_set_mode(MPI_TRACE_SNAPSHOT);
     io_trace_set_enabled(1);
     getrusage(RUSAGE_SELF, &g_ru0);
+    tl_init();                                /* P7: no-op unless MINIPROF_TIMELINE=1 */
+    cnt_timeline_mark();
 
     g_init_s = now_s() - t0;
 
@@ -1176,6 +1179,223 @@ td_values:;
 }
 
 
+/* ── P7: timeline ───────────────────────────────────────────────────── */
+
+/* Reduced across ranks (rank 0 only). Buckets share one width, the widest
+ * any rank used; each rank's buckets are relative to its own start. */
+#define TL_ROWS 64
+typedef struct {
+    int    on, ranks, nb, rows, ranks_per_row;
+    double width_s;
+    double mpi_min[TL_BUCKETS], mpi_sum[TL_BUCKETS], mpi_max[TL_BUCKETS];
+    double io_min[TL_BUCKETS], io_sum[TL_BUCKETS], io_max[TL_BUCKETS];
+    double cnt_n[TL_BUCKETS];                         /* ranks present in the bucket */
+    double ipc_min[TL_BUCKETS], ipc_sum[TL_BUCKETS], ipc_max[TL_BUCKETS], ipc_n[TL_BUCKETS];
+    double flops[TL_BUCKETS], flops_n[TL_BUCKETS];
+    double heat[TL_ROWS][TL_BUCKETS], heat_n[TL_ROWS][TL_BUCKETS];
+} tl_red_t;
+static tl_red_t *g_tl = NULL;
+
+/* cumulative counter k of the rank's MPI thread at time t (ns from the
+ * rank's start), linear between marks; -1 outside the marked range */
+static double tl_cum(const tl_data_t *d, int k, double t)
+{
+    double pt = -1, pv = 0;
+    unsigned bit = 1u << k;
+    for (int b = 0; b <= d->n; b++) {
+        int last = b == d->n;
+        if (!last && !(d->mark_valid[b] & bit)) continue;
+        if (last && !(d->end_valid & bit)) break;
+        double mt = (double)((last ? d->end_t : d->mark_t[b]) - d->t0_ns);
+        double mv = (double)(last ? d->end_mark[k] : d->mark[b][k]);
+        if (mt >= t) {
+            if (pt < 0) return mt - t <= 1e6 ? mv : -1;   /* the start mark, taken just after t0 */
+            return pv + (mv - pv) * (t - pt) / (mt > pt ? mt - pt : 1);
+        }
+        pt = mt; pv = mv;
+    }
+    return -1;
+}
+
+static void reduce_timeline(int rank, int size)
+{
+    int mine_on = tl_on, any = 0;
+    PMPI_Allreduce(&mine_on, &any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if (!any) return;
+    static tl_data_t d;
+    memset(&d, 0, sizeof(d));
+    if (tl_on) tl_get(&d);
+    uint64_t w = d.width_ns, wmax = 0;
+    PMPI_Allreduce(&w, &wmax, 1, MPI_UINT64_T, MPI_MAX, MPI_COMM_WORLD);
+    if (tl_on) tl_rebin(&d, wmax);
+    double W = (double)wmax;
+    double dur = tl_on ? (double)(d.t1_ns - d.t0_ns) : 0, dmax = 0;
+    PMPI_Allreduce(&dur, &dmax, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    int nb = W > 0 ? (int)ceil(dmax / W) : 0;
+    if (nb > TL_BUCKETS) nb = TL_BUCKETS;
+    if (nb < 1) nb = 1;
+    int rows = size < TL_ROWS ? size : TL_ROWS;
+    int row = (int)((long)rank * rows / size);
+
+    static tl_red_t loc;
+    memset(&loc, 0, sizeof(loc));
+    for (int b = 0; b < nb; b++) {
+        loc.mpi_min[b] = loc.io_min[b] = loc.ipc_min[b] = INFINITY;
+        loc.mpi_max[b] = loc.io_max[b] = loc.ipc_max[b] = -INFINITY;
+    }
+    if (tl_on)
+        for (int b = 0; b < nb; b++) {
+            double t0 = b * W, cov = dur - t0;
+            if (cov <= 0) break;
+            if (cov > W) cov = W;
+            if (cov < 0.05 * W) break;               /* a sliver at the end */
+            double m = d.mpi_ns[b] / cov, io = d.io_ns[b] / cov;
+            if (m > 1) m = 1;
+            if (io > 1) io = 1;
+            loc.mpi_min[b] = loc.mpi_max[b] = loc.mpi_sum[b] = m;
+            loc.io_min[b] = loc.io_max[b] = loc.io_sum[b] = io;
+            loc.cnt_n[b] = 1;
+            loc.heat[row][b] = m;
+            loc.heat_n[row][b] = 1;
+            double c0 = tl_cum(&d, 0, t0), c1 = tl_cum(&d, 0, t0 + cov);
+            double i0 = tl_cum(&d, 1, t0), i1 = tl_cum(&d, 1, t0 + cov);
+            double f0 = tl_cum(&d, 2, t0), f1 = tl_cum(&d, 2, t0 + cov);
+            if (c0 >= 0 && c1 > c0 && i0 >= 0 && i1 >= i0) {
+                double ipc = (i1 - i0) / (c1 - c0);
+                loc.ipc_min[b] = loc.ipc_max[b] = loc.ipc_sum[b] = ipc;
+                loc.ipc_n[b] = 1;
+            }
+            if (f0 >= 0 && f1 >= f0) { loc.flops[b] = (f1 - f0) / (cov * 1e-9); loc.flops_n[b] = 1; }
+        }
+
+    /* the node leader dates its memory series against its own start */
+    if (g_node_leader && tl_on && g_nm.series_n > 0)
+        g_nm.series_offset_s = ((double)g_nm.series_t0_ns - (double)d.t0_ns) * 1e-9;
+
+    tl_red_t *r = NULL;
+    if (rank == 0) {
+        r = calloc(1, sizeof(*r));
+    }
+    static tl_red_t scratch;
+    tl_red_t *o = r ? r : &scratch;
+#define RED(f, op) PMPI_Reduce(loc.f, o->f, nb, MPI_DOUBLE, op, 0, MPI_COMM_WORLD)
+    RED(mpi_min, MPI_MIN); RED(mpi_max, MPI_MAX); RED(mpi_sum, MPI_SUM);
+    RED(io_min, MPI_MIN);  RED(io_max, MPI_MAX);  RED(io_sum, MPI_SUM);
+    RED(cnt_n, MPI_SUM);
+    RED(ipc_min, MPI_MIN); RED(ipc_max, MPI_MAX); RED(ipc_sum, MPI_SUM); RED(ipc_n, MPI_SUM);
+    RED(flops, MPI_SUM);   RED(flops_n, MPI_SUM);
+#undef RED
+    PMPI_Reduce(loc.heat, o->heat, TL_ROWS * TL_BUCKETS, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    PMPI_Reduce(loc.heat_n, o->heat_n, TL_ROWS * TL_BUCKETS, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    int on_n = 0;
+    PMPI_Reduce(&mine_on, &on_n, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    if (r) {
+        r->on = 1; r->ranks = on_n; r->nb = nb; r->rows = rows;
+        r->ranks_per_row = (size + rows - 1) / rows;
+        r->width_s = W * 1e-9;
+        g_tl = r;
+    }
+}
+
+/* 4 significant digits: the series are pictures, not measurements to the ns */
+static void jw_d4(jw_t *w, double v)
+{
+    if (!isfinite(v)) { jw_null(w, NULL); return; }
+    char b[32];
+    snprintf(b, sizeof(b), "%.4g", v);
+    jw_dbl(w, NULL, strtod(b, NULL));
+}
+
+static void write_timeline(jw_t *w, const node_rec_t *nodes, int nn)
+{
+    if (!g_tl) { jw_null(w, "timeline"); return; }
+    const tl_red_t *t = g_tl;
+    int nb = t->nb;
+    jw_begin_obj(w, "timeline");
+    jw_bool(w, "available", 1);
+    jw_int(w, "ranks", t->ranks);
+    jw_dbl(w, "bucket_s", t->width_s);
+    jw_int(w, "buckets", nb);
+    jw_begin_obj(w, "definitions");
+    jw_str(w, "t_s", "start of each bucket, seconds from each rank's start");
+    jw_str(w, "mpi_pct", "share of the bucket inside MPI calls, min/avg/max over ranks");
+    jw_str(w, "io_pct", "share of the bucket inside POSIX and MPI-IO calls");
+    jw_str(w, "ipc", "instructions per cycle of each rank's MPI thread, from counter reads at "
+                     "its MPI calls, spread in proportion to time between calls");
+    jw_str(w, "gflops", "FLOP rate of the ranks' MPI threads, summed over ranks (worker "
+                        "threads are in the run totals, not here)");
+    jw_str(w, "heatmap", "mpi_pct per group of consecutive ranks (rows) and bucket");
+    jw_end_obj(w);
+
+    jw_begin_arr(w, "t_s");
+    for (int b = 0; b < nb; b++) jw_d4(w, b * t->width_s);
+    jw_end_arr(w);
+#define SERIES3(KEY, MIN, SUM, MAX, N, SCALE)                                      \
+    jw_begin_obj(w, KEY);                                                          \
+    jw_begin_arr(w, "min");                                                        \
+    for (int b = 0; b < nb; b++) jw_d4(w, t->N[b] > 0 ? SCALE * t->MIN[b] : NAN);  \
+    jw_end_arr(w);                                                                 \
+    jw_begin_arr(w, "avg");                                                        \
+    for (int b = 0; b < nb; b++) jw_d4(w, t->N[b] > 0 ? SCALE * t->SUM[b] / t->N[b] : NAN); \
+    jw_end_arr(w);                                                                 \
+    jw_begin_arr(w, "max");                                                        \
+    for (int b = 0; b < nb; b++) jw_d4(w, t->N[b] > 0 ? SCALE * t->MAX[b] : NAN);  \
+    jw_end_arr(w);                                                                 \
+    jw_end_obj(w)
+    SERIES3("mpi_pct", mpi_min, mpi_sum, mpi_max, cnt_n, 100.0);
+    SERIES3("io_pct", io_min, io_sum, io_max, cnt_n, 100.0);
+    int has_ipc = 0, has_fl = 0;
+    for (int b = 0; b < nb; b++) { has_ipc |= t->ipc_n[b] > 0; has_fl |= t->flops_n[b] > 0; }
+    if (has_ipc) { SERIES3("ipc", ipc_min, ipc_sum, ipc_max, ipc_n, 1.0); }
+    else jw_null(w, "ipc");
+#undef SERIES3
+    if (has_fl) {
+        jw_begin_arr(w, "gflops");
+        for (int b = 0; b < nb; b++) jw_d4(w, t->flops_n[b] > 0 ? t->flops[b] * 1e-9 : NAN);
+        jw_end_arr(w);
+    } else jw_null(w, "gflops");
+
+    jw_begin_obj(w, "heatmap");
+    jw_int(w, "rows", t->rows);
+    jw_int(w, "ranks_per_row", t->ranks_per_row);
+    jw_str(w, "metric", "mpi_pct");
+    jw_begin_arr(w, "values");
+    for (int rr = 0; rr < t->rows; rr++) {
+        jw_begin_arr(w, NULL);
+        for (int b = 0; b < nb; b++)
+            jw_d4(w, t->heat_n[rr][b] > 0 ? 100.0 * t->heat[rr][b] / t->heat_n[rr][b] : NAN);
+        jw_end_arr(w);
+    }
+    jw_end_arr(w);
+    jw_end_obj(w);
+
+    /* node memory and power, from the helper's samples (up to 16 nodes) */
+    jw_begin_arr(w, "memory");
+    for (int i = 0, k = 0; i < nn && k < 16; i++) {
+        const nm_result_t *m = &nodes[i].mem;
+        if (!m->available || m->series_n <= 0 || m->series_width_ns == 0) continue;
+        k++;
+        double ws = m->series_width_ns * 1e-9;
+        jw_begin_obj(w, NULL);
+        jw_str(w, "hostname", nodes[i].info.hostname);
+        jw_dbl(w, "t_offset_s", m->series_offset_s);
+        jw_dbl(w, "bucket_s", ws);
+        jw_begin_arr(w, "read_gb_s");
+        for (int b = 0; b < m->series_n; b++) jw_d4(w, m->series_rd[b] / ws * 1e-9);
+        jw_end_arr(w);
+        jw_begin_arr(w, "write_gb_s");
+        for (int b = 0; b < m->series_n; b++) jw_d4(w, m->series_wr[b] / ws * 1e-9);
+        jw_end_arr(w);
+        jw_begin_arr(w, "power_w");
+        for (int b = 0; b < m->series_n; b++) jw_d4(w, m->series_en_uj[b] * 1e-6 / ws);
+        jw_end_arr(w);
+        jw_end_obj(w);
+    }
+    jw_end_arr(w);
+    jw_end_obj(w);
+}
+
+
 /* ── P6: calibration (miniprof-calibrate output) ────────────────────── */
 
 /* MINIPROF_CALIBRATION = a calibration_<host>.json file, or a directory
@@ -1982,6 +2202,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_str(&w, NULL, "openmp");
     if (g_level == SNAPSHOT_TOPDOWN) jw_str(&w, NULL, "topdown");
     if (g_hs_all) jw_str(&w, NULL, "hotspots");
+    if (g_tl) jw_str(&w, NULL, "timeline");
     {
         int mem_any = 0;
         for (int i = 0; i < nnodes; i++) mem_any |= nodes[i].mem.available;
@@ -1997,6 +2218,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     write_memory(&w, nodes, nnodes);
     write_roofline(&w, ranks, nranks, nodes, nnodes);
     write_hotspots(&w, nranks);
+    write_timeline(&w, nodes, nnodes);
     jw_end_obj(&w);
 
     jw_end_obj(&w);
@@ -2271,6 +2493,7 @@ void snapshot_finalize(double elapsed_s)
     double t0 = now_s(), tp = t0;
 #define FIN_MARK(PH) do { double t_ = now_s(); g_fin_s[PH] = t_ - tp; tp = t_; } while (0)
     hotspots_stop();                          /* end of the sampled window */
+    tl_stop();                                /* end of the timeline */
     if (g_node_leader) nodemon_stop(&g_nm);   /* first: end of the measured window */
     FIN_MARK(FIN_NODEMON);
     if (g_verbose && g_node_leader)
@@ -2346,6 +2569,7 @@ void snapshot_finalize(double elapsed_s)
                     g_hs_all, (int)sizeof(mine_hs), MPI_BYTE, 0, MPI_COMM_WORLD);
     }
     FIN_MARK(FIN_HOTSPOTS);
+    reduce_timeline(rank, size);
 
     mine.finalize_s = now_s() - t0;
 
@@ -2403,5 +2627,6 @@ void snapshot_finalize(double elapsed_s)
     free(all_nodes);
     free(g_hs_all); free(g_hs_n); free(g_hs_tot);
     g_hs_all = NULL; g_hs_n = NULL; g_hs_tot = NULL;
+    free(g_tl); g_tl = NULL;
 #undef FIN_MARK
 }
