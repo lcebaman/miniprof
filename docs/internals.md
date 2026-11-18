@@ -468,8 +468,13 @@ mutex). At finalize, `reduce_timeline` in `snapshot.c`:
 3. `MPI_Reduce` MIN/MAX/SUM per bucket, and a heatmap of MPI share by rank
    group (≤ 64 rows) reduced with SUM.
 
-The node series comes from the helper's `series` lines; the node leader
-dates it against its own timeline start (`series_offset_s`).
+The node series comes from the helper's `series` lines. The helper
+spreads each sample over the buckets it overlaps (filing it whole where it
+ends aliases with the poll period: an empty bucket, then a doubled one) and
+scales its partial last bucket to a full one. The node leader dates the
+series against its own timeline start (`series_offset_s`), and
+`write_timeline` resamples it onto the ranks' buckets, so every series in
+the JSON shares `t_s`.
 
 ### 5.9 CPU identification
 

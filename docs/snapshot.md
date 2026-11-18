@@ -257,6 +257,13 @@ How to read it:
 - Buckets start at 100 ms (`MINIPROF_TIMELINE_INTERVAL_MS`). A run longer
   than 512 buckets doubles the width, merging neighbours, so any length
   fits; the node series do the same with 256 buckets.
+- The memory helper samples every 100 ms (`MINIPROF_MEMORY_INTERVAL_MS`);
+  its samples are put on the ranks' buckets (time-weighted, from the node
+  leader's start), so every series shares one time axis. With buckets
+  finer than the helper's samples, the node series is a step every
+  sample. The JSON keeps the sample period as `sample_s`.
+- The node series cover what the memory block covers: on Zen 6 with the
+  RHEL 9 kernel, NUMA node 0 only (see [hardware](hardware.md)).
 - Each rank's buckets count from its own start. Ranks leave `MPI_Init` at
   nearly the same time, so this is what you want for phases; it is not a
   clock to compare with external logs.

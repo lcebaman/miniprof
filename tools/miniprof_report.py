@@ -78,11 +78,13 @@ def timeline_lines(tl, width=60):
         rows.append(("IPC (avg)", tl["ipc"]["avg"], None, "{:.2f}"))
     if tl.get("gflops"):
         rows.append(("GFLOP/s", tl["gflops"], None, "{:.3g}"))
-    for m in (tl.get("memory") or [])[:1]:
+    mems = tl.get("memory") or []
+    sfx = ", 1st node" if len(mems) > 1 else ""
+    for m in mems[:1]:
         tot = [None if a is None else a + (b or 0) for a, b in zip(m["read_gb_s"], m["write_gb_s"])]
-        rows.append((f"DRAM GB/s (node 0)", tot, None, "{:.0f}"))
-        if any((x or 0) > 0.5 for x in m["power_w"]):
-            rows.append(("Power W (node 0)", m["power_w"], None, "{:.0f}"))
+        rows.append((f"DRAM GB/s{sfx}", tot, None, "{:.0f}"))
+        if any((x or 0) > 0.5 for x in m["power_w"] if x is not None):
+            rows.append((f"Power W{sfx}", m["power_w"], None, "{:.0f}"))
     for lab, vals, vmax, fmt in rows:
         xs = [v for v in vals if v is not None]
         if not xs:
@@ -458,7 +460,9 @@ def report(doc: dict, args) -> str:
             p(f" Hardware counters      unavailable: {cnt.get('reason')}")
         else:
             cd = cnt.get("derived", {})
-            p(f" Hardware counters      {cnt['uarch']}, {cnt['group']} group, "
+            nu = (((doc.get("nodes") or [{}])[0].get("cpu") or {}).get("uarch"))
+            ua = cnt["uarch"] if not nu or nu == cnt["uarch"] else f"{nu} ({cnt['uarch']} events)"
+            p(f" Hardware counters      {ua}, {cnt['group']} group, "
               f"user space, reads via {cnt['read_method']}"
               + (f", {cnt['multiplexed_ranks']} rank(s) MULTIPLEXED" if cnt.get("multiplexed_ranks") else ""))
             if "ipc" in cd:
@@ -586,7 +590,9 @@ def report(doc: dict, args) -> str:
             tdc.update(l2)
             slots = td.get("slots_label", "dispatch slots")
             per = f" ({td['dispatch_width']}/cycle)" if slots == "dispatch slots" else ""
-            p(f" Top-down               {td['uarch']}, % of {slots}{per}, outside MPI")
+            nu = (((doc.get("nodes") or [{}])[0].get("cpu") or {}).get("uarch"))
+            tu = td["uarch"] if not nu or nu == td["uarch"] else f"{nu} ({td['uarch']} events)"
+            p(f" Top-down               {tu}, % of {slots}{per}, outside MPI")
             if td.get("note"):
                 p(f"   note: {td['note']}")
             subs = {"frontend_bound": ("frontend_latency", "frontend_bandwidth", "latency", "bandwidth"),
