@@ -56,6 +56,7 @@
  */
 
 #include "mpi_trace.h"
+#include "partial.h"
 #include "timeline.h"
 #include "trace_store.h"
 #include "counters.h"
@@ -1110,6 +1111,14 @@ int MPI_Raccumulate(const void *origin_addr, int origin_count,
            nbytes(origin_count, origin_dt));
 }
 
+/* ── MPI_Abort: the run ends without MPI_Finalize; leave this rank's
+ *    partial record first (partial.h). Not timed. ──────────────────── */
+int MPI_Abort(MPI_Comm comm, int errorcode)
+{
+    partial_dump("MPI_Abort", 0);
+    return PMPI_Abort(comm, errorcode);
+}
+
 /* ════════════════════════════════════════════════════════════════════════
  *  Fortran bindings (`use mpi` / mpif.h, trailing-underscore mangling)
  *
@@ -1123,6 +1132,7 @@ int MPI_Raccumulate(const void *origin_addr, int origin_count,
 
 typedef MPI_Fint F;   /* brevity: every Fortran INTEGER argument */
 
+extern void pmpi_abort_(F*, F*, F*);
 extern void pmpi_send_(const void*, F*, F*, F*, F*, F*, F*);
 extern void pmpi_ssend_(const void*, F*, F*, F*, F*, F*, F*);
 extern void pmpi_rsend_(const void*, F*, F*, F*, F*, F*, F*);
@@ -1167,6 +1177,12 @@ extern void pmpi_get_(void*, F*, F*, F*, MPI_Aint*, F*, F*, F*, F*);
 extern void pmpi_accumulate_(const void*, F*, F*, F*, MPI_Aint*, F*, F*, F*, F*, F*);
 
 /* ── point-to-point ──────────────────────────────────────────────────── */
+void mpi_abort_(F *comm, F *errorcode, F *ierr)
+{
+    partial_dump("MPI_Abort", 0);
+    pmpi_abort_(comm, errorcode, ierr);
+}
+
 void mpi_send_(const void *buf, F *count, F *dt, F *dest, F *tag, F *comm, F *ierr)
 { F_WRAP(SEND, pmpi_send_(buf, count, dt, dest, tag, comm, ierr), fbytes(count, dt)); }
 

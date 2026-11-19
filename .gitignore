@@ -47,3 +47,4 @@ examples/mpi_coverage_validate
 examples/mpi_coverage_validate_f
 examples/mpi_coverage_validate_f08
 src/build_info.inc
+examples/partial_validate

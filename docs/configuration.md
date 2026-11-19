@@ -34,6 +34,7 @@ make sure they reach every rank (Open MPI: `mpirun -x VAR`, or
 | `MINIPROF_HOTSPOTS` | `0` | `1` adds function hotspots (the launcher's `--hotspots`) |
 | `MINIPROF_HOTSPOTS_INTERVAL_MS` | `10` | hotspot sampling interval, CPU milliseconds per thread (1–1000) |
 | `MINIPROF_TIMELINE` | `0` | `1` adds the [timeline](snapshot.md#timeline) (the launcher's `--timeline`) |
+| `MINIPROF_PARTIAL` | `1` | `0`: no per-rank record when a run ends without `MPI_Finalize` ([partial snapshots](user-guide.md#when-a-run-does-not-finish)) |
 | `MINIPROF_TIMELINE_INTERVAL_MS` | `100` | timeline bucket width to start with (1–60000); doubles as the run grows past 512 buckets |
 | `MINIPROF_HOTSPOTS_INLINE` | `1` | `0` names hotspots from the symbol table only (no `addr2line`; inlined functions under their caller) |
 | `MINIPROF_COUNTERS_SPLIT` | `1` | `0` stops reading counters at MPI calls: no compute/MPI split, no per-call cost |

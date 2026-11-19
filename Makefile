@@ -101,6 +101,7 @@ EXAMPLE_DIR := examples
 # only happens for Fortran applications, so there's no link-time failure
 # for C codes and no need to keep the file separate anymore.
 LIB_SRCS := src/profile_store.c    \
+            src/partial.c          \
             src/path_store.c       \
             src/sampler.c          \
             src/sampler_hwc.c      \
@@ -137,7 +138,7 @@ src/build_info.inc: FORCE
 	 cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
 .PHONY: FORCE
 FORCE:
-src/snapshot.o: src/build_info.inc
+src/snapshot.o src/partial.o: src/build_info.inc
 
 src/mpi_trace.o: src/mpi_trace_f08.inc
 src/io_trace.o: src/io_trace_f08.inc
@@ -671,6 +672,18 @@ run-mpi-coverage-validate: $(addprefix examples/,$(COVERAGE_BINS))
 	  python3 tools/validate_mpi_coverage.py miniprof_snapshot_$$b.json || exit 1; \
 	done
 
+# ── run-partial-validate: runs that never reach MPI_Finalize ────────────────
+# Each ending leaves per-rank records that miniprof_partial.py merges into a
+# snapshot marked partial: SIGTERM to mpirun (a batch time limit), MPI_Abort
+# on the last rank, exit() without MPI_Finalize, and SIGTERM to a program
+# with its own handler (it must still run, after the record).
+examples/partial_validate: examples/partial_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) partial_validate
+
+run-partial-validate: examples/partial_validate
+	@python3 tools/validate_partial.py --mpirun "mpirun $(MPIRUN_FLAGS)" --ranks $(NRANKS) \
+		./examples/partial_validate
+
 # ── run-threads-validate: short-lived threads release their counters ────────
 # 300 threads, one after another, under a 256-descriptor limit: counter fds
 # must be released at thread exit (else the application's own open() fails)
@@ -979,7 +992,7 @@ install: lib nodemon calibrate
 	echo "$(MINIPROF_VERSION)" > $$d/share/miniprof/VERSION && \
 	ldd $(LIB) | awk '/libmpi(ch)?\.so/ {print $$1; exit}' > $$d/share/miniprof/mpi_soname && \
 	for t in report:miniprof_report.py diff:miniprof_diff.py csv:miniprof_csv.py \
-		fingerprint:miniprof_fingerprint.py; do \
+		fingerprint:miniprof_fingerprint.py partial:miniprof_partial.py; do \
 		n=miniprof-$${t%%:*}; sed -e "s|@NAME@|$$n|" -e "s|@SCRIPT@|$${t#*:}|" \
 			packaging/miniprof-tool.in > $$d/bin/$$n && chmod 755 $$d/bin/$$n; done && \
 	for f in lua tcl; do \
@@ -996,7 +1009,7 @@ install: lib nodemon calibrate
 
 # ── test-install: install into a scratch prefix, profile an example through
 # the launcher, check the result folder (Lmod module checked when present)
-test-install: lib nodemon calibrate $(EXAMPLE)
+test-install: lib nodemon calibrate $(EXAMPLE) examples/partial_validate
 	@tmp=$$(mktemp -d) && trap 'rm -rf $$tmp' EXIT && \
 	$(MAKE) -s install PREFIX=$$tmp/p MODULE_VERSION=test >/dev/null && \
 	cd $$tmp && MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof -o res \
@@ -1024,9 +1037,15 @@ test-install: lib nodemon calibrate $(EXAMPLE)
 		$(CURDIR)/$(EXAMPLE) >/dev/null 2>sample.err && \
 	{ [ -s smp/miniprof_report.txt ] && grep -q "top routines" sample.err || \
 		{ echo "FAIL: miniprof --sample"; cat sample.err; exit 1; }; } && \
+	MINIPROF_HOME=$$tmp/p mpirun $(MPIRUN_FLAGS) -n 2 $$tmp/p/bin/miniprof -o abrt \
+		$(CURDIR)/examples/partial_validate abort . >/dev/null 2>abrt.err; \
+	for i in 1 2 3 4 5 6 7 8 9 10; do [ -s abrt/report.html ] && break; sleep 1; done; \
+	{ grep -q 'class="partial"' abrt/report.html && grep -q "MPI_Abort" abrt/report.txt && \
+	  $$tmp/p/bin/miniprof-partial abrt/snapshot.json.partial -o again.json >/dev/null || \
+		{ echo "FAIL: partial snapshot through the launcher"; cat abrt.err; exit 1; }; } && \
 	grep -q 'local prefix = "'$$tmp/p'"' $$tmp/p/share/modulefiles/miniprof/test.lua && \
 	grep -q "set prefix $$tmp/p" $$tmp/p/share/modulefiles-tcl/miniprof/test && \
-	echo "test-install: OK (launcher, reports, tools, module files)"
+	echo "test-install: OK (launcher, reports, tools, partial snapshot, module files)"
 
 check: lib nodemon calibrate examples mpa-check
 	@echo "=========================================="
@@ -1053,6 +1072,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-timeline-validate || FAIL=1; \
 	$(MAKE) run-threads-validate  || FAIL=1; \
 	$(MAKE) run-mpi-coverage-validate || FAIL=1; \
+	$(MAKE) run-partial-validate  || FAIL=1; \
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	$(MAKE) run-counters-validate || FAIL=1; \

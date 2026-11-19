@@ -51,8 +51,12 @@ wrapper is mechanical; see [internals](internals.md#103-wrap-another-mpi-functio
   preloaded. Link miniprof in instead.
 - It must use the MPI library miniprof was built against (same soname).
   Install one miniprof per MPI stack.
-- A run that ends without `MPI_Finalize` (a crash, `MPI_Abort`, a time
-  limit) writes no snapshot.
+- A run that ends without `MPI_Finalize` (a time limit, Ctrl-C,
+  `MPI_Abort`, `exit()`) gets a partial snapshot: time split, MPI, I/O,
+  CPU and basic counters, without top-down, memory, roofline, OpenMP,
+  hotspots or timeline ([details](user-guide.md#when-a-run-does-not-finish)).
+  A crash (SIGSEGV) or SIGKILL leaves nothing, and ranks whose result
+  folder another node cannot see are missing from it.
 - Non-MPI programs are not profiled.
 
 ## Snapshot mode

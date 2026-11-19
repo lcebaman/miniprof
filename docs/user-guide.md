@@ -39,8 +39,10 @@ miniprof: report /home/user/mp-test/miniprof_lmp_20261113_122838/report.html
 
 The application's exit code is passed through. An application miniprof
 cannot attach to (statically linked, or built with a different MPI) runs
-unprofiled, with a one-line message. A run that dies before
-`MPI_Finalize` writes no snapshot.
+unprofiled, with a one-line message. A run that ends before
+`MPI_Finalize` (a time limit, Ctrl-C, `MPI_Abort`, `exit()`) still gets a
+report, marked partial: see
+[when a run does not finish](#when-a-run-does-not-finish).
 
 ## Launcher options
 
@@ -336,6 +338,46 @@ bytes.
 Compilers may inline small internal (`contains`) procedures, which then
 have no symbol of their own; their time shows under the caller.
 
+## When a run does not finish
+
+A snapshot needs every rank at `MPI_Finalize`, so a run stopped by its
+time limit, interrupted, ended by `MPI_Abort` or calling `exit()` first
+cannot write one. Instead, each rank leaves a small record of what it
+measured, `<result folder>/snapshot.json.partial/rank.N.json`, and the
+launcher merges them into `snapshot.json` and writes the reports as usual.
+They say **PARTIAL** at the top, with why the run ended and how many ranks
+left a record.
+
+| Ended by | Recorded by |
+|---|---|
+| batch time limit or `scancel` (SIGTERM; Slurm waits `KillWait`, 30 s by default, before SIGKILL) | every rank |
+| Ctrl-C (SIGINT) | every rank |
+| `MPI_Abort` | the aborting rank, and the others when the MPI library stops them with SIGTERM (Open MPI does) |
+| `exit()` without `MPI_Finalize` | every rank that exits |
+| a crash (SIGSEGV ...) or SIGKILL | nothing: nothing can run then |
+
+A partial snapshot has what each rank can write on its own: the time split
+and imbalance, MPI by function, class and message size, I/O, CPU, and
+hardware counters at the `basic`, `roofline` and `full` levels (counted up
+to each thread's last MPI call). It has no top-down, memory, roofline,
+OpenMP, hotspots or timeline, which need every rank at `MPI_Finalize`.
+
+- **Your own SIGTERM handler still runs.** If the application installs one
+  before `MPI_Init` (to checkpoint, say), miniprof writes its record and
+  then calls it; otherwise the signal ends the process as it would have.
+- **The result folder must be on a filesystem every node sees**, as for
+  any job output: each rank writes its record there.
+- **If the launcher was stopped before it could merge** (it is run in its
+  own session to survive a job's teardown, but a SIGKILL ends everything),
+  merge and report afterwards:
+
+```
+miniprof-partial result/snapshot.json.partial      # writes result/snapshot.json
+miniprof-report result/snapshot.json --html result/report.html
+```
+
+`MINIPROF_PARTIAL=0` turns the records off.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -350,3 +392,5 @@ have no symbol of their own; their time shows under the caller.
 | routines missing in an MPI-only code | the snapshot names OpenMP regions only: add `--hotspots`, or use `--sample` |
 | `CPU binding: none` | ranks are not bound; add `--bind-to core` (with `--map-by ...:pe=N` for N threads) or `srun --cpu-bind=cores` |
 | no `report.html`, only `snapshot.json` | Python 3 missing on the node, or see `report.err` in the result folder; regenerate with `miniprof-report` |
+| the report says PARTIAL | the run ended without `MPI_Finalize`: see [when a run does not finish](#when-a-run-does-not-finish) |
+| no `snapshot.json`, but a `snapshot.json.partial/` folder | the launcher was killed before merging: run `miniprof-partial` on the folder |

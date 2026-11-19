@@ -20,7 +20,7 @@ PUBLIC = [re.compile(p) for p in (r"^MPI_[A-Z][A-Za-z0-9_]*$", r"^mpi_[a-z0-9_]+
                                   r"^miniprof_[a-z0-9_]+$")]
 INTERNAL_PREFIX = ("aggregator_", "cnt_", "hotspots_", "hwc_", "instrument_", "io_trace_",
                    "jw_", "mp_p", "mpa_", "mpi_trace_", "nodemon_", "ompt_collect",
-                   "ompt_snapshot_", "path_store_", "profile_store_", "sampler_", "snapshot_",
+                   "ompt_snapshot_", "partial_", "path_store_", "profile_store_", "sampler_", "snapshot_",
                    "symbolizer_", "sysinfo_", "tl_", "trace_store_", "trace_aggregator_",
                    "g_miniprof_")
 MUST_EXPORT = ("MPI_Init", "MPI_Finalize", "MPI_Send", "MPI_Allreduce", "MPI_Start",
