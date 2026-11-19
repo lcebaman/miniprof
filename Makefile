@@ -128,6 +128,17 @@ LIB_OBJS := $(LIB_SRCS:.c=.o)
 # Every object depends on every header: the snapshot records are shared
 # structs, and an object built against an older layout corrupts them.
 $(LIB_OBJS): $(wildcard src/*.h include/*.h)
+# The commit a build comes from, recorded in every snapshot (tool.commit).
+# Rewritten only when it changes, so builds stay incremental; "unknown"
+# outside a git checkout (a release tarball).
+src/build_info.inc: FORCE
+	@v=$$(git describe --always --dirty --tags 2>/dev/null || echo unknown); \
+	 printf '#define MINIPROF_BUILD_COMMIT "%s"\n' "$$v" > $@.tmp; \
+	 cmp -s $@.tmp $@ || mv $@.tmp $@; rm -f $@.tmp
+.PHONY: FORCE
+FORCE:
+src/snapshot.o: src/build_info.inc
+
 src/mpi_trace.o: src/mpi_trace_f08.inc
 src/io_trace.o: src/io_trace_f08.inc
 
@@ -135,10 +146,14 @@ src/io_trace.o: src/io_trace_f08.inc
 # Edit a Fortran wrapper in src/mpi_trace.c or src/io_trace.c, then run
 # `make gen-f08` and commit the .inc files; make check fails while they are
 # stale (test-f08-generated).
-.PHONY: gen-f08 test-f08-generated
+.PHONY: gen-f08 test-f08-generated test-exports
 gen-f08:
 	python3 tools/gen_f08_wrappers.py src/mpi_trace.c src/mpi_trace_f08.inc
 	python3 tools/gen_f08_wrappers.py src/io_trace.c src/io_trace_f08.inc
+
+# libminiprof.so exports its wrappers and public API and nothing else
+test-exports: $(LIB)
+	@python3 tests/check_exports.py $(LIB) src/libminiprof.map $(LIB_OBJS)
 
 test-f08-generated:
 	@for f in mpi_trace io_trace; do \
@@ -213,8 +228,9 @@ nodemon-setcap: $(NODEMON)
 examples:
 	$(MAKE) -C $(EXAMPLE_DIR)
 
-$(LIB): $(LIB_OBJS)
-	$(CC) -shared -fPIC -o $@ $^ $(LDFLAGS)
+# Exports only the wrappers and the public API: see src/libminiprof.map
+$(LIB): $(LIB_OBJS) src/libminiprof.map
+	$(CC) -shared -fPIC -o $@ $(LIB_OBJS) $(LDFLAGS) -Wl,--version-script=src/libminiprof.map
 	@echo "  CC  $@  (shared library)"
 
 %.o: %.c
@@ -1020,6 +1036,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) test-units             || FAIL=1; \
 	$(MAKE) test-python-compat     || FAIL=1; \
 	$(MAKE) test-f08-generated     || FAIL=1; \
+	$(MAKE) test-exports           || FAIL=1; \
 	$(MAKE) test-install           || FAIL=1; \
 	$(MAKE) run-hwc-validate       || FAIL=1; \
 	$(MAKE) run-hwc-validate-omp   || FAIL=1; \

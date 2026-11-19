@@ -36,7 +36,7 @@ This builds and installs:
 | `include/miniprof.h` | the region API, for code that uses [regions](user-guide.md#regions-timing-parts-of-your-code) |
 | `share/doc/miniprof/` | this documentation |
 
-`MODULE_VERSION` defaults to the library version (`1.1.0-dev`). Reinstalling
+`MODULE_VERSION` defaults to the library version (`1.1.0`). Reinstalling
 over the same prefix is safe: jobs already running keep the files they
 loaded, new jobs pick up the new ones. Reinstalling replaces
 `miniprof-nodemon`, so grant it its capability again (below).
@@ -159,7 +159,7 @@ On a compute node, with the module loaded:
 
 ```
 $ miniprof --check $(which lmp)
-miniprof 1.1.0-dev in /opt/miniprof/1.1-ompi5
+miniprof 1.1.0 in /opt/miniprof/1.1-ompi5
 application: /home/user/lammps/build/lmp
 MPI: /opt/openmpi/5.0.10/aocc/6.0.0/lib/libmpi.so.40
 OpenMP: libomp.so

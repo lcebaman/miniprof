@@ -353,7 +353,8 @@ def report(doc: dict, args) -> str:
     cpu = nodes[0]["cpu"] if nodes else {}
     cpu_desc = cpu.get("uarch_name") or cpu.get("brand") or "unknown CPU"
     p("=" * W)
-    p(f" miniprof snapshot  |  {run.get('command') or '?'}")
+    ver = (doc.get("tool") or {}).get("version")
+    p(f" miniprof{' ' + ver if ver else ''} snapshot  |  {run.get('command') or '?'}")
     p(f" {run.get('nranks')} ranks on {run.get('nnodes')} node(s)  |  {cpu_desc}"
       f"  |  {run.get('start_utc') or ''}")
     p("=" * W)

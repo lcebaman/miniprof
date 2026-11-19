@@ -59,7 +59,7 @@
 extern "C" {
 #endif
 
-#define MINIPROF_VERSION "1.1.0-dev"
+#define MINIPROF_VERSION "1.1.0"
 
 /* ── user regions (snapshot mode) ─────────────────────────────────────────
  * Bracket a code region to get its time and hardware counters reported
