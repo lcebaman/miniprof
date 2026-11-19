@@ -124,6 +124,7 @@ THRESHOLDS = {
     "roof_dram_pct":     (50.0, "flag a memory-bound run below this % of the DRAM ceiling"),
     "roof_peak_pct":     (20.0, "flag a compute-bound run below this % of peak FLOPs"),
     "omp_idle_pct":      (20.0, "flag OpenMP worker spin between regions above this % of cycles"),
+    "comm_pct":          (5.0,  "flag communicator/topology creation above this % of the run"),
 }
 
 
@@ -176,6 +177,7 @@ def _sections(doc):
         "split": par.get("time_split_pct") or {},
         "comp": par.get("compute") or {},
         "funcs": (par.get("mpi") or {}).get("by_function") or [],
+        "bycls": (par.get("mpi") or {}).get("by_class") or {},
         "cpuu": ((par.get("cpu") or {}).get("utilisation_per_core_pct")
                  or (par.get("cpu") or {}).get("utilisation_pct") or {}),
         "omp": m.get("openmp"),
@@ -251,6 +253,12 @@ def observations(doc: dict, args) -> list:
         top = funcs[0]["name"] if funcs else "MPI"
         add("mpi", f"MPI takes {split['mpi']:.1f}% of the run (> {args.mpi_pct:g}%); "
                    f"largest contributor {top}.")
+    cm = (v["bycls"].get("comm") or {}).get("pct_of_elapsed") or 0
+    if cm > args.comm_pct:
+        top = next((f["name"] for f in funcs if f.get("class") == "comm"), "communicator creation")
+        add("mpi", f"Creating and freeing communicators takes {cm:.1f}% of the run (> {args.comm_pct:g}%); "
+                   f"largest {top}. These calls are collective and grow with the rank count: "
+                   "create communicators once, outside loops, and reuse them.")
     if comp["imbalance_pct"] > args.imbalance_pct:
         add("parallel", f"Compute is imbalanced across ranks ({comp['imbalance_pct']:.1f}% > "
                    f"{args.imbalance_pct:g}%); much of the MPI wait time is likely ranks "
@@ -393,9 +401,10 @@ def report(doc: dict, args) -> str:
             if c["calls"]:
                 p(f"   {cls:<18} {c['pct_of_elapsed']:6.1f}%  {c['calls']:>8}  {human_bytes(c['bytes']):>10}")
         p("")
-        p(" Top MPI functions      time%    imb%    calls   avg size")
+        nw = max([18] + [len(f["name"]) for f in funcs[:8]])     # some names are 30 chars
+        p(" Top MPI functions" + " " * (nw - 12) + "time%    imb%    calls   avg size")
         for f in funcs[:8]:
-            p(f"   {f['name']:<18} {f['pct_of_elapsed']:6.1f}%  {f['imbalance_pct']:5.1f}%  "
+            p(f"   {f['name']:<{nw}} {f['pct_of_elapsed']:6.1f}%  {f['imbalance_pct']:5.1f}%  "
               f"{f['calls']:>7}  {human_bytes(f['avg_bytes_per_call']):>9}")
 
         ms = mpi.get("message_sizes", {})
@@ -406,7 +415,7 @@ def report(doc: dict, args) -> str:
                 continue
             calls = h["calls"]
             total = sum(calls)
-            if not total:
+            if not total or not sum(calls[1:]):     # nothing but 0-byte calls (wait, comm)
                 continue
             b = max(range(len(calls)), key=lambda i: calls[i])
             t = h["time_s"]

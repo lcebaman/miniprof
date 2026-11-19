@@ -3,26 +3,47 @@
 ## MPI coverage
 
 These MPI calls are individually timed, through the C bindings and the
-Fortran `mpi` module / `mpif.h` bindings:
+Fortran `mpi` module / `mpif.h` bindings. Each lands in one class
+(`p2p`, `collective`, `wait`, `rma`, `comm`) in the report.
 
-- **point-to-point**: `Send`, `Ssend`, `Rsend`, `Bsend`, `Recv`,
-  `Sendrecv`, `Sendrecv_replace`, `Isend`, `Issend`, `Irecv`
-- **completion**: `Wait`, `Waitall`, `Waitany`, `Waitsome`, `Test`,
-  `Testall`, `Testany`, `Testsome`, `Probe`, `Iprobe`
-- **collectives**: `Barrier`, `Bcast`, `Reduce`, `Allreduce`, `Gather`,
-  `Gatherv`, `Allgather`, `Allgatherv`, `Scatter`, `Scatterv`, `Alltoall`,
-  `Alltoallv`, `Reduce_scatter`, `Reduce_scatter_block`, `Scan`, `Exscan`
-- **one-sided (active target)**: `Win_create`, `Win_free`, `Win_fence`,
-  `Put`, `Get`, `Accumulate`
+- **point-to-point** (`p2p`): `Send`, `Ssend`, `Rsend`, `Bsend`, `Recv`,
+  `Sendrecv`, `Sendrecv_replace`, `Isend`, `Issend`, `Irecv`, `Mrecv`,
+  `Imrecv`; persistent `Send_init`, `Ssend_init`, `Rsend_init`,
+  `Bsend_init`, `Recv_init`, `Start`, `Startall` (the bytes of a persistent
+  request count at every `Start`, not at `*_init`)
+- **completion** (`wait`): `Wait`, `Waitall`, `Waitany`, `Waitsome`,
+  `Test`, `Testall`, `Testany`, `Testsome`, `Probe`, `Iprobe`, `Mprobe`,
+  `Improbe`
+- **collectives** (`collective`): `Barrier`, `Bcast`, `Reduce`,
+  `Allreduce`, `Gather`, `Gatherv`, `Allgather`, `Allgatherv`, `Scatter`,
+  `Scatterv`, `Alltoall`, `Alltoallv`, `Reduce_scatter`,
+  `Reduce_scatter_block`, `Scan`, `Exscan`; their nonblocking forms
+  (`Ibarrier` ... `Iexscan`), whose post is timed here and whose
+  completion is timed in the `Wait`/`Test` call; neighbourhood
+  collectives `Neighbor_allgather(v)`, `Neighbor_alltoall(v)` and their
+  nonblocking forms
+- **one-sided** (`rma`): `Win_create`, `Win_allocate`,
+  `Win_allocate_shared`, `Win_create_dynamic`, `Win_free`, `Win_fence`,
+  `Win_post/start/complete/wait`, `Win_lock/unlock`,
+  `Win_lock_all/unlock_all`, `Win_flush` (`_all`, `_local`,
+  `_local_all`), `Win_sync`, `Put`, `Get`, `Accumulate`,
+  `Get_accumulate`, `Fetch_and_op`, `Compare_and_swap`, `Rput`, `Rget`,
+  `Raccumulate`
+- **communicators and topologies** (`comm`): `Comm_dup`, `Comm_split`,
+  `Comm_split_type`, `Comm_create`, `Comm_create_group`, `Comm_free`,
+  `Cart_create`, `Cart_sub`, `Dist_graph_create(_adjacent)`,
+  `Intercomm_create`, `Intercomm_merge`. These move no user data but are
+  collective and can take seconds at scale.
 - **MPI-IO**: `File_open/close/sync`, `read/write` (plain, `_at`, `_all`,
   `_at_all`, and the nonblocking `i` forms), `set_view`, `set_size`,
   `preallocate`, `set_info`
 
-Not wrapped, so their time counts as compute: nonblocking collectives
-(`Iallreduce`, ...), persistent requests, passive-target RMA, communicator
-and group management, and **every call made through the Fortran
-`mpi_f08` module**. A code built on `mpi_f08` shows its MPI time as compute.
-Adding a wrapper is mechanical; see `src/mpi_trace.c`.
+Not wrapped, so their time counts as compute: **every call made through
+the Fortran `mpi_f08` module** (a code built on `mpi_f08` shows its MPI
+time as compute), MPI-4 persistent collectives (`Allreduce_init` ...),
+partitioned communication, the large-count `_c` functions,
+`Alltoallw`, `Comm_idup`, and local calls (groups, datatypes, attributes). Adding a
+wrapper is mechanical; see [internals](internals.md#103-wrap-another-mpi-function).
 
 ## Attaching to an application
 

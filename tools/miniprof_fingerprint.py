@@ -117,7 +117,7 @@ def _msg_profile(mpi):
                 median = lower[i]
                 break
     bc = mpi.get("by_class") or {}
-    pct = {k: (bc.get(k) or {}).get("pct_of_elapsed") or 0 for k in ("p2p", "collective", "wait", "rma")}
+    pct = {k: (bc.get(k) or {}).get("pct_of_elapsed") or 0 for k in ("p2p", "collective", "wait", "rma", "comm")}
     s = sum(pct.values())
     coll = 100.0 * pct["collective"] / s if s > 0 else None
     return median, coll

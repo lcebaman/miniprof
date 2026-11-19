@@ -783,7 +783,9 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
                             f'{f["calls"]:,}', hb(f["avg_bytes_per_call"]), hb(f["bytes"])) for f in funcs[:15]])
             ms = mpi.get("message_sizes") or {}
             lowers = ms.get("bin_lower_bytes") or []
-            hists = [(c, h) for c, h in ms.items() if c != "bin_lower_bytes" and sum(h.get("calls") or []) > 0]
+            # a class whose calls all move 0 bytes (wait, comm) has no size story to tell
+            hists = [(c, h) for c, h in ms.items() if c != "bin_lower_bytes"
+                     and sum((h.get("calls") or [])[1:]) > 0]
             if hists and lowers:
                 body += "<h3>Message sizes: time spent per size bin</h3>"
                 parts = []

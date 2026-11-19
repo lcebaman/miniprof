@@ -19,6 +19,8 @@ typedef enum {
     MPIC_COLLECTIVE,   /* blocking collectives                             */
     MPIC_WAIT,         /* Wait/Test/Probe family: completion and polling   */
     MPIC_RMA,          /* one-sided                                        */
+    MPIC_COMM,         /* communicator and topology creation/free: collective,
+                          no user data, can take seconds at scale          */
     MPIC_COUNT
 } mpi_class_t;
 
@@ -65,7 +67,82 @@ typedef enum {
     X(WIN_FENCE,            "MPI_Win_fence",            RMA)  \
     X(PUT,                  "MPI_Put",                  RMA)  \
     X(GET,                  "MPI_Get",                  RMA)  \
-    X(ACCUMULATE,           "MPI_Accumulate",           RMA)
+    X(ACCUMULATE,           "MPI_Accumulate",           RMA)  \
+    /* persistent point-to-point: bytes at MPI_Start, from the *_init */ \
+    X(SEND_INIT,            "MPI_Send_init",            P2P)  \
+    X(SSEND_INIT,           "MPI_Ssend_init",           P2P)  \
+    X(RSEND_INIT,           "MPI_Rsend_init",           P2P)  \
+    X(BSEND_INIT,           "MPI_Bsend_init",           P2P)  \
+    X(RECV_INIT,            "MPI_Recv_init",            P2P)  \
+    X(START,                "MPI_Start",                P2P)  \
+    X(STARTALL,             "MPI_Startall",             P2P)  \
+    /* matched probe */                                       \
+    X(MPROBE,               "MPI_Mprobe",               WAIT) \
+    X(IMPROBE,              "MPI_Improbe",              WAIT) \
+    X(MRECV,                "MPI_Mrecv",                P2P)  \
+    X(IMRECV,               "MPI_Imrecv",               P2P)  \
+    /* nonblocking collectives: the post (time to Wait is WAIT) */ \
+    X(IBARRIER,             "MPI_Ibarrier",             COLLECTIVE) \
+    X(IBCAST,               "MPI_Ibcast",               COLLECTIVE) \
+    X(IREDUCE,              "MPI_Ireduce",              COLLECTIVE) \
+    X(IALLREDUCE,           "MPI_Iallreduce",           COLLECTIVE) \
+    X(IGATHER,              "MPI_Igather",              COLLECTIVE) \
+    X(IGATHERV,             "MPI_Igatherv",             COLLECTIVE) \
+    X(IALLGATHER,           "MPI_Iallgather",           COLLECTIVE) \
+    X(IALLGATHERV,          "MPI_Iallgatherv",          COLLECTIVE) \
+    X(ISCATTER,             "MPI_Iscatter",             COLLECTIVE) \
+    X(ISCATTERV,            "MPI_Iscatterv",            COLLECTIVE) \
+    X(IALLTOALL,            "MPI_Ialltoall",            COLLECTIVE) \
+    X(IALLTOALLV,           "MPI_Ialltoallv",           COLLECTIVE) \
+    X(IREDUCE_SCATTER,      "MPI_Ireduce_scatter",      COLLECTIVE) \
+    X(IREDUCE_SCATTER_BLOCK,"MPI_Ireduce_scatter_block",COLLECTIVE) \
+    X(ISCAN,                "MPI_Iscan",                COLLECTIVE) \
+    X(IEXSCAN,              "MPI_Iexscan",              COLLECTIVE) \
+    /* neighbourhood collectives (topology communicators) */ \
+    X(NEIGHBOR_ALLGATHER,   "MPI_Neighbor_allgather",   COLLECTIVE) \
+    X(NEIGHBOR_ALLGATHERV,  "MPI_Neighbor_allgatherv",  COLLECTIVE) \
+    X(NEIGHBOR_ALLTOALL,    "MPI_Neighbor_alltoall",    COLLECTIVE) \
+    X(NEIGHBOR_ALLTOALLV,   "MPI_Neighbor_alltoallv",   COLLECTIVE) \
+    X(INEIGHBOR_ALLGATHER,  "MPI_Ineighbor_allgather",  COLLECTIVE) \
+    X(INEIGHBOR_ALLGATHERV, "MPI_Ineighbor_allgatherv", COLLECTIVE) \
+    X(INEIGHBOR_ALLTOALL,   "MPI_Ineighbor_alltoall",   COLLECTIVE) \
+    X(INEIGHBOR_ALLTOALLV,  "MPI_Ineighbor_alltoallv",  COLLECTIVE) \
+    /* communicators and topologies */                        \
+    X(COMM_DUP,             "MPI_Comm_dup",             COMM) \
+    X(COMM_SPLIT,           "MPI_Comm_split",           COMM) \
+    X(COMM_SPLIT_TYPE,      "MPI_Comm_split_type",      COMM) \
+    X(COMM_CREATE,          "MPI_Comm_create",          COMM) \
+    X(COMM_CREATE_GROUP,    "MPI_Comm_create_group",    COMM) \
+    X(COMM_FREE,            "MPI_Comm_free",            COMM) \
+    X(CART_CREATE,          "MPI_Cart_create",          COMM) \
+    X(CART_SUB,             "MPI_Cart_sub",             COMM) \
+    X(DIST_GRAPH_CREATE,    "MPI_Dist_graph_create",    COMM) \
+    X(DIST_GRAPH_CREATE_ADJACENT, "MPI_Dist_graph_create_adjacent", COMM) \
+    X(INTERCOMM_CREATE,     "MPI_Intercomm_create",     COMM) \
+    X(INTERCOMM_MERGE,      "MPI_Intercomm_merge",      COMM) \
+    /* one-sided: windows, passive target, PSCW, atomics, request-based */ \
+    X(WIN_ALLOCATE,         "MPI_Win_allocate",         RMA)  \
+    X(WIN_ALLOCATE_SHARED,  "MPI_Win_allocate_shared",  RMA)  \
+    X(WIN_CREATE_DYNAMIC,   "MPI_Win_create_dynamic",   RMA)  \
+    X(WIN_LOCK,             "MPI_Win_lock",             RMA)  \
+    X(WIN_UNLOCK,           "MPI_Win_unlock",           RMA)  \
+    X(WIN_LOCK_ALL,         "MPI_Win_lock_all",         RMA)  \
+    X(WIN_UNLOCK_ALL,       "MPI_Win_unlock_all",       RMA)  \
+    X(WIN_FLUSH,            "MPI_Win_flush",            RMA)  \
+    X(WIN_FLUSH_ALL,        "MPI_Win_flush_all",        RMA)  \
+    X(WIN_FLUSH_LOCAL,      "MPI_Win_flush_local",      RMA)  \
+    X(WIN_FLUSH_LOCAL_ALL,  "MPI_Win_flush_local_all",  RMA)  \
+    X(WIN_SYNC,             "MPI_Win_sync",             RMA)  \
+    X(WIN_POST,             "MPI_Win_post",             RMA)  \
+    X(WIN_START,            "MPI_Win_start",            RMA)  \
+    X(WIN_COMPLETE,         "MPI_Win_complete",         RMA)  \
+    X(WIN_WAIT,             "MPI_Win_wait",             RMA)  \
+    X(GET_ACCUMULATE,       "MPI_Get_accumulate",       RMA)  \
+    X(FETCH_AND_OP,         "MPI_Fetch_and_op",         RMA)  \
+    X(COMPARE_AND_SWAP,     "MPI_Compare_and_swap",     RMA)  \
+    X(RPUT,                 "MPI_Rput",                 RMA)  \
+    X(RGET,                 "MPI_Rget",                 RMA)  \
+    X(RACCUMULATE,          "MPI_Raccumulate",          RMA)
 
 typedef enum {
 #define X(id, name, cls) MPIF_##id,
