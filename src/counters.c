@@ -436,10 +436,26 @@ typedef struct {
 } thread_slot_t;
 
 static thread_slot_t g_slots[CNT_MAX_THREADS];
-static int  g_nslots = 0;                     /* atomic */
+static int  g_nslots = 0;                     /* atomic: slot indices ever used */
 static int  g_dropped = 0;                    /* atomic */
 static _Thread_local thread_slot_t *t_slot = NULL;
 static _Thread_local int t_open_failed = 0;
+static _Thread_local int t_retired = 0;       /* this thread's slot was released */
+
+/* Threads that exit give their slot back (retire_slot, a pthread key
+ * destructor): their counts move into g_ret, their perf fds and mmapped
+ * pages are released, and the slot is reused. Holding the fds of every
+ * thread that ever ran would exhaust the application's descriptor limit
+ * when it creates short-lived threads. g_slot_lock orders retirement,
+ * slot reuse and cnt_collect; none of them is on a hot path. */
+static pthread_mutex_t g_slot_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_key_t g_slot_key;
+static int  g_free[CNT_MAX_THREADS];          /* released slot indices */
+static int  g_nfree = 0;
+static uint64_t g_ret[CNT_MAX_SETS][CB_N][CNT_MAX_EVENTS];   /* physical events */
+static int  g_ret_threads[CNT_MAX_SETS];
+static uint64_t g_ret_rdpmc = 0, g_ret_syscall = 0;
+static int  g_ret_mux = 0;
 
 /* Event sets: one for basic/roofline, CNT_MAX_SETS for top-down. */
 static const cnt_group_t *g_sets[CNT_MAX_SETS];
@@ -596,30 +612,80 @@ static thread_slot_t *slot_by_tid(pid_t tid)
     return NULL;
 }
 
+/* Thread exit (pthread key destructor, on the exiting thread): fold the
+ * slot's counts into g_ret, release its fds and pages, free the slot. */
+static void retire_slot(void *p)
+{
+    thread_slot_t *s = p;
+    if (!s || s != t_slot || s == g_main_slot) return;
+    pthread_mutex_lock(&g_slot_lock);
+    if (s->fd[0] >= 0) {
+        group_read_t g;
+        int ok = read_group(s, &g) == 0;
+        if (ok && g.time_running < g.time_enabled - g.time_enabled / 100) g_ret_mux = 1;
+        for (int i = 0; i < NEV(s); i++) {
+            uint64_t tail = ok ? g.v[i] - s->last[i] : 0;
+            for (int b = 0; b < CB_N; b++)
+                g_ret[s->set][b][i] += s->acc[b][i] + (b == s->bucket ? tail : 0);
+        }
+        g_ret_threads[s->set]++;
+        g_ret_rdpmc += s->n_rdpmc;
+        g_ret_syscall += s->n_syscall;
+        close_slot(s, NEV(s));
+        s->tid = 0;
+        int idx = (int)(s - g_slots);
+        if (g_nfree < CNT_MAX_THREADS) g_free[g_nfree++] = idx;
+    }
+    pthread_mutex_unlock(&g_slot_lock);
+    t_slot = NULL;
+    t_retired = 1;     /* callbacks later in this thread's exit open nothing */
+}
+
+static void own_slot(thread_slot_t *s)
+{
+    t_slot = s;
+    pthread_setspecific(g_slot_key, s);
+}
+
+/* a slot index, reusing released ones first; -1 when all are taken
+ * (g_slot_lock held) */
+static int alloc_slot_locked(void)
+{
+    int idx = g_nfree > 0 ? g_free[--g_nfree] : __atomic_fetch_add(&g_nslots, 1, __ATOMIC_ACQ_REL);
+    return idx < CNT_MAX_THREADS ? idx : -1;
+}
+
 static thread_slot_t *thread_open(void)
 {
     if (t_slot) return t_slot;
-    if (!g_active || t_open_failed) return NULL;
+    if (!g_active || t_open_failed || t_retired) return NULL;
     pid_t tid = my_tid();
+    pthread_mutex_lock(&g_slot_lock);
     thread_slot_t *found = slot_by_tid(tid);
-    if (found) { t_slot = found; return found; }
-    int idx = __atomic_fetch_add(&g_nslots, 1, __ATOMIC_ACQ_REL);
-    if (idx >= CNT_MAX_THREADS) {
+    if (found) { pthread_mutex_unlock(&g_slot_lock); own_slot(found); return found; }
+    int idx = alloc_slot_locked();
+    if (idx < 0) {
+        pthread_mutex_unlock(&g_slot_lock);
         __atomic_fetch_add(&g_dropped, 1, __ATOMIC_RELAXED);
         t_open_failed = 1;
         return NULL;
     }
     thread_slot_t *s = &g_slots[idx];
     memset(s, 0, sizeof(*s));
+    for (int i = 0; i < CNT_MAX_EVENTS; i++) s->fd[i] = -1;
     s->set = (g_rank + idx) % g_nsets;
-    if (open_events(s, NEV(s)) != 0) {    /* leaves s->fd[] = -1 */
-        /* keep the slot (fds = -1) so collect() skips it */
+    int rc = open_events(s, NEV(s));       /* on failure leaves s->fd[] = -1 */
+    if (rc != 0) {
+        /* back on the free list: collect() skips fd -1 either way */
+        if (g_nfree < CNT_MAX_THREADS) g_free[g_nfree++] = idx;
+        pthread_mutex_unlock(&g_slot_lock);
         t_open_failed = 1;
         return NULL;
     }
     s->tid = tid;
+    pthread_mutex_unlock(&g_slot_lock);
     read_now(s, s->last);
-    t_slot = s;
+    own_slot(s);
     return s;
 }
 
@@ -646,14 +712,24 @@ static void attach_pending(void)
     pid_t self = my_tid();
     for (int i = 0; i < n; i++) {
         pid_t tid = g_pending[i];
-        if (tid == self || slot_by_tid(tid)) continue;
-        int idx = __atomic_fetch_add(&g_nslots, 1, __ATOMIC_ACQ_REL);
-        if (idx >= CNT_MAX_THREADS) { __atomic_fetch_add(&g_dropped, 1, __ATOMIC_RELAXED); return; }
+        pthread_mutex_lock(&g_slot_lock);
+        if (tid == self || slot_by_tid(tid)) { pthread_mutex_unlock(&g_slot_lock); continue; }
+        int idx = alloc_slot_locked();
+        if (idx < 0) {
+            pthread_mutex_unlock(&g_slot_lock);
+            __atomic_fetch_add(&g_dropped, 1, __ATOMIC_RELAXED);
+            return;
+        }
         thread_slot_t *s = &g_slots[idx];
         memset(s, 0, sizeof(*s));
         s->set = (g_rank + idx) % g_nsets;
-        if (open_events_pid(s, NEV(s), tid) != 0) continue;   /* thread gone: skip */
+        if (open_events_pid(s, NEV(s), tid) != 0) {          /* thread gone: skip */
+            if (g_nfree < CNT_MAX_THREADS) g_free[g_nfree++] = idx;
+            pthread_mutex_unlock(&g_slot_lock);
+            continue;
+        }
         s->tid = tid;
+        pthread_mutex_unlock(&g_slot_lock);
         group_read_t g;
         if (read_group(s, &g) == 0)
             for (int e = 0; e < NEV(s); e++) s->last[e] = g.v[e];
@@ -804,6 +880,8 @@ int cnt_init(const char *uarch, const char *group, int rank)
 {
     g_regions_on = 1;
     g_rank = rank < 0 ? 0 : rank;
+    static int key_made = 0;
+    if (!key_made) key_made = pthread_key_create(&g_slot_key, retire_slot) == 0;
     g_pagesize = sysconf(_SC_PAGESIZE);
     const char *ct = getenv("MINIPROF_COUNTERS_TEST");
     const char *ua = !ct ? uarch : strcmp(ct, "tma") == 0 ? "swtest_tma" : "swtest";
@@ -1096,6 +1174,19 @@ void cnt_collect(cnt_result_t *out)
     memset(pc, 0, sizeof(pc)); memset(pm, 0, sizeof(pm)); memset(pi, 0, sizeof(pi));
     memset(pmain, 0, sizeof(pmain));
 
+    pthread_mutex_lock(&g_slot_lock);    /* no thread retires meanwhile */
+    for (int k = 0; k < g_nsets; k++) {
+        for (int i = 0; i < g_set_nev[k]; i++) {
+            pc[k][i] += g_ret[k][CB_COMPUTE][i];
+            pm[k][i] += g_ret[k][CB_MPI][i];
+            pi[k][i] += g_ret[k][CB_IDLE][i];
+        }
+        out->threads += g_ret_threads[k];
+        out->set_threads[k] += g_ret_threads[k];
+    }
+    out->reads_rdpmc += g_ret_rdpmc;
+    out->reads_syscall += g_ret_syscall;
+    if (g_ret_mux) out->multiplexed = 1;
     int n = __atomic_load_n(&g_nslots, __ATOMIC_ACQUIRE);
     if (n > CNT_MAX_THREADS) n = CNT_MAX_THREADS;
     for (int t = 0; t < n; t++) {
@@ -1130,6 +1221,7 @@ void cnt_collect(cnt_result_t *out)
         for (int e = 0; e < g_lnev[k]; e++)
             out->set_total[k][e] = out->set_compute[k][e] + out->set_mpi[k][e] + out->set_idle[k][e];
     }
+    pthread_mutex_unlock(&g_slot_lock);
     to_logical(0, pmain, out->main_thread);
     memcpy(out->total,   out->set_total[0],   sizeof(out->total));
     memcpy(out->compute, out->set_compute[0], sizeof(out->compute));
