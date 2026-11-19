@@ -100,7 +100,7 @@ def main():
                 check(rc == 3, f"{mode}: the exit code (3) stands ({rc})")
             else:
                 check(reasons == {"SIGTERM": n}, f"{mode}: every rank recorded SIGTERM ({reasons})")
-                ran = text.count("application handler ran")
+                ran = len([f for f in os.listdir(os.path.join(work, mode)) if f.startswith("handler_ran.")])
                 check(ran == n, f"{mode}: the program's own handler ran on every rank ({ran}), after the record")
             counts_ok(doc, rep, mode)
             r = subprocess.run([sys.executable, os.path.join(HERE, "miniprof_report.py"),

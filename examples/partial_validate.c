@@ -24,17 +24,23 @@
 
 #define K 20
 
+/* leaves <dir>/handler_ran.<pid>: a file, not output, because mpirun's
+ * output forwarding may already be shutting down when SIGTERM arrives */
+static char g_mark[1100];
 static void app_handler(int sig)
 {
     (void)sig;
-    static const char msg[] = "application handler ran\n";
-    if (write(1, msg, sizeof msg - 1) < 0) { /* nothing to do */ }
+    int fd = open(g_mark, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) close(fd);
     _exit(5);
 }
 
 int main(int argc, char **argv)
 {
-    if (argc > 1 && strcmp(argv[1], "handler") == 0) signal(SIGTERM, app_handler);
+    if (argc > 1 && strcmp(argv[1], "handler") == 0) {
+        snprintf(g_mark, sizeof g_mark, "%s/handler_ran.%d", argc > 2 ? argv[2] : ".", (int)getpid());
+        signal(SIGTERM, app_handler);
+    }
     MPI_Init(&argc, &argv);
     int me, n;
     MPI_Comm_rank(MPI_COMM_WORLD, &me);
