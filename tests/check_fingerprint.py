@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory() as td:
     j, c, h = (os.path.join(td, n) for n in ("f.json", "f.csv", "f.html"))
     runs = [demo, os.path.join(here, "fixtures", "report_demo_b.json")] + sys.argv[1:3]
     r = subprocess.run([sys.executable, tool] + runs + ["--json", j, "--csv", c, "--html", h],
-                       capture_output=True, text=True)
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     check(r.returncode == 0 and "Class" in r.stdout, "CLI: runs on several snapshots" + (": " + r.stderr if r.returncode else ""))
     if r.returncode == 0:
         doc = json.load(open(j))
@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory() as td:
         chk = Check()
         chk.feed(open(h).read())
         check(not chk.err and not chk.stack, "CLI: HTML well formed" + (f" {chk.err[:3]}" if chk.err else ""))
-    r = subprocess.run([sys.executable, tool, demo, demo, "--names", "only-one"], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, tool, demo, demo, "--names", "only-one"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
     check(r.returncode == 1, "CLI: --names count mismatch is an error")
 
 print(f"{'FAIL' if fails else 'PASS'}: fingerprint ({fails} failure(s))")

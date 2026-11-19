@@ -21,7 +21,7 @@ def check(ok, msg):
 def run(a, b):
     with tempfile.TemporaryDirectory() as td:
         h = os.path.join(td, "d.html")
-        r = subprocess.run([sys.executable, tool, a, b, "--html", h], capture_output=True, text=True)
+        r = subprocess.run([sys.executable, tool, a, b, "--html", h], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         page = open(h).read() if os.path.exists(h) else ""
     return r, page
 

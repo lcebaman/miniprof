@@ -88,7 +88,7 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
   4.1 and 5.0)
 - GCC, Clang, AOCC or Intel oneAPI; gfortran (or another Fortran
   compiler) only for the Fortran examples and wrappers
-- Python 3 (standard library only) for the reports
+- Python 3.6 or later (standard library only) for the reports
 - GNU binutils (`addr2line`, `nm`) for sampling and trace modes
 - Hardware counters: `perf_event_paranoid <= 2`. Full detail (top-down,
   memory, energy) is implemented for AMD Zen 4, Zen 5 and Zen 6 and Intel

@@ -543,6 +543,11 @@ tests/test_units: tests/test_units.c src/sysinfo.c src/json_writer.c \
 tests/test_counters_fold: tests/test_counters_fold.c src/counters.c src/counters.h src/timeline.c
 	$(CC_HOST) -O1 -g -Wall -Wextra -o $@ tests/test_counters_fold.c src/counters.c src/timeline.c -lpthread -ldl
 
+# Python tools must parse as Python 3.6 (RHEL 8 / SLES 15 system python3)
+.PHONY: test-python-compat
+test-python-compat:
+	@python3 tests/check_python_compat.py
+
 test-units: tests/test_units tests/test_counters_fold
 	./tests/test_units tests/test_units_out.json
 	python3 tests/check_units_json.py tests/test_units_out.json
@@ -960,6 +965,7 @@ check: lib nodemon calibrate examples mpa-check
 	@echo "=========================================="
 	@FAIL=0; \
 	$(MAKE) test-units             || FAIL=1; \
+	$(MAKE) test-python-compat     || FAIL=1; \
 	$(MAKE) test-install           || FAIL=1; \
 	$(MAKE) run-hwc-validate       || FAIL=1; \
 	$(MAKE) run-hwc-validate-omp   || FAIL=1; \

@@ -48,3 +48,20 @@ jobs:
             examples/miniprof*.txt
             examples/miniprof*.mpa
           if-no-files-found: ignore
+
+  # The Python tools on the oldest python3 a site may have: 3.6 (RHEL 8,
+  # SLES 15). The launcher runs miniprof_report.py after every job, so a
+  # construct from a later Python would leave those sites without a report.
+  python36:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    container: python:3.6-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report, HTML, CSV, diff and fingerprint on the test snapshots
+        run: |
+          python3 --version
+          for f in tests/fixtures/*.json; do python3 tools/miniprof_report.py "$f" > /dev/null; done
+          python3 tests/check_report_html.py
+          python3 tests/check_diff.py
+          python3 tests/check_fingerprint.py
