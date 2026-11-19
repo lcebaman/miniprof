@@ -691,3 +691,7 @@ void mpi_file_write_at_(F *fh, MPI_Offset *off, const void *buf, F *count, F *dt
 
 void mpi_file_write_at_all_(F *fh, MPI_Offset *off, const void *buf, F *count, F *dt, F *st, F *ierr)
 { FIO_WRAP(write, pmpi_file_write_at_all_(fh, off, buf, count, dt, st, ierr), count, dt); }
+
+/* `use mpi_f08` bindings, generated from the wrappers above (make gen-f08) */
+#include "f08_resolve.h"
+#include "io_trace_f08.inc"

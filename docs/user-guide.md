@@ -326,9 +326,12 @@ intercepts the Fortran MPI bindings (`mpi_init_`, `mpi_allreduce_`, ...)
 as well as the C ones, and forwards each call, arguments untouched, to
 the MPI library's own Fortran PMPI binding, so `MPI_IN_PLACE`,
 `MPI_STATUS_IGNORE` and the other sentinels keep their meaning
-(`make run-fortran-sentinels` checks every wrapped call). The `mpi`
-module and `mpif.h` are covered; the `mpi_f08` module is not yet (see
-[limitations](limitations.md)).
+(`make run-fortran-sentinels` checks every wrapped call). All three
+Fortran interfaces are covered: `mpif.h`, the `mpi` module and the
+Fortran 2008 `mpi_f08` module (whose calls go to the library's own f08
+entry points, `mpi_send_f08_` or, in MPICH, `mpi_send_f08ts_`).
+`make run-mpi-coverage-validate` checks each with exact call counts and
+bytes.
 
 Compilers may inline small internal (`contains`) procedures, which then
 have no symbol of their own; their time shows under the caller.

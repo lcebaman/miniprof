@@ -45,3 +45,4 @@ examples/timeline_validate
 examples/threads_validate
 examples/mpi_coverage_validate
 examples/mpi_coverage_validate_f
+examples/mpi_coverage_validate_f08

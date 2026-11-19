@@ -128,6 +128,25 @@ LIB_OBJS := $(LIB_SRCS:.c=.o)
 # Every object depends on every header: the snapshot records are shared
 # structs, and an object built against an older layout corrupts them.
 $(LIB_OBJS): $(wildcard src/*.h include/*.h)
+src/mpi_trace.o: src/mpi_trace_f08.inc
+src/io_trace.o: src/io_trace_f08.inc
+
+# ── gen-f08: the `use mpi_f08` wrappers, generated from the mpif.h ones ────
+# Edit a Fortran wrapper in src/mpi_trace.c or src/io_trace.c, then run
+# `make gen-f08` and commit the .inc files; make check fails while they are
+# stale (test-f08-generated).
+.PHONY: gen-f08 test-f08-generated
+gen-f08:
+	python3 tools/gen_f08_wrappers.py src/mpi_trace.c src/mpi_trace_f08.inc
+	python3 tools/gen_f08_wrappers.py src/io_trace.c src/io_trace_f08.inc
+
+test-f08-generated:
+	@for f in mpi_trace io_trace; do \
+	  python3 tools/gen_f08_wrappers.py src/$$f.c /tmp/miniprof_$$f_f08.$$$$.inc > /dev/null && \
+	  if cmp -s /tmp/miniprof_$$f_f08.$$$$.inc src/$${f}_f08.inc; then \
+	    echo "PASS: src/$${f}_f08.inc is up to date"; rm -f /tmp/miniprof_$$f_f08.$$$$.inc; \
+	  else echo "FAIL: src/$${f}_f08.inc is stale: run make gen-f08"; rm -f /tmp/miniprof_$$f_f08.$$$$.inc; exit 1; fi; \
+	done
 LIB      := libminiprof.so
 
 EXAMPLE       := $(EXAMPLE_DIR)/heat2d
@@ -621,11 +640,15 @@ run-timeline-validate: examples/timeline_validate
 # collectives, communicators/topologies and the rest of one-sided, through
 # the C and the Fortran (`mpi` module) bindings. Each program also checks
 # its own results, so a wrapper that mangles an argument fails here too.
-examples/mpi_coverage_validate examples/mpi_coverage_validate_f: examples/mpi_coverage_validate.c examples/mpi_coverage_validate.f90 $(LIB)
-	$(MAKE) -C $(EXAMPLE_DIR) mpi_coverage_validate mpi_coverage_validate_f
+# The _f08 program uses the Fortran 2008 `mpi_f08` module, whose calls
+# (and MPI_Init) reach miniprof only through the generated f08 wrappers.
+COVERAGE_BINS := mpi_coverage_validate mpi_coverage_validate_f mpi_coverage_validate_f08
+$(addprefix examples/,$(COVERAGE_BINS)): examples/mpi_coverage_validate.c examples/mpi_coverage_validate.f90 examples/mpi_coverage_validate_f08.f90 $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) $(COVERAGE_BINS)
 
-run-mpi-coverage-validate: examples/mpi_coverage_validate examples/mpi_coverage_validate_f
-	@for b in mpi_coverage_validate mpi_coverage_validate_f; do \
+run-mpi-coverage-validate: $(addprefix examples/,$(COVERAGE_BINS))
+	@for b in $(COVERAGE_BINS); do \
+	  rm -f miniprof_snapshot_$$b.json; \
 	  MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_$$b.json \
 	  mpirun $(MPIRUN_FLAGS) -n $(NRANKS) -x MINIPROF_MODE -x MINIPROF_SNAPSHOT_OUTPUT \
 	    ./examples/$$b || exit 1; \
@@ -996,6 +1019,7 @@ check: lib nodemon calibrate examples mpa-check
 	@FAIL=0; \
 	$(MAKE) test-units             || FAIL=1; \
 	$(MAKE) test-python-compat     || FAIL=1; \
+	$(MAKE) test-f08-generated     || FAIL=1; \
 	$(MAKE) test-install           || FAIL=1; \
 	$(MAKE) run-hwc-validate       || FAIL=1; \
 	$(MAKE) run-hwc-validate-omp   || FAIL=1; \

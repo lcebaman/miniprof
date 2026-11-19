@@ -2,8 +2,9 @@
 
 ## MPI coverage
 
-These MPI calls are individually timed, through the C bindings and the
-Fortran `mpi` module / `mpif.h` bindings. Each lands in one class
+These MPI calls are individually timed, through the C bindings and all
+three Fortran interfaces (`mpif.h`, the `mpi` module and the `mpi_f08`
+module). Each lands in one class
 (`p2p`, `collective`, `wait`, `rma`, `comm`) in the report.
 
 - **point-to-point** (`p2p`): `Send`, `Ssend`, `Rsend`, `Bsend`, `Recv`,
@@ -38,9 +39,8 @@ Fortran `mpi` module / `mpif.h` bindings. Each lands in one class
   `_at_all`, and the nonblocking `i` forms), `set_view`, `set_size`,
   `preallocate`, `set_info`
 
-Not wrapped, so their time counts as compute: **every call made through
-the Fortran `mpi_f08` module** (a code built on `mpi_f08` shows its MPI
-time as compute), MPI-4 persistent collectives (`Allreduce_init` ...),
+Not wrapped, so their time counts as compute: MPI-4 persistent
+collectives (`Allreduce_init` ...),
 partitioned communication, the large-count `_c` functions,
 `Alltoallw`, `Comm_idup`, and local calls (groups, datatypes, attributes). Adding a
 wrapper is mechanical; see [internals](internals.md#103-wrap-another-mpi-function).

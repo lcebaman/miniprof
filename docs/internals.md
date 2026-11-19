@@ -261,6 +261,21 @@ Fortran wrappers (`F_WRAP`) time the call and forward the arguments
 Never convert to C and call the C API: Fortran sentinels like
 `MPI_IN_PLACE` are library-private addresses (see section 11).
 
+A program built with the Fortran 2008 `mpi_f08` module calls neither: it
+calls the library's f08 entry points, `mpi_allreduce_f08_` (Open MPI, and
+MPICH for routines without a buffer) or `mpi_allreduce_f08ts_` (MPICH,
+buffer passed as a descriptor), and `mpi_init_f08_` for `MPI_Init`. Their
+arguments are the mpif.h ones by reference, except that handles are
+one-INTEGER structs (`MPI_Comm_f2c(*comm)` still works), buffers may be
+descriptors (never looked into) and `ierror` is OPTIONAL (may be NULL).
+`tools/gen_f08_wrappers.py` writes both names for every Fortran wrapper
+into `src/mpi_trace_f08.inc` and `src/io_trace_f08.inc` with the same
+body, calling the library's same-named entry found with
+`dlsym(RTLD_NEXT)` (`f08_resolve.h`), since the profiling names differ
+between libraries (Open MPI `pmpi_X_f08_`, MPICH `pmpir_X_f08ts_`).
+`mpi_init_f08_`, `mpi_init_thread_f08_` and `mpi_finalize_f08_` are in
+`miniprof_fortran.c`.
+
 **I/O** (`io_trace.c`). Defines `open`, `read`, `write`, `pread`, the
 `_FORTIFY_SOURCE` variants (`__read_chk`...), stdio (`fopen`, `fread`,
 `fwrite`, `getline`...) and MPI-IO (`MPI_File_*`). Real functions are
@@ -648,10 +663,14 @@ The Granite Rapids work (PR #55) is a complete worked example.
 2. Add the C wrapper with `C_WRAP` and a byte rule that is valid on every
    rank (`MPI_IN_PLACE`!), and the Fortran wrapper with `F_WRAP`
    forwarding to `pmpi_name_`.
-3. Call it from `examples/mpi_coverage_validate.c` and `.f90` with a fixed
-   size, and add its exact per-rank calls and bytes to `expected()` in
-   `tools/validate_mpi_coverage.py` (`make run-mpi-coverage-validate`).
-4. Check that `pmpi_name_` exists in both Open MPI's `libmpi_mpifh` and
+3. Run `make gen-f08`: it writes the `mpi_f08` versions (`mpi_name_f08_`,
+   `mpi_name_f08ts_`) of every Fortran wrapper into `src/*_f08.inc`, which
+   are committed; `make check` fails while they are stale.
+4. Call it from `examples/mpi_coverage_validate.c`, `.f90` and `_f08.f90`
+   with a fixed size, and add its exact per-rank calls and bytes to
+   `expected()` in `tools/validate_mpi_coverage.py`
+   (`make run-mpi-coverage-validate`).
+5. Check that `pmpi_name_` exists in both Open MPI's `libmpi_mpifh` and
    MPICH's `libmpifort` (`nm -D`).
 
 The class decides where its time appears (`by_class`); IDs are internal, so
