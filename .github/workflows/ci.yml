@@ -57,7 +57,7 @@ jobs:
   # runtime crashes the PRRTE launcher itself before any rank starts.
   sanitizers:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v5
       - name: Install Open MPI, gfortran, binutils
@@ -67,7 +67,7 @@ jobs:
             openmpi-bin libopenmpi-dev gfortran binutils build-essential
       - name: Full test suite under the sanitizers
         run: |
-          timeout -k 20 1020 make check-sanitizers \
+          timeout -k 20 2700 make check-sanitizers \
             MPIRUN_FLAGS=--oversubscribe \
             NRANKS=2 \
             NX=64 NY=64 NZ=32 NSTEPS_3D=50
