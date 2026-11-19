@@ -115,6 +115,9 @@ static inline uint64_t cnt_amd_raw(unsigned event, unsigned umask)
 }
 
 const char *cnt_kind_name(cnt_kind_t k);
+/* Partial snapshot (signal handler): lock-free, possibly one boundary old;
+ * single-set groups only. Returns the number of logical events (0: none). */
+int cnt_peek(const cnt_group_t **group, uint64_t *compute, uint64_t *mpi);
 
 /* Dispatch width of a microarchitecture (top-down slots per cycle);
  * 0 if top-down is not supported for it. */

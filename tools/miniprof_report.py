@@ -357,6 +357,15 @@ def report(doc: dict, args) -> str:
     p(f" miniprof{' ' + ver if ver else ''} snapshot  |  {run.get('command') or '?'}")
     p(f" {run.get('nranks')} ranks on {run.get('nnodes')} node(s)  |  {cpu_desc}"
       f"  |  {run.get('start_utc') or ''}")
+    pt = run.get("partial")
+    if pt:
+        why = ", ".join(f"{k} ({v})" for k, v in (pt.get("reasons") or {}).items())
+        p(f" ! PARTIAL: the run ended without MPI_Finalize: {why}.")
+        p(f"   {pt.get('ranks_reported')} of {run.get('nranks')} ranks left a record"
+          + (f" ({pt.get('ranks_missing')} missing)" if pt.get("ranks_missing") else "")
+          + "; counts run to each rank's end.")
+        p("   No top-down, memory, roofline, OpenMP, hotspots or timeline: they need")
+        p("   every rank at MPI_Finalize.")
     p("=" * W)
     el = run.get("elapsed_s", {})
     p(f" Elapsed time          {human_time(el.get('max', 0))}  (slowest rank)")
@@ -697,6 +706,10 @@ def oneline(doc) -> str:
     top = f' ({funcs[0]["name"]} {funcs[0]["pct_of_elapsed"]:.0f}%)' if funcs and (sp.get("mpi") or 0) >= 1 else ""
     line = (f"{app}, {shape}, {el:.1f} s: compute {sp.get('compute', 0):.0f}%, "
             f"MPI {sp.get('mpi', 0):.0f}%{top}, I/O {sp.get('io', 0):.0f}%")
+    pt = run.get("partial")
+    if pt:
+        line += (f" [PARTIAL: {', '.join(pt.get('reasons') or {})}; "
+                 f"{pt.get('ranks_reported')} of {run.get('nranks')} ranks]")
     hs = (doc.get("metrics") or {}).get("hotspots") or {}
     if hs.get("available") and hs.get("functions"):
         line += "\nhotspots: " + ", ".join(f'{f["name"].split("(")[0]} {f["pct"]:.0f}%'

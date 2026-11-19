@@ -23,7 +23,8 @@ tests; this page assumes you can do both.
   - [5.7 Hotspots and the symbolizer](#57-hotspots-and-the-symbolizer)
   - [5.8 Timeline](#58-timeline)
   - [5.9 CPU identification](#59-cpu-identification)
-  - [5.10 Sample and trace modes](#510-sample-and-trace-modes)
+  - [5.10 Partial snapshots](#510-partial-snapshots)
+  - [5.11 Sample and trace modes](#511-sample-and-trace-modes)
 - [6. The JSON contract](#6-the-json-contract)
 - [7. The Python tools](#7-the-python-tools)
 - [8. Launcher, installation, module files](#8-launcher-installation-module-files)
@@ -517,7 +518,30 @@ tables (`counters.c`), dispatch width (`cnt_dispatch_width`), the helper's
 `setup()` and the client's allow-list (`nodemon_client.c`). The raw family
 and model are kept in the JSON too.
 
-### 5.10 Sample and trace modes
+### 5.10 Partial snapshots
+
+`partial.c`, for a run that ends without `MPI_Finalize`. `partial_prepare`
+(end of `snapshot_init`) copies what a record needs into static buffers;
+rank 0's snapshot path and start time are broadcast at init so every rank
+agrees on them. `partial_arm` (when the application's clock starts, in
+`miniprof.c`) installs SIGTERM/SIGINT handlers and an `atexit` hook;
+`partial_disarm` (start of `MPI_Finalize`) removes them. `MPI_Abort`'s C and
+Fortran wrappers call `partial_dump` before aborting.
+
+`partial_dump` is async-signal-safe: no malloc, stdio or locks. It reads
+the MPI and I/O accumulators (relaxed atomics), `getrusage` and the
+counters through `cnt_peek` (lock-free, single-set groups only), formats
+integers by hand into a static buffer and writes
+`<snapshot>.partial/rank.N.json` with `open`/`write`/`rename`. Then the
+signal goes on: to the application's handler if it had one, else the
+default action is restored and the signal re-raised.
+`tools/miniprof_partial.py` merges the records into a snapshot with the
+same structure (the same definitions as `write_parallel` and
+`write_counters`) and `run.partial`; the launcher runs it, in a session of
+its own so a job's teardown does not stop it. Test: `make
+run-partial-validate`.
+
+### 5.11 Sample and trace modes
 
 The older workflow, still supported: **sample** (`MINIPROF_MODE=sample`)
 records leaf PCs and call paths from `SIGPROF` (`sampler.c`,

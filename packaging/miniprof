@@ -139,6 +139,26 @@ while kill -0 $child 2>/dev/null; do wait $child; rc=$?; done
 trap - TERM INT HUP
 unset MINIPROF_MODE
 
+# No snapshot, but ranks left records: the run ended without MPI_Finalize
+# (time limit, Ctrl-C, MPI_Abort, exit). Merge them into a snapshot marked
+# partial and write the reports, in a session of its own: when a job is
+# torn down (MPI_Abort, a time limit) this launcher may be killed a moment
+# later, and the merge must survive it. The sleep lets the other ranks
+# finish their records.
+partial_done=0
+if [ $mode != sample ] && [ ! -f "$out/snapshot.json" ] && [ -d "$out/snapshot.json.partial" ] \
+   && command -v python3 >/dev/null; then
+    S=$(command -v setsid || true)
+    $S sh -c 'sleep 1
+        python3 "$1/miniprof_partial.py" "$2/snapshot.json.partial" -o "$2/snapshot.json" || exit 1
+        [ "$3" = 1 ] || exit 0
+        python3 "$1/miniprof_report.py" "$2/snapshot.json" -o "$2/report.txt" \
+            --html "$2/report.html" --csv "$2/csv" >/dev/null' \
+        sh "$TOOLS" "$out" "$report" </dev/null >"$out/partial.log" 2>&1 &
+    wait $!
+    partial_done=1
+fi
+
 if [ $mode = sample ]; then
     {
         echo "command: $*"; echo "mode: sample"; echo "exit: $rc"
@@ -175,7 +195,7 @@ elif [ -f "$out/snapshot.json" ]; then
         echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
         echo "host: $(hostname)"
     } > "$out/run.txt"
-    if [ $report = 1 ] && command -v python3 >/dev/null; then
+    if [ $report = 1 ] && [ $partial_done = 0 ] && command -v python3 >/dev/null; then
         python3 "$TOOLS/miniprof_report.py" "$out/snapshot.json" -o "$out/report.txt" \
             --html "$out/report.html" --csv "$out/csv" >/dev/null 2>"$out/report.err" \
             && rm -f "$out/report.err"

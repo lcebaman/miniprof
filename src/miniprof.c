@@ -42,6 +42,7 @@
 #include "trace_aggregator.h"
 #include "mpi_trace.h"
 #include "snapshot.h"
+#include "partial.h"
 
 #include <mpi.h>
 #include <stdio.h>
@@ -205,6 +206,7 @@ void miniprof_init(int interval_ms)
         /* the application's clock starts after miniprof's own set-up, which
          * snapshot reports separately as overhead (init_s) */
         clock_gettime(CLOCK_MONOTONIC, &g_t_start);
+        partial_arm(&g_t_start);             /* a record if the run never finalizes */
     } else if (g_mode == MODE_SAMPLE) {
         g_interval_ms = env_int("MINIPROF_INTERVAL_MS", interval_ms > 0
                                                          ? interval_ms
@@ -354,7 +356,7 @@ void miniprof_finalize(void)
     switch (g_mode) {
     case MODE_SAMPLE:   miniprof_finalize_sample(elapsed); break;
     case MODE_TRACE:    miniprof_finalize_trace(elapsed);  break;
-    case MODE_SNAPSHOT: snapshot_finalize(elapsed);        break;
+    case MODE_SNAPSHOT: partial_disarm(); snapshot_finalize(elapsed); break;
     case MODE_OFF:      break;
     }
 }

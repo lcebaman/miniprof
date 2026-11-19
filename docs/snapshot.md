@@ -103,6 +103,10 @@ OpenMP threads, the CPU microarchitecture (read from CPUID: `zen4`,
 `perf_event_paranoid`. The JSON's `nodes` list adds per-node details and an
 `exclusivity` hint: whether something else was running on the node.
 
+A run that ended without `MPI_Finalize` is marked **PARTIAL** here, with
+why it ended and how many ranks left a record; see
+[when a run does not finish](user-guide.md#when-a-run-does-not-finish).
+
 ## Time split and imbalance
 
 Each rank's elapsed time (`MPI_Init` to `MPI_Finalize`) is split into
@@ -452,7 +456,8 @@ comparing the application's own timer with and without miniprof.
 
 | Key | Contents |
 |---|---|
-| `run` | command, ranks, nodes, threads, elapsed (min/avg/max), MPI library |
+| `tool` | `version`, `commit` (git describe of the build) |
+| `run` | command, ranks, nodes, threads, elapsed (min/avg/max), MPI library; `partial` when the run ended without `MPI_Finalize`: `reasons` (count per reason), `ranks_reported`, `ranks_missing`, `missing`, `not_available` |
 | `nodes`, `ranks` | per-node and per-rank details |
 | `metrics.collected` | the blocks this run collected (`parallel`, `counters`, `openmp`, `hotspots`...) |
 | `metrics.parallel` | time split, MPI, I/O, CPU |

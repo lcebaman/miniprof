@@ -21,6 +21,7 @@
 #define _GNU_SOURCE
 #include "snapshot.h"
 #include "build_info.inc"   /* MINIPROF_BUILD_COMMIT, written by make */
+#include "partial.h"
 #include "sysinfo.h"
 #include "json_writer.h"
 #include "mpi_trace.h"
@@ -208,11 +209,17 @@ void snapshot_init(int verbose)
 
     const char *out = getenv("MINIPROF_SNAPSHOT_OUTPUT");
     if (out && *out) snprintf(g_outfile, sizeof(g_outfile), "%s", out);
+    /* Rank 0's path for everyone: only rank 0 writes the snapshot, but every
+     * rank writes its partial record next to it if the run never finalizes,
+     * and the launcher sets the path on rank 0 only. */
+    PMPI_Bcast(g_outfile, (int)sizeof(g_outfile), MPI_CHAR, 0, MPI_COMM_WORLD);
 
     time_t t = time(NULL);
     struct tm tm;
     gmtime_r(&t, &tm);
     strftime(g_start_utc, sizeof(g_start_utc), "%Y-%m-%dT%H:%M:%SZ", &tm);
+    /* one start time for the run: partial records are matched by it */
+    PMPI_Bcast(g_start_utc, (int)sizeof(g_start_utc), MPI_CHAR, 0, MPI_COMM_WORLD);
 
     if (PMPI_Query_thread(&g_thread_level) != MPI_SUCCESS) g_thread_level = -1;
 
@@ -264,6 +271,20 @@ void snapshot_init(int verbose)
     getrusage(RUSAGE_SELF, &g_ru0);
     tl_init();                                /* P7: no-op unless MINIPROF_TIMELINE=1 */
     cnt_timeline_mark();
+
+    /* a per-rank record if the run ends without MPI_Finalize (partial.h) */
+    {
+        int nranks = 1;
+        PMPI_Comm_size(MPI_COMM_WORLD, &nranks);
+        partial_info_t pi = {
+            .rank = rank, .nranks = nranks, .output = g_outfile,
+            .level = snapshot_level_name(g_level), .start_utc = g_start_utc,
+            .command = g_cmdline, .hostname = g_node.hostname, .uarch = g_node.uarch,
+            .uarch_name = g_node.uarch_name, .brand = g_node.cpu_brand,
+            .cpus_allowed = g_rank.cpus_allowed, .cores_allowed = g_rank.cores_allowed,
+        };
+        partial_prepare(&pi);
+    }
 
     g_init_s = now_s() - t0;
 

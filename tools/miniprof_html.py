@@ -566,6 +566,8 @@ table.fp td.num{white-space:nowrap}
 .wrap{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
 header h1{font-size:20px;font-weight:600;margin:0 0 4px;word-break:break-all}
 header .meta{color:var(--ink2);font-size:13px}
+.partial{display:flex;gap:10px;align-items:flex-start;margin:10px 0 0;padding:10px 12px;border:1px solid var(--warn);border-radius:8px;font-size:14px}
+.partial .ic{flex:none;width:20px;height:20px;border-radius:50%;background:var(--warn);color:#0b0b0b;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px}
 nav{display:flex;flex-wrap:wrap;gap:6px 14px;margin:14px 0 4px;font-size:13px}
 nav a{color:var(--ink2);text-decoration:none;border-bottom:1px solid var(--axis)}
 nav a:hover{color:var(--ink)}
@@ -628,6 +630,20 @@ var x=e.clientX+14,y=e.clientY+14,w=t.offsetWidth,h=t.offsetHeight;
 if(x+w>innerWidth-8)x=e.clientX-w-14;if(y+h>innerHeight-8)y=e.clientY-h-14;t.style.left=x+'px';t.style.top=y+'px';});
 })();
 """
+
+
+def partial_banner(run):
+    """A run that ended without MPI_Finalize: say so before anything else."""
+    pt = run.get("partial")
+    if not pt:
+        return ""
+    why = ", ".join(f"{k} ({v})" for k, v in (pt.get("reasons") or {}).items())
+    miss = f"; {pt['ranks_missing']} missing" if pt.get("ranks_missing") else ""
+    return (f'<div class="partial"><span class="ic">!</span><div><b>Partial snapshot.</b> '
+            f'The run ended without MPI_Finalize: {esc(why)}. {pt.get("ranks_reported")} of '
+            f'{esc(str(run.get("nranks")))} ranks left a record{esc(miss)}. Counts run to each rank\'s '
+            'end. Top-down, memory, roofline, OpenMP, hotspots and the timeline need every rank at '
+            'MPI_Finalize and are not available.</div></div>')
 
 
 def render(doc: dict, obs: list, thresholds: str = "") -> str:
@@ -1056,6 +1072,7 @@ def render(doc: dict, obs: list, thresholds: str = "") -> str:
             "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
             f"<title>{esc(title)}</title><style>{CSS}</style></head><body><div class=\"mp\"><div class=\"wrap\">"
             f"<header><h1>{esc(run.get('command') or 'miniprof snapshot')}</h1><div class=\"meta\">{esc(meta)}</div>"
+            + partial_banner(run) +
             f"<nav>{navh}</nav></header>"
             f'<div class="tiles">{"".join(tiles)}</div>'
             + "".join(S) +

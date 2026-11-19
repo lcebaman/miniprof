@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Partial snapshots.** A run that ends without `MPI_Finalize` (a batch
+  time limit, Ctrl-C, `MPI_Abort`, `exit()`) used to write nothing. Each
+  rank now leaves a record of what it measured, written from the signal
+  handler without malloc, stdio or locks, and the launcher merges the
+  records into a snapshot marked PARTIAL, with the usual reports: time
+  split, MPI, I/O, CPU and basic counters. An application's own SIGTERM
+  handler still runs. New tool `miniprof-partial` for merging by hand.
+
 ## 1.1.0 — 2026-11-19
 
 The first tagged release. Earlier versions had only the sample and trace

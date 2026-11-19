@@ -1229,3 +1229,34 @@ void cnt_collect(cnt_result_t *out)
     memcpy(out->idle,    out->set_idle[0],    sizeof(out->idle));
     g_active = 0;   /* no more boundary reads */
 }
+
+/* ── peek for a partial snapshot (signal handler, no locks) ────────────
+ * What every thread has accumulated up to its last bucket switch (MPI
+ * boundaries, OpenMP worker transitions), plus the totals of threads
+ * that have exited. Lock-free and racy by design: a thread may be adding
+ * while this reads, so a value can be one switch old. Single-set groups
+ * only (top-down rotates sets over threads). Returns the number of logical
+ * events, 0 when there is nothing to report. */
+int cnt_peek(const cnt_group_t **group, uint64_t *compute, uint64_t *mpi)
+{
+    if (!g_active || g_nsets != 1) return 0;
+    uint64_t pc[CNT_MAX_EVENTS] = {0}, pm[CNT_MAX_EVENTS] = {0};
+    int n = __atomic_load_n(&g_nslots, __ATOMIC_ACQUIRE);
+    if (n > CNT_MAX_THREADS) n = CNT_MAX_THREADS;
+    for (int t = 0; t < n; t++) {
+        const thread_slot_t *s = &g_slots[t];
+        if (__atomic_load_n(&s->fd[0], __ATOMIC_RELAXED) < 0) continue;
+        for (int i = 0; i < g_set_nev[0]; i++) {
+            pc[i] += __atomic_load_n(&s->acc[CB_COMPUTE][i], __ATOMIC_RELAXED);
+            pm[i] += __atomic_load_n(&s->acc[CB_MPI][i], __ATOMIC_RELAXED);
+        }
+    }
+    for (int i = 0; i < g_set_nev[0]; i++) {
+        pc[i] += __atomic_load_n(&g_ret[0][CB_COMPUTE][i], __ATOMIC_RELAXED);
+        pm[i] += __atomic_load_n(&g_ret[0][CB_MPI][i], __ATOMIC_RELAXED);
+    }
+    to_logical(0, pc, compute);
+    to_logical(0, pm, mpi);
+    *group = &g_lsets[0];
+    return g_lnev[0];
+}
