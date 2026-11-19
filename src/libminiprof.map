@@ -1,0 +1,36 @@
+/*
+ * libminiprof.map — the symbols libminiprof.so exports; everything else is
+ * local. The library is preloaded, so an exported symbol takes precedence
+ * over the application's own: an internal helper left global (tl_init,
+ * jw_init, ...) would silently replace an application function of the same
+ * name. Exported: the wrappers miniprof exists to provide and its public
+ * API. tests/check_exports.py (make test-exports, in make check) fails if a
+ * wrapper is hidden or a helper leaks.
+ */
+{
+  global:
+    /* MPI: C bindings, and Fortran mpif.h / mpi / mpi_f08 bindings */
+    MPI_*;
+    mpi_*_;
+    /* public API (include/miniprof.h), C and Fortran */
+    miniprof_*;
+    /* OpenMP tool interface, thread creation, -finstrument-functions */
+    ompt_start_tool;
+    pthread_create;
+    __cyg_profile_func_enter;
+    __cyg_profile_func_exit;
+    /* libc I/O interposed by io_trace.c, incl. _FORTIFY_SOURCE variants */
+    open; open64; openat; openat64; creat; creat64; close;
+    __open_2; __open64_2; __openat_2; __openat64_2;
+    read; pread; pread64; readv; __read_chk; __pread_chk; __pread64_chk;
+    write; pwrite; pwrite64; writev;
+    fsync; fdatasync;
+    fopen; fopen64; fclose;
+    fread; __fread_chk; fwrite;
+    fgets; __fgets_chk; fputs;
+    fprintf; vfprintf; __fprintf_chk; __vfprintf_chk;
+    fscanf; vfscanf; __isoc99_fscanf; __isoc99_vfscanf; __isoc23_fscanf; __isoc23_vfscanf;
+    getline; getdelim; __getdelim;
+  local:
+    *;
+};

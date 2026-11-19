@@ -80,6 +80,7 @@ srun -N1 --exclusive miniprof-calibrate -o $HOME/sw/miniprof/1.1/share/miniprof/
 | [Hardware support](docs/hardware.md) | What each CPU provides, counter groups, Zen 4/5/6 and Granite Rapids notes, permissions |
 | [Development and testing](docs/development.md) | `make` targets, the test suite, validation |
 | [Internals](docs/internals.md) | How the code works and how to extend it: lifecycle, subsystems, JSON contract, recipes |
+| [Changelog](CHANGELOG.md) | What each release added and fixed |
 | [Known limitations](docs/limitations.md) | What miniprof does not cover |
 
 ## Requirements

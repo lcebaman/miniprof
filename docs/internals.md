@@ -227,7 +227,13 @@ These rules are what keeps it safe; every hot path in the code follows them.
    `LD_PRELOAD` loads libminiprof and the MPI library into every `sh` and
    `addr2line` (seconds on a cold network filesystem), and `fork()` is
    unsafe in a process with registered memory.
-8. **Report the cost.** Anything that takes time at init or finalize gets
+8. **Export nothing internal.** The library is preloaded, so an exported
+   symbol replaces an application function of the same name.
+   `src/libminiprof.map` exports only the wrappers and the public API.
+   A new internal function needs a module prefix (`cnt_`, `tl_` ...); a
+   new libc interposer must be added to the map. `make test-exports`
+   fails on either mistake.
+9. **Report the cost.** Anything that takes time at init or finalize gets
    a phase in the `overhead` block.
 
 ## 5. The subsystems

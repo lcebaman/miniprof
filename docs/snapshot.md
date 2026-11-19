@@ -32,7 +32,7 @@ sections say why they are missing):
 
 ```
 ==============================================================================
- miniprof snapshot  |  /home/user/miniprof/examples/diffusion3d
+ miniprof 1.1.0 snapshot  |  /home/user/miniprof/examples/diffusion3d
  4 ranks on 1 node(s)  |  Emerald Rapids  |  2026-11-17T09:06:47Z
 ==============================================================================
  Elapsed time          23.51 s  (slowest rank)

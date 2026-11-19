@@ -20,6 +20,7 @@
 
 #define _GNU_SOURCE
 #include "snapshot.h"
+#include "build_info.inc"   /* MINIPROF_BUILD_COMMIT, written by make */
 #include "sysinfo.h"
 #include "json_writer.h"
 #include "mpi_trace.h"
@@ -2162,6 +2163,7 @@ static int write_json(const rank_rec_t *ranks, int nranks,
     jw_begin_obj(&w, "tool");
     jw_str(&w, "name", "miniprof");
     jw_str(&w, "version", MINIPROF_VERSION);
+    jw_str(&w, "commit", MINIPROF_BUILD_COMMIT);   /* git describe of the build */
     jw_end_obj(&w);
 
     jw_begin_obj(&w, "run");
