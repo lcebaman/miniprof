@@ -23,6 +23,9 @@
   pass through its wrappers or another tool's.
 - **CI** runs the whole suite under AddressSanitizer and UBSan
   (`make check-sanitizers`).
+- **`topdown_validate`** caps its arrays at a quarter of the node's
+  available memory. On a VM that reports the host's whole L3 (Granite
+  Rapids) it asked for ~8 GB per rank and could be OOM-killed.
 
 ## 1.1.0 — 2026-11-19
 
