@@ -185,7 +185,7 @@ Collective, on every rank, in this order (each phase timed into
    names its functions and rank 0 gathers the top 48 per rank;
 6. timeline (`reduce_timeline`): common bucket width, per-bucket
    min/sum/max reductions, heatmap;
-7. `MPI_Gather` of every `rank_rec_t` (fixed size, as bytes) and, from node
+7. `PMPI_Gather` of every `rank_rec_t` (fixed size, as bytes) and, from node
    leaders, every `node_rec_t` (including the helper's results);
 8. rank 0: `write_json` writes `snapshot.json`.
 
@@ -433,8 +433,8 @@ binary given the capability.
 `nodemon.c` is deliberately closed. It takes only `--uarch` and
 `--interval-ms`, opens a fixed set of events chosen by uarch in `setup()`
 (`setup_df_dram`, `setup_intel_imc`, Zen 5's UMC loop, `setup_energy`),
-**drops all capabilities** (`drop_caps`), then samples every interval and
-answers over a pipe with a line protocol documented in `nodemon.h`:
+**drops all capabilities** (`drop_caps`), then samples every interval
+(50 ms at the shortest) and answers over a pipe with a line protocol documented in `nodemon.h`:
 
 ```
 ok sockets=2 chans=12 interval_ms=100 events=98
@@ -633,6 +633,10 @@ with no PMU and no privileges):
    make the counter and memory plumbing run anywhere, so CI covers the code
    paths even where it cannot cover the numbers.
 
+`make check-sanitizers` runs all of this again with the library, the
+helper and every MPI process built with AddressSanitizer and UBSan; CI
+runs it as a separate job.
+
 Report checks (`tests/check_report_html.py`, `check_diff.py`,
 `check_fingerprint.py`) run on fixtures and on every
 `miniprof_snapshot_*.json` the run produced: well-formed HTML, escaping,
@@ -765,6 +769,13 @@ Each of these cost a debugging session; the fixes are in the code.
 
 - **Leaf PC in a signal handler** comes from `ucontext` (`REG_RIP`), not
   `backtrace()[0]`, which is the handler itself.
+- **`backtrace()` is not signal-safe the first time**: it loads libgcc
+  with `dlopen`, which takes locks and allocates. `sampler_start` calls it
+  once before arming the timer. The SIGPROF handlers also save and restore
+  `errno`, which the application may be reading when the signal lands.
+- **Our own MPI calls go through `PMPI_`.** Calling `MPI_Gather` from
+  inside the library would go through our wrapper (and any other tool
+  stacked on top), counting miniprof's own traffic as the application's.
 - **Fortran sentinels.** Converting Fortran arguments to C broke
   `MPI_IN_PLACE` silently (zeros instead of sums). Forward to the
   library's Fortran binding; `make run-fortran-sentinels` guards it.

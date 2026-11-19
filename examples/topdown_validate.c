@@ -131,6 +131,18 @@ static long l3_bytes(void)
     return u == 'M' ? kb << 20 : kb << 10;
 }
 
+/* MemAvailable (bytes), 0 if unknown */
+static long mem_available(void)
+{
+    char line[128]; long kb = 0;
+    FILE *f = fopen("/proc/meminfo", "r");
+    if (!f) return 0;
+    while (fgets(line, sizeof line, f))
+        if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+    fclose(f);
+    return kb << 10;
+}
+
 int main(int argc, char **argv)
 {
     MPI_Init(&argc, &argv);
@@ -149,6 +161,26 @@ int main(int argc, char **argv)
     long ch = 32L * 1024 * 1024, st = 16L * 1024 * 1024;
     if (4 * l3 / 4 > ch) ch = 4 * l3 / 4;
     if (4 * l3 / 8 > st) st = 4 * l3 / 8;
+    /* A VM often reports the host's whole shared L3 (hundreds of MB on
+     * Granite Rapids): never ask for more than a quarter of the node's
+     * available memory, shared among the ranks on the node. */
+    MPI_Comm node;
+    int nlocal = 1;
+    MPI_Comm_split_type(MPI_COMM_WORLD, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &node);
+    MPI_Comm_size(node, &nlocal);
+    MPI_Comm_free(&node);
+    long avail = mem_available();
+    if (avail > 0) {
+        long budget = avail / 4 / nlocal;                /* bytes per rank */
+        long need = ch * 4 + 3 * st * 8;
+        if (need > budget) {
+            double f = (double)budget / need;
+            ch = (long)(ch * f); st = (long)(st * f);
+            if (rank == 0)
+                printf("topdown_validate: arrays capped to %ld MiB per rank (%ld MiB available)\n",
+                       (ch * 4 + 3 * st * 8) >> 20, avail >> 20);
+        }
+    }
     long nchase  = (long)(ch * scale);
     long nstream = (long)(st * scale);
     long nsteps  = (long)(8L * 1024 * 1024 * scale);

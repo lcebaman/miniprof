@@ -9,6 +9,23 @@
   records into a snapshot marked PARTIAL, with the usual reports: time
   split, MPI, I/O, CPU and basic counters. An application's own SIGTERM
   handler still runs. New tool `miniprof-partial` for merging by hand.
+- **Memory helper hardening.** `make install NODEMON_GROUP=<group>`
+  installs `miniprof-nodemon` runnable by that group only (the memory
+  bandwidth and energy counters it reads are a known side channel, see
+  [installing](docs/installing.md)); the shortest interval is now 50 ms
+  (`MINIPROF_MEMORY_INTERVAL_MS`, was 10); the software test modes are
+  refused when the helper holds capabilities.
+- **No node limit.** Memory statistics across nodes are streamed; the
+  4,096-node limit is gone.
+- **Signal safety in sample mode.** `backtrace()` is warmed up before the
+  first SIGPROF, and the handlers preserve `errno`.
+- **Internal MPI calls use `PMPI_`**, so miniprof's own gathers no longer
+  pass through its wrappers or another tool's.
+- **CI** runs the whole suite under AddressSanitizer and UBSan
+  (`make check-sanitizers`).
+- **`topdown_validate`** caps its arrays at a quarter of the node's
+  available memory. On a VM that reports the host's whole L3 (Granite
+  Rapids) it asked for ~8 GB per rank and could be OOM-killed.
 
 ## 1.1.0 — 2026-11-19
 

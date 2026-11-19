@@ -216,7 +216,7 @@ void miniprof_init(int interval_ms)
         sampler_start(g_interval_ms, g_depth);
 
         if (g_verbose) {
-            int rank; MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            int rank; PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
             fprintf(stderr, "[miniprof] rank %d: SAMPLE mode, every %d ms, "
                             "depth %d, output=%s, mpa=%s\n",
                     rank, g_interval_ms, g_depth, g_outfile, g_mpa_outfile);
@@ -227,7 +227,7 @@ void miniprof_init(int interval_ms)
         mpi_trace_set_enabled(1);
 
         if (g_verbose) {
-            int rank; MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            int rank; PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
             fprintf(stderr, "[miniprof] rank %d: TRACE mode, "
                             "func list=%s, output=%s\n",
                     rank, g_trace_funcs, g_trace_outfile);
@@ -266,7 +266,7 @@ static void miniprof_finalize_sample(double elapsed)
 
     miniprof_rank_profile_t local;
     memset(&local, 0, sizeof(local));
-    MPI_Comm_rank(MPI_COMM_WORLD, &local.rank);
+    PMPI_Comm_rank(MPI_COMM_WORLD, &local.rank);
     local.total_samples  = profile_store_total();
     local.wall_elapsed_s = elapsed;
     local.n_syms         = 0;
@@ -322,7 +322,7 @@ static void miniprof_finalize_sample(double elapsed)
 
 static void miniprof_finalize_trace(double elapsed)
 {
-    MPI_Comm_rank(MPI_COMM_WORLD, &g_trace_local.rank);
+    PMPI_Comm_rank(MPI_COMM_WORLD, &g_trace_local.rank);
     g_trace_local.wall_elapsed_s = elapsed;
     g_trace_local.n_funcs = 0;
     g_trace_local.n_mpi   = 0;

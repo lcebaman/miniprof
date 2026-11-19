@@ -51,6 +51,38 @@ jobs:
             examples/miniprof*.mpa
           if-no-files-found: ignore
 
+  # The same suite with AddressSanitizer and UBSan in the library, the
+  # memory helper and every MPI process (make check-sanitizers).
+  # Pinned to 24.04 (Open MPI 4.1): with Open MPI 5 the preloaded ASan
+  # runtime crashes the PRRTE launcher itself before any rank starts.
+  sanitizers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Open MPI, gfortran, binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            openmpi-bin libopenmpi-dev gfortran binutils build-essential
+      - name: Full test suite under the sanitizers
+        # Output to a file and the whole process group killed on timeout,
+        # so a stuck rank cannot hold the step open (and lose the log).
+        run: |
+          set +e
+          setsid make check-sanitizers MPIRUN_FLAGS=--oversubscribe \
+            NRANKS=2 NX=64 NY=64 NZ=32 NSTEPS_3D=50 > san.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 1200); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          if kill -0 $pid 2>/dev/null; then
+            echo "TIMEOUT after 20 min; processes still running:"; ps -ef --forest | grep -v ' \[' | tail -40
+            kill -9 -- -$pid; wait $pid; rc=124
+          else
+            wait $pid; rc=$?
+          fi
+          cat san.log
+          exit $rc
+
   # The Python tools on the oldest python3 a site may have: 3.6 (RHEL 8,
   # SLES 15). The launcher runs miniprof_report.py after every job, so a
   # construct from a later Python would leave those sites without a report.

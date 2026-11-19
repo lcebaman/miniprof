@@ -1609,7 +1609,7 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
                                  "channel's traffic");
     jw_end_obj(w);
 
-    double nrd[4096] = {0}, nwr[4096] = {0};
+    stat_t sr = { 0, 0, 0, 0 }, sw = { 0, 0, 0, 0 }, st = { 0, 0, 0, 0 };   /* over nodes */
     double e_tot = 0, pw_sum = 0, peak_max = 0, all_loc = 0, all_rem = 0, all_gbs = 0;
     int no_remote = 0, n_cr = 0;
     int k = 0;
@@ -1701,26 +1701,23 @@ static void write_memory(jw_t *w, const node_rec_t *nodes, int nn)
         jw_dbl(w, "energy_j", en);
         jw_dbl(w, "power_w", el > 0 ? en / el : 0.0);
         jw_end_obj(w);
-        if (k < 4096) { nrd[k] = gbs(rd, el); nwr[k] = gbs(wr, el); }
+        {   /* per-node statistics, streamed: no limit on the node count */
+            double r_ = gbs(rd, el), w_ = gbs(wr, el), t_ = r_ + w_;
+            if (k == 0 || r_ < sr.min) sr.min = r_;
+            if (k == 0 || r_ > sr.max) sr.max = r_;
+            if (k == 0 || w_ < sw.min) sw.min = w_;
+            if (k == 0 || w_ > sw.max) sw.max = w_;
+            if (k == 0 || t_ < st.min) st.min = t_;
+            if (k == 0 || t_ > st.max) st.max = t_;
+            sr.sum += r_; sw.sum += w_; st.sum += t_;
+        }
         k++;
         e_tot += en; pw_sum += el > 0 ? en / el : 0.0;
         if (m->peak_node_bps * 1e-9 > peak_max) peak_max = m->peak_node_bps * 1e-9;
     }
     jw_end_arr(w);
 
-    int kk = k < 4096 ? k : 4096;
-    stat_t sr = { 0, 0, 0, 0 }, sw = { 0, 0, 0, 0 }, st = { 0, 0, 0, 0 };
-    for (int i = 0; i < kk; i++) {
-        double t = nrd[i] + nwr[i];
-        if (i == 0 || nrd[i] < sr.min) sr.min = nrd[i];
-        if (i == 0 || nrd[i] > sr.max) sr.max = nrd[i];
-        if (i == 0 || nwr[i] < sw.min) sw.min = nwr[i];
-        if (i == 0 || nwr[i] > sw.max) sw.max = nwr[i];
-        if (i == 0 || t < st.min) st.min = t;
-        if (i == 0 || t > st.max) st.max = t;
-        sr.sum += nrd[i]; sw.sum += nwr[i]; st.sum += t;
-    }
-    if (kk) { sr.avg = sr.sum / kk; sw.avg = sw.sum / kk; st.avg = st.sum / kk; }
+    if (k) { sr.avg = sr.sum / k; sw.avg = sw.sum / k; st.avg = st.sum / k; }
     jw_begin_obj(w, "per_node");
     jw_stat(w, "read_gb_s", sr);
     jw_stat(w, "write_gb_s", sw);

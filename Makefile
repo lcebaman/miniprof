@@ -579,6 +579,22 @@ tests/test_units: tests/test_units.c src/sysinfo.c src/json_writer.c \
 tests/test_counters_fold: tests/test_counters_fold.c src/counters.c src/counters.h src/timeline.c
 	$(CC_HOST) -O1 -g -Wall -Wextra -o $@ tests/test_counters_fold.c src/counters.c src/timeline.c -lpthread -ldl
 
+# ── check-sanitizers: the whole suite with AddressSanitizer + UBSan ─────────
+# Rebuilds the library and helper instrumented, then runs make check with
+# the sanitizer runtimes preloaded into every MPI process (the launcher
+# preloads libminiprof too, hence verify_asan_link_order=0; the install
+# test loads two copies of the library, hence detect_odr_violation=0).
+# Leaves an instrumented build: run `make clean` afterwards.
+SAN_FLAGS := -O1 -fsanitize=address,undefined -fno-sanitize-recover=undefined
+.PHONY: check-sanitizers
+check-sanitizers:
+	$(MAKE) clean
+	$(MAKE) lib nodemon CFLAGS="$(CFLAGS) $(SAN_FLAGS)" LDFLAGS="$(LDFLAGS) -fsanitize=address,undefined"
+	ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:verify_asan_link_order=0:detect_odr_violation=0 \
+	UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+	LD_PRELOAD="$$($(CC_HOST) -print-file-name=libasan.so):$$($(CC_HOST) -print-file-name=libubsan.so)" \
+	$(MAKE) check MPIRUN_FLAGS="$(MPIRUN_FLAGS) -x ASAN_OPTIONS -x UBSAN_OPTIONS -x LD_PRELOAD"
+
 # Python tools must parse as Python 3.6 (RHEL 8 / SLES 15 system python3)
 .PHONY: test-python-compat
 test-python-compat:
@@ -964,6 +980,7 @@ test-report-html:
 
 # ── install: a prefix with the launcher, tools and a module file ─────────────
 #   make install PREFIX=/opt/miniprof/1.1-openmpi5 [MODULE_VERSION=1.1-openmpi5]
+#                [NODEMON_GROUP=grp: the memory helper runnable by that group only]
 # Layout: bin/ (miniprof launcher, miniprof-report, -diff, -csv, -fingerprint, -calibrate),
 # lib/ (libminiprof.so, miniprof-nodemon), share/miniprof/ (tools, calib/),
 # share/modulefiles/miniprof/<MODULE_VERSION>.lua (Lmod) and
@@ -982,7 +999,9 @@ install: lib nodemon calibrate
 	install -m 755 packaging/miniprof $$d/bin/miniprof && \
 	install -m 755 $(CALIBRATE) $$d/bin/miniprof-calibrate && \
 	install -m 755 $(LIB) $$d/lib/libminiprof.so && \
-	install -m 755 $(NODEMON) $$d/lib/miniprof-nodemon && \
+	if [ -n "$(NODEMON_GROUP)" ]; then \
+		install -m 750 -g $(NODEMON_GROUP) $(NODEMON) $$d/lib/miniprof-nodemon; \
+	else install -m 755 $(NODEMON) $$d/lib/miniprof-nodemon; fi && \
 	install -m 644 tools/*.py $$d/share/miniprof/tools/ && \
 	install -m 755 tools/nodemon_ready.sh $$d/share/miniprof/tools/ && \
 	install -m 644 README.md $$d/share/doc/miniprof/ && \

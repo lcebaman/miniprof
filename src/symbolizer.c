@@ -236,7 +236,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
 
     if (g_verbose) {
         int rank = 0;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
         if (rank == 0)
             fprintf(stderr, "[miniprof] addr2line cmd (first %d chars): %.200s...\n",
                     pos, cmd);
@@ -274,7 +274,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
 
     if (g_verbose) {
         int rank = 0;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
         if (rank == 0)
             fprintf(stderr, "[miniprof] addr2line pass 1: %d/%d resolved "
                     "for %s\n", n_resolved, n, dso_path);
@@ -331,7 +331,7 @@ static void resolve_addr2line_batch(miniprof_sym_t *syms, void **fbases,
 
             if (g_verbose) {
                 int rank = 0;
-                MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+                PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
                 if (rank == 0)
                     fprintf(stderr, "[miniprof] addr2line pass 2 (raw PCs): "
                             "%d/%d resolved\n", pass2_resolved, retry_n);
@@ -489,7 +489,7 @@ static void resolve_nm_fallback(miniprof_sym_t *syms, int n,
 
     if (g_verbose) {
         int rank = 0;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        PMPI_Comm_rank(MPI_COMM_WORLD, &rank);
         if (rank == 0)
             fprintf(stderr, "[miniprof] nm fallback: %d/%d resolved "
                     "(%d text symbols from nm, load_base=0x%lx)\n",

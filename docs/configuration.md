@@ -42,7 +42,7 @@ make sure they reach every rank (Open MPI: `mpirun -x VAR`, or
 | `MINIPROF_OMPT` | `1` | `0` leaves OpenMP alone (no OMPT tool) |
 | `MINIPROF_OMPT_DEBUG` | unset | log every OMPT callback on stderr (very verbose) |
 | `MINIPROF_MEMORY` | `1` | `0` skips the memory and energy helper |
-| `MINIPROF_MEMORY_INTERVAL_MS` | `100` | sampling interval for peak bandwidth (10–10000) |
+| `MINIPROF_MEMORY_INTERVAL_MS` | `100` | sampling interval for peak bandwidth (50–10000) |
 | `MINIPROF_NODEMON` | next to the library | path of `miniprof-nodemon` |
 | `MINIPROF_CALIBRATION` | unset | `miniprof-calibrate` output: a file, or a directory (the file for the node's hostname, else one for the same CPU) |
 | `MINIPROF_ROOFLINE_PEAK` | widest FP64 | compute roof: `fp64_512`, `fp32_256`, ... |

@@ -8,7 +8,7 @@
  *
  * Kept deliberately small and closed:
  *   - takes no paths, event lists or other free-form input: only --uarch
- *     (zen4|zen5|zen6|granite_rapids) and --interval-ms (10..10000);
+ *     (zen4|zen5|zen6|granite_rapids) and --interval-ms (50..10000);
  *   - opens a fixed set of events on the amd_umc_*, amd_df, uncore_imc_*
  *     and power PMUs,
  *     found through sysfs, then DROPS all capabilities before sampling;
@@ -16,7 +16,7 @@
  *     or sample any process;
  *   - talks over stdin/stdout to the rank that started it; exits on
  *     "stop", on EOF, or when its parent dies;
- *   - reports only run totals and peaks over >= 10 ms intervals. Still,
+ *   - reports only run totals and peaks over >= 50 ms intervals. Still,
  *     with the capability it exposes node-wide energy and memory traffic
  *     that the kernel keeps from unprivileged users (RAPL is root-only
  *     because of the PLATYPUS side channel): keep it owner- or
@@ -378,6 +378,16 @@ static void setup_energy(void)
                     scale * 1e6, "power/energy-pkg");
 }
 
+/* Does this process hold any capability (file capability, or root)? */
+static int holds_caps(void)
+{
+    struct __user_cap_header_struct h = { _LINUX_CAPABILITY_VERSION_3, 0 };
+    struct __user_cap_data_struct dd[2];
+    memset(dd, 0, sizeof(dd));
+    if (syscall(SYS_capget, &h, dd) != 0) return 1;      /* cannot tell: assume so */
+    return (dd[0].permitted | dd[1].permitted | dd[0].effective | dd[1].effective) != 0;
+}
+
 /* Drop every capability: from here on the helper can only read the fds
  * it already holds. */
 static void drop_caps(void)
@@ -422,14 +432,19 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--uarch") == 0 && i + 1 < argc) uarch = argv[++i];
         else if (strcmp(argv[i], "--interval-ms") == 0 && i + 1 < argc) interval = atoi(argv[++i]);
-        else die("usage: miniprof-nodemon --uarch zen4|zen5|zen6|granite_rapids [--interval-ms 10..10000]");
+        else die("usage: miniprof-nodemon --uarch zen4|zen5|zen6|granite_rapids [--interval-ms 50..10000]");
     }
     if (!uarch || (strcmp(uarch, "zen4") != 0 && strcmp(uarch, "zen5") != 0 &&
                    strcmp(uarch, "zen6") != 0 && strcmp(uarch, "granite_rapids") != 0 &&
                    strcmp(uarch, "swtest") != 0 &&
                    strcmp(uarch, "swtest-partial") != 0))
         die("unsupported uarch '%s' (zen4, zen5, zen6, granite_rapids)", uarch ? uarch : "");
-    if (interval < 10 || interval > 10000) die("interval-ms out of range");
+    if (interval < 50 || interval > 10000) die("interval-ms out of range (50..10000)");
+    /* the test modes count only this process and need no privilege: a
+     * helper that holds capabilities a normal user does not (setcap) has
+     * no business running them (root holds them all anyway: no gain) */
+    if (strncmp(uarch, "swtest", 6) == 0 && getuid() != 0 && holds_caps())
+        die("test modes are refused in a privileged helper");
     setvbuf(stdout, NULL, _IOLBF, 0);
     prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0);   /* never outlive the rank */
     signal(SIGPIPE, SIG_IGN);

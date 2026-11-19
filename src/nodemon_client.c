@@ -116,7 +116,7 @@ void nodemon_start(const char *uarch, int verbose)
         return;
     }
     const char *iv = getenv("MINIPROF_MEMORY_INTERVAL_MS");
-    if (iv && atoi(iv) >= 10 && atoi(iv) <= 10000) g_interval = atoi(iv);
+    if (iv && atoi(iv) >= 50 && atoi(iv) <= 10000) g_interval = atoi(iv);
 
     char path[1024];
     if (helper_path(path, sizeof(path)) != 0 || access(path, X_OK) != 0) {
