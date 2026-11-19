@@ -116,8 +116,8 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
                     double mpki_memory_threshold, int interval_ms)
 {
     int world_rank, world_size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    PMPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    PMPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
     int msg_bytes = (int)sizeof(miniprof_rank_profile_t);
 
@@ -125,7 +125,7 @@ void aggregator_run(miniprof_rank_profile_t *local, const char *outfile,
     if (world_rank == 0)
         all = calloc(world_size, sizeof(miniprof_rank_profile_t));
 
-    MPI_Gather(local, msg_bytes, MPI_BYTE,
+    PMPI_Gather(local, msg_bytes, MPI_BYTE,
                all,   msg_bytes, MPI_BYTE,
                0, MPI_COMM_WORLD);
 

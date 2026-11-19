@@ -51,6 +51,25 @@ jobs:
             examples/miniprof*.mpa
           if-no-files-found: ignore
 
+  # The same suite with AddressSanitizer and UBSan in the library, the
+  # memory helper and every MPI process (make check-sanitizers).
+  sanitizers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Open MPI, gfortran, binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            openmpi-bin libopenmpi-dev gfortran binutils build-essential
+      - name: Full test suite under the sanitizers
+        run: |
+          timeout -k 20 1020 make check-sanitizers \
+            MPIRUN_FLAGS=--oversubscribe \
+            NRANKS=2 \
+            NX=64 NY=64 NZ=32 NSTEPS_3D=50
+
   # The Python tools on the oldest python3 a site may have: 3.6 (RHEL 8,
   # SLES 15). The launcher runs miniprof_report.py after every job, so a
   # construct from a later Python would leave those sites without a report.

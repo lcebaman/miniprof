@@ -85,13 +85,33 @@ application:
 sudo setcap cap_perfmon+ep /opt/miniprof/1.1-ompi5/lib/miniprof-nodemon
 ```
 
+**Who can run it.** With the capability, anyone who can execute the helper
+can read node-wide DRAM traffic and package energy, every 50 ms or more.
+Energy readings are a known side channel (PLATYPUS, CVE-2020-8694), which
+is why kernels restrict RAPL to root. On a shared system, let only a group
+run it:
+
+```bash
+make install PREFIX=/opt/miniprof/1.1-ompi5 NODEMON_GROUP=perfusers   # 0750, group perfusers
+# or afterwards, in this order (chgrp and chown clear file capabilities):
+sudo chgrp perfusers /opt/miniprof/1.1-ompi5/lib/miniprof-nodemon
+sudo chmod 0750 /opt/miniprof/1.1-ompi5/lib/miniprof-nodemon
+sudo setcap cap_perfmon+ep /opt/miniprof/1.1-ompi5/lib/miniprof-nodemon
+```
+
+Users outside the group still get every other part of the snapshot; the
+memory section says the helper could not run. The helper takes no input
+beyond its CPU type and interval, opens a fixed set of events, drops every
+capability before measuring, and refuses its test modes when it holds a
+capability.
+
 - Not needed where `perf_event_paranoid` is 0 or lower.
 - The filesystem must keep file capabilities. GPFS does; a `nosuid` mount
   does not. Otherwise copy the helper to node-local disk, grant it there,
   and point `MINIPROF_NODEMON` at that copy.
 - One rank per node starts it at `MPI_Init`. It opens a fixed set of
   events, drops every capability, samples, and returns run totals and
-  peaks over ≥ 10 ms intervals at `MPI_Finalize`.
+  peaks over ≥ 50 ms intervals at `MPI_Finalize`.
 - In the build tree, `make nodemon-setcap` does the same and also makes the
   helper owner-only (`chmod 0700`), because with the capability it can read
   node-wide energy (RAPL has been root-only since the PLATYPUS side

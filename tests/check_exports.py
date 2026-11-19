@@ -50,6 +50,8 @@ def main():
     defined = set()
     for o in objs:
         defined |= syms(["-g", "--defined-only", o])
+    # compiler instrumentation (make check-sanitizers), not our code
+    defined = {s for s in defined if not s.startswith(("__odr_asan", "__asan_", "__ubsan_", "__sanitizer_"))}
 
     leaks = sorted(s for s in exported if not public(s))
     hidden = sorted(s for s in defined - exported

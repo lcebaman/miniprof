@@ -21,6 +21,7 @@
 #include "sampler_hwc.h"
 #include "profile_store.h"
 #include "path_store.h"
+#include <errno.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <ucontext.h>   /* ucontext_t, REG_RIP             */
@@ -35,6 +36,7 @@ static int g_running  = 0;
 static void sigprof_handler(int sig, siginfo_t *si, void *ctx)
 {
     (void)sig; (void)si;
+    int saved_errno = errno;          /* the interrupted code may be about to read it */
 
     /*
      * The TRUE leaf PC — the instruction the CPU was executing when
@@ -86,6 +88,7 @@ static void sigprof_handler(int sig, siginfo_t *si, void *ctx)
     int n = backtrace(chain + 1, g_depth < MINIPROF_MAX_DEPTH
                                   ? g_depth : MINIPROF_MAX_DEPTH);
     path_store_record(chain, n + 1);
+    errno = saved_errno;
 }
 
 /* ── public API ──────────────────────────────────────────────────────────── */
@@ -104,6 +107,14 @@ void sampler_start(int interval_ms, int depth)
      * accumulating IPC/cache-miss data per sample. Falls back silently
      * to sampling-only if counters are unavailable (see sampler_hwc.c). */
     hwc_init();
+
+    /* The first backtrace() of a process loads libgcc's unwinder (dlopen,
+     * malloc). In the handler, that could deadlock if SIGPROF landed in
+     * malloc: call it once here, before the timer starts. */
+    {
+        void *warm[2];
+        (void)backtrace(warm, 2);
+    }
 
     /* Install signal handler */
     struct sigaction sa;

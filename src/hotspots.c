@@ -3,6 +3,7 @@
 #include "hotspots.h"
 #include "profile_store.h"
 #include "symbolizer.h"
+#include <errno.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -33,8 +34,10 @@ int hotspots_interval_ms(void) { return g_interval; }
 static void on_sigprof(int sig, siginfo_t *si, void *ctx)
 {
     (void)sig; (void)si;
+    int saved_errno = errno;
     ucontext_t *uc = ctx;
     profile_store_record((void *)(uintptr_t)uc->uc_mcontext.gregs[REG_RIP]);
+    errno = saved_errno;
 }
 
 void hotspots_start(void)
