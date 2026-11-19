@@ -38,6 +38,7 @@
  * miniprof_finalize() C API, which is mode/compiler-agnostic.
  */
 
+#define _GNU_SOURCE
 #include "../include/miniprof.h"
 #include <mpi.h>
 
@@ -64,4 +65,36 @@ void mpi_finalize_(MPI_Fint *ierr)
 {
     miniprof_finalize();
     pmpi_finalize_(ierr);
+}
+
+/* ── `use mpi_f08`: MPI_Init, MPI_Init_thread, MPI_Finalize ────────────
+ * A program built with the mpi_f08 module calls mpi_init_f08_ and
+ * mpi_finalize_f08_, which reach neither the C wrappers nor the ones
+ * above: without these miniprof never starts for it and writes nothing.
+ * They call the library's own f08 entry (dlsym(RTLD_NEXT)), so the
+ * profiling-name scheme of each MPI library does not matter. ierror is
+ * OPTIONAL in mpi_f08 and arrives as NULL when the caller leaves it out. */
+#include "f08_resolve.h"
+
+static void *f08_real_mpi_init_f08_, *f08_real_mpi_init_thread_f08_,
+            *f08_real_mpi_finalize_f08_;
+
+void mpi_init_f08_(MPI_Fint *ierr)
+{
+    F08_REAL(mpi_init_f08_)(ierr);
+    if (!ierr || *ierr == MPI_SUCCESS)
+        miniprof_init(MINIPROF_DEFAULT_INTERVAL_MS);
+}
+
+void mpi_init_thread_f08_(MPI_Fint *required, MPI_Fint *provided, MPI_Fint *ierr)
+{
+    F08_REAL(mpi_init_thread_f08_)(required, provided, ierr);
+    if (!ierr || *ierr == MPI_SUCCESS)
+        miniprof_init(MINIPROF_DEFAULT_INTERVAL_MS);
+}
+
+void mpi_finalize_f08_(MPI_Fint *ierr)
+{
+    miniprof_finalize();
+    F08_REAL(mpi_finalize_f08_)(ierr);
 }

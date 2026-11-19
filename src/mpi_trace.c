@@ -1487,7 +1487,7 @@ static inline MPI_Request freq(const F *r) { return MPI_Request_f2c(*r); }
         CALL;                                                      \
         uint64_t dt_ = now_ns() - t0_;                             \
         g_miniprof_tool_depth--;                                   \
-        if (*ierr == MPI_SUCCESS) preq_put(freq(REQ), (BYTES));    \
+        if (!ierr || *ierr == MPI_SUCCESS) preq_put(freq(REQ), (BYTES)); \
         record(MPIF_##ID, dt_, 0);                                 \
     } while (0)
 
@@ -1900,3 +1900,7 @@ void mpi_raccumulate_(const void *origin, F *ocount, F *odt, F *target_rank,
                              tcount, tdt, op, win, req, ierr),
            fbytes(ocount, odt));
 }
+
+/* `use mpi_f08` bindings, generated from the wrappers above (make gen-f08) */
+#include "f08_resolve.h"
+#include "mpi_trace_f08.inc"

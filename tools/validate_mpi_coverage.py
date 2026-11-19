@@ -121,6 +121,17 @@ def main():
     ok = bool(comm) and comm.get("calls") == sum(c for c, _, k in expected(n).values() if k == "comm") * n
     fails += not ok
     print(f"  {'ok  ' if ok else 'FAIL'}  class \"comm\" reported with every communicator call")
+    # MPI-IO: only the mpi_f08 program does any (open, write_at_all,
+    # sync, read_at, close: 100 doubles each way per rank)
+    io = (((d.get("metrics") or {}).get("parallel") or {}).get("io") or {}).get("mpiio") or {}
+    calls, byt = io.get("calls") or {}, io.get("bytes") or {}
+    if any(calls.values()):
+        want = ({"open": n, "close": n, "read": n, "write": n, "sync": n},
+                {"read": n * NB * D, "write": n * NB * D})
+        ok = (calls, byt) == want
+        fails += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  MPI-IO                           calls {calls} bytes {byt}"
+              + ("" if ok else f"   expected {want}"))
     print("PASS" if not fails else f"FAIL ({fails} checks)")
     sys.exit(1 if fails else 0)
 
