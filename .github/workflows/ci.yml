@@ -53,8 +53,10 @@ jobs:
 
   # The same suite with AddressSanitizer and UBSan in the library, the
   # memory helper and every MPI process (make check-sanitizers).
+  # Pinned to 24.04 (Open MPI 4.1): with Open MPI 5 the preloaded ASan
+  # runtime crashes the PRRTE launcher itself before any rank starts.
   sanitizers:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
