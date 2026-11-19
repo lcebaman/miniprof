@@ -635,9 +635,10 @@ def report(doc: dict, args) -> str:
             nr = run.get("nranks") or 1
             p(f" OpenMP                 {omp['runtime']}, {omp['threads'] / nr:g} threads/rank"
               + (f", {omp['ranks_without_ompt']} rank(s) without OMPT" if omp.get("ranks_without_ompt") else ""))
+            sc = serial_compute_pct(omp, split)
             p(f"   Serial time         {omp['serial_pct_of_elapsed']:5.1f}%   "
               f"(outside parallel regions, avg {human_time(omp['serial_s']['avg'])}/rank"
-              + (f"; serial compute {sc:.1f}% after MPI and I/O" if (sc := serial_compute_pct(omp, split)) is not None else "")
+              + (f"; serial compute {sc:.1f}% after MPI and I/O" if sc is not None else "")
               + ")")
             p(f"   Barrier imbalance   {omp['imbalance_pct']:5.1f}%   of thread time in parallel "
               f"regions ({human_time(tt['barrier_wait'] / nr)}/rank)")

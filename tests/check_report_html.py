@@ -46,7 +46,7 @@ def main():
       with tempfile.TemporaryDirectory() as td:
           out = os.path.join(td, "r.html")
           cdir = os.path.join(td, "csv")
-          r = subprocess.run([sys.executable, tool, f, "--html", out, "--csv", cdir], capture_output=True, text=True)
+          r = subprocess.run([sys.executable, tool, f, "--html", out, "--csv", cdir], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
           if r.returncode:
               print(f"FAIL  {f}: report exited {r.returncode}\n{r.stderr}")
               fails += 1

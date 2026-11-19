@@ -21,9 +21,11 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             openmpi-bin libopenmpi-dev gfortran binutils build-essential
 
+      # A hang must fail the step before the job's 15-minute limit: a
+      # cancelled job keeps no log, so the stuck test could not be seen.
       - name: Build and run the full test suite
         run: |
-          make check \
+          timeout -k 20 720 make check \
             MPIRUN_FLAGS=--oversubscribe \
             NRANKS=2 \
             NX=64 NY=64 NZ=32 NSTEPS_3D=50
@@ -48,3 +50,20 @@ jobs:
             examples/miniprof*.txt
             examples/miniprof*.mpa
           if-no-files-found: ignore
+
+  # The Python tools on the oldest python3 a site may have: 3.6 (RHEL 8,
+  # SLES 15). The launcher runs miniprof_report.py after every job, so a
+  # construct from a later Python would leave those sites without a report.
+  python36:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    container: python:3.6-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Report, HTML, CSV, diff and fingerprint on the test snapshots
+        run: |
+          python3 --version
+          for f in tests/fixtures/*.json; do python3 tools/miniprof_report.py "$f" > /dev/null; done
+          python3 tests/check_report_html.py
+          python3 tests/check_diff.py
+          python3 tests/check_fingerprint.py

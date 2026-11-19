@@ -118,7 +118,9 @@ step-by-step recipes for extending miniprof, see
 | `json_writer.c` | streaming JSON |
 | `mpa_check.c` | the standalone `mpa-check` |
 
-Reports are Python 3, standard library only: `tools/miniprof_report.py`
+Reports are Python 3.6 or later (the system python3 of RHEL 8 and SLES
+15), standard library only; `make test-python-compat` and a CI job on
+Python 3.6 keep it so: `tools/miniprof_report.py`
 (text, observations, thresholds), `miniprof_html.py`, `miniprof_csv.py`,
 `miniprof_diff.py`, `miniprof_fingerprint.py` (the fingerprint, used by the
 report and the diff, and the side-by-side tool). The fingerprint's
