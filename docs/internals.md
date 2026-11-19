@@ -236,7 +236,8 @@ These rules are what keeps it safe; every hot path in the code follows them.
 
 **MPI** (`mpi_trace.c`, `mpi_trace.h`). The list of wrapped functions is
 one X-macro table, `MPI_TRACE_FUNCS(X)` in `mpi_trace.h`: each entry is
-`X(ID, "MPI_Name", CLASS)` with class `P2P`, `COLLECTIVE`, `WAIT` or `RMA`.
+`X(ID, "MPI_Name", CLASS)` with class `P2P`, `COLLECTIVE`, `WAIT`, `RMA`
+or `COMM` (communicator and topology management).
 From it come the `MPIF_*` ids, the name and class tables, and the fixed
 arrays of `mpi_snap_t` (calls, bytes, ns per function; size histograms per
 class). Each C wrapper is one line:
@@ -647,10 +648,16 @@ The Granite Rapids work (PR #55) is a complete worked example.
 2. Add the C wrapper with `C_WRAP` and a byte rule that is valid on every
    rank (`MPI_IN_PLACE`!), and the Fortran wrapper with `F_WRAP`
    forwarding to `pmpi_name_`.
-3. Add a call to `examples/mpi_ext_validate.c` / `.f90` and its check.
+3. Call it from `examples/mpi_coverage_validate.c` and `.f90` with a fixed
+   size, and add its exact per-rank calls and bytes to `expected()` in
+   `tools/validate_mpi_coverage.py` (`make run-mpi-coverage-validate`).
+4. Check that `pmpi_name_` exists in both Open MPI's `libmpi_mpifh` and
+   MPICH's `libmpifort` (`nm -D`).
 
 The class decides where its time appears (`by_class`); IDs are internal, so
-the JSON stays compatible.
+the JSON stays compatible. A function whose bytes are known only at a later
+call works like the persistent requests: `*_init` stores the size in a
+table keyed by the request handle (`preq_put`), and `MPI_Start` looks it up.
 
 ### 10.4 Add a metric block to the snapshot
 

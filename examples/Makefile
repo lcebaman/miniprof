@@ -70,7 +70,7 @@ NSTEPS_3D ?= 200
 
 EXAMPLES := heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace
 
-.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace diffusion3d_hot hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma timeline_validate threads_validate
+.PHONY: all clean heat2d heat2d+trace heat1d heat1d+trace diffusion3d diffusion3d+trace diffusion3d_hot hwc_validate hwc_validate_omp hwc_validate_smear mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma timeline_validate threads_validate mpi_coverage_validate mpi_coverage_validate_f
 
 all: $(EXAMPLES)
 
@@ -121,6 +121,13 @@ mpi_ext_validate: mpi_ext_validate.c $(LIB)
 	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 mpi_ext_validate_f: mpi_ext_validate.f90 $(LIB)
+	$(FC) $(FFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
+# Known answers for the MPI wrappers added after the audit (C and Fortran)
+mpi_coverage_validate: mpi_coverage_validate.c $(LIB)
+	$(CC) $(CFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
+
+mpi_coverage_validate_f: mpi_coverage_validate.f90 $(LIB)
 	$(FC) $(FFLAGS) $< -L$(ROOT) -lminiprof $(RPATH) $(LDFLAGS) -o $@
 
 # Known-answer workload for snapshot mode: injected per-rank compute
@@ -180,4 +187,4 @@ fortran_sentinels: fortran_sentinels.f90 $(LIB)
 clean:
 	rm -f $(EXAMPLES) hwc_validate hwc_validate_omp hwc_validate_smear \
 	      mpi_ext_validate mpi_ext_validate_f imbalance_validate fortran_sentinels \
-	      counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma diffusion3d_hot timeline_validate threads_validate
+	      counters_validate mpi_percall omp_validate omp_idle_validate topdown_validate membw_validate roofline_fma diffusion3d_hot timeline_validate threads_validate mpi_coverage_validate mpi_coverage_validate_f

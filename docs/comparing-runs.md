@@ -135,6 +135,7 @@ The observations at the end of a report are triggered by thresholds:
 | `serial_pct` | `--serial-pct` | 20 | OpenMP serial time above this % of the run |
 | `omp_imbalance_pct` | `--omp-imbalance-pct` | 10 | OpenMP barrier or lock wait above this % of thread time |
 | `omp_idle_pct` | `--omp-idle-pct` | 20 | OpenMP worker spin between regions above this % of cycles |
+| `comm_pct` | `--comm-pct` | 5 | creating and freeing communicators and topologies above this % of the run |
 | `td_memory_pct` | `--td-memory-pct` | 30 | top-down backend memory (or core) above this % of slots |
 | `td_frontend_pct` | `--td-frontend-pct` | 20 | top-down frontend bound above this % |
 | `td_badspec_pct` | `--td-badspec-pct` | 10 | top-down bad speculation above this % |

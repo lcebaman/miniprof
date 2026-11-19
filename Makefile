@@ -149,7 +149,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         example-mpi-ext-validate mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
-        run-ext-trace run-3d-snapshot run-hotspots-validate run-timeline-validate run-threads-validate test-units overhead-3d \
+        run-ext-trace run-3d-snapshot run-hotspots-validate run-timeline-validate run-threads-validate run-mpi-coverage-validate test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
         run-omp-validate run-omp-idle-validate test-ompt-abi run-topdown-validate \
         nodemon nodemon-setcap run-memory-validate calibrate run-calibrate-test \
@@ -616,6 +616,22 @@ run-timeline-validate: examples/timeline_validate
 		./examples/timeline_validate $(TL_PHASE) >/dev/null && \
 	python3 tools/validate_timeline.py miniprof_snapshot_timeline.json --phase $(TL_PHASE)
 
+# ── run-mpi-coverage-validate: exact calls and bytes per wrapped function ───
+# Persistent requests, matched probe, nonblocking and neighbourhood
+# collectives, communicators/topologies and the rest of one-sided, through
+# the C and the Fortran (`mpi` module) bindings. Each program also checks
+# its own results, so a wrapper that mangles an argument fails here too.
+examples/mpi_coverage_validate examples/mpi_coverage_validate_f: examples/mpi_coverage_validate.c examples/mpi_coverage_validate.f90 $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) mpi_coverage_validate mpi_coverage_validate_f
+
+run-mpi-coverage-validate: examples/mpi_coverage_validate examples/mpi_coverage_validate_f
+	@for b in mpi_coverage_validate mpi_coverage_validate_f; do \
+	  MINIPROF_MODE=snapshot MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_$$b.json \
+	  mpirun $(MPIRUN_FLAGS) -n $(NRANKS) -x MINIPROF_MODE -x MINIPROF_SNAPSHOT_OUTPUT \
+	    ./examples/$$b || exit 1; \
+	  python3 tools/validate_mpi_coverage.py miniprof_snapshot_$$b.json || exit 1; \
+	done
+
 # ── run-threads-validate: short-lived threads release their counters ────────
 # 300 threads, one after another, under a 256-descriptor limit: counter fds
 # must be released at thread exit (else the application's own open() fails)
@@ -995,6 +1011,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-hotspots-validate   || FAIL=1; \
 	$(MAKE) run-timeline-validate || FAIL=1; \
 	$(MAKE) run-threads-validate  || FAIL=1; \
+	$(MAKE) run-mpi-coverage-validate || FAIL=1; \
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	$(MAKE) run-counters-validate || FAIL=1; \

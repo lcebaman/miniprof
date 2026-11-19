@@ -30,7 +30,7 @@ typedef enum {
 } snapshot_level_t;
 
 #define MINIPROF_SNAPSHOT_SCHEMA         "miniprof-snapshot"
-#define MINIPROF_SNAPSHOT_SCHEMA_VERSION "0.8.0"   /* 0.8: metrics.timeline */
+#define MINIPROF_SNAPSHOT_SCHEMA_VERSION "0.9.0"   /* 0.9: MPI class "comm" */
 #define MINIPROF_DEFAULT_SNAPSHOT_OUTPUT "miniprof_snapshot.json"
 
 void snapshot_init(int verbose);
