@@ -322,6 +322,16 @@ MPI, OpenMP idle). Threads get a slot when:
   `MPI_Init` are remembered and attached by thread id in `attach_pending`;
 - any other thread reaches a boundary (lazy `thread_open`).
 
+A thread that exits gives its slot back: `thread_open` registers the slot
+with a `pthread_key` whose destructor, `retire_slot`, runs on the exiting
+thread, adds its final counts to per-rank totals for exited threads
+(`g_ret`, which `cnt_collect` includes), closes its descriptors, unmaps its
+pages and puts the slot on a free list. Without this, an application that
+creates short-lived threads would run out of file descriptors.
+`g_slot_lock` orders retirement, slot reuse and `cnt_collect`; none of
+them is on a hot path. `make run-threads-validate` checks it under a
+256-descriptor limit.
+
 **Reading.** `read_now` uses `rdpmc` under the mmap page's seqlock when the
 kernel allows it and every event of the group is on the PMU; otherwise one
 `read()` of the group (`PERF_FORMAT_GROUP`). A group can opt out of rdpmc

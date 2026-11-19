@@ -42,3 +42,4 @@ _install/
 __pycache__/
 tests/test_counters_fold
 examples/timeline_validate
+examples/threads_validate

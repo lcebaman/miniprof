@@ -149,7 +149,7 @@ EXAMPLE_MPI_EXT_VALIDATE_F := $(EXAMPLE_DIR)/mpi_ext_validate_f
         example-mpi-ext-validate mpa-check \
         run run-trace run-f run-f-trace run-3d run-3d-trace \
         run-hwc-validate run-hwc-validate-omp run-hwc-validate-smear \
-        run-ext-trace run-3d-snapshot run-hotspots-validate run-timeline-validate test-units overhead-3d \
+        run-ext-trace run-3d-snapshot run-hotspots-validate run-timeline-validate run-threads-validate test-units overhead-3d \
         run-imbalance-validate run-fortran-sentinels run-counters-validate \
         run-omp-validate run-omp-idle-validate test-ompt-abi run-topdown-validate \
         nodemon nodemon-setcap run-memory-validate calibrate run-calibrate-test \
@@ -611,6 +611,20 @@ run-timeline-validate: examples/timeline_validate
 		./examples/timeline_validate $(TL_PHASE) >/dev/null && \
 	python3 tools/validate_timeline.py miniprof_snapshot_timeline.json --phase $(TL_PHASE)
 
+# ── run-threads-validate: short-lived threads release their counters ────────
+# 300 threads, one after another, under a 256-descriptor limit: counter fds
+# must be released at thread exit (else the application's own open() fails)
+# and the exited threads' counts kept. One rank: the check is per process.
+examples/threads_validate: examples/threads_validate.c $(LIB)
+	$(MAKE) -C $(EXAMPLE_DIR) threads_validate
+
+run-threads-validate: examples/threads_validate
+	@( ulimit -n 256; MINIPROF_MODE=snapshot MINIPROF_COUNTERS_TEST=1 \
+	  MINIPROF_SNAPSHOT_OUTPUT=miniprof_snapshot_threads.json \
+	  mpirun $(MPIRUN_FLAGS) -n 1 -x MINIPROF_MODE -x MINIPROF_COUNTERS_TEST \
+		-x MINIPROF_SNAPSHOT_OUTPUT ./examples/threads_validate 300 2 > miniprof_threads_validate.txt ) && \
+	python3 tools/validate_threads.py miniprof_snapshot_threads.json miniprof_threads_validate.txt
+
 # ── run-imbalance-validate: snapshot known-answer test (P1 exit criteria) ───
 # examples/imbalance_validate injects a known per-rank compute imbalance and
 # a fixed I/O volume; validate_imbalance.py checks the snapshot against the
@@ -974,6 +988,7 @@ check: lib nodemon calibrate examples mpa-check
 	$(MAKE) run-3d-snapshot || FAIL=1; \
 	$(MAKE) run-hotspots-validate   || FAIL=1; \
 	$(MAKE) run-timeline-validate || FAIL=1; \
+	$(MAKE) run-threads-validate  || FAIL=1; \
 	$(MAKE) run-imbalance-validate || FAIL=1; \
 	$(MAKE) run-fortran-sentinels || FAIL=1; \
 	$(MAKE) run-counters-validate || FAIL=1; \
